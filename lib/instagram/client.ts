@@ -11,8 +11,14 @@ async function workerFetch<T = any>(path: string, body: object): Promise<T> {
     body: JSON.stringify(body),
   })
   if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`Worker ${path} → ${res.status}: ${text}`)
+    let detail: string
+    try {
+      const data = await res.json()
+      detail = data.detail ?? data.error ?? JSON.stringify(data)
+    } catch {
+      detail = await res.text()
+    }
+    throw new Error(detail)
   }
   return res.json()
 }

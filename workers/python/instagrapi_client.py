@@ -1,6 +1,4 @@
 from instagrapi import Client
-from instagrapi.exceptions import LoginRequired, ChallengeRequired, UserNotFound
-import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -11,7 +9,7 @@ def build_client(session_data: dict, proxy: str | None = None) -> Client:
     if proxy:
         cl.set_proxy(proxy)
     cl.set_settings(session_data)
-    cl.get_timeline_feed()  # проверяем что сессия живая
+    cl.get_timeline_feed()
     return cl
 
 
