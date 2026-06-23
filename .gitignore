@@ -8,6 +8,10 @@ __pycache__/
 .next/
 out/
 build/
+next-env.d.ts
+
+# local dev tooling
+.claude/
 
 # env
 .env

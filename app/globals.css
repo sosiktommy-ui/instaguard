@@ -2,48 +2,82 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  :root {
-    --background: 0 0% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 0 0% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --primary: 262 83% 58%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 14.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
-    --accent: 0 0% 14.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-    --ring: 262 83% 58%;
-    --radius: 0.75rem;
-  }
+:root {
+  --canvas: #f5f5f7;
+  --card: #ffffff;
+  --ink: #1d1d1f;
+  --subt: #6e6e73;
+  --line: #d2d2d7;
+  --brand: #0071e3;
 }
 
 @layer base {
-  * { @apply border-border; }
-  body {
-    @apply bg-black text-zinc-100 antialiased;
-    font-feature-settings: "rlig" 1, "calt" 1;
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
+  body {
+    @apply bg-canvas text-ink;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+      "Segoe UI", "Inter", system-ui, sans-serif;
+    letter-spacing: -0.01em;
+  }
+  ::selection {
+    background: rgba(0, 113, 227, 0.18);
+  }
+}
+
+@layer components {
+  /* Apple-style frosted card */
+  .card {
+    @apply bg-card rounded-3xl border border-black/[0.06];
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 30px rgba(0, 0, 0, 0.05);
+  }
+
+  .card-flat {
+    @apply bg-card rounded-3xl border border-black/[0.06];
+  }
+
+  /* iOS-style segmented control track */
+  .segment {
+    @apply inline-flex bg-black/[0.05] rounded-2xl p-1 gap-1;
+  }
+
+  /* Subtle input */
+  .field {
+    @apply w-full bg-canvas border border-line/70 rounded-2xl px-5 py-3.5
+           text-ink placeholder:text-subt/60 outline-none transition-all
+           focus:border-brand focus:bg-white focus:ring-4 focus:ring-brand/10;
+  }
+}
+
+@keyframes slide-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
 }
 
 @layer utilities {
-  .glass {
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+  .tracking-tighter { letter-spacing: -0.035em; }
+  .glass-bar {
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
   }
-
-  .glow-violet {
-    box-shadow: 0 0 40px rgba(139, 92, 246, 0.15);
-  }
-
-  .tracking-tighter { letter-spacing: -0.04em; }
 }
+
+/* Slim, unobtrusive scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.3); background-clip: content-box; }
