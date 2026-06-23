@@ -1,8 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { Plus, Play, Pause, Trash2, X, AtSign, Users } from 'lucide-react'
+import { Plus, Play, Pause, Trash2, X, AtSign, Users, Zap, Send, UserPlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Tilt } from '@/components/ui/Tilt'
 import { useStore, formatFollowers } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { cn } from '@/lib/utils'
@@ -55,9 +56,18 @@ function AddModal({ onClose }: { onClose: () => void }) {
 
 function Accounts() {
   const accounts = useStore((s) => s.accounts)
+  const triggers = useStore((s) => s.triggers)
   const removeAccount = useStore((s) => s.removeAccount)
   const toggleStatus = useStore((s) => s.toggleAccountStatus)
   const [showAdd, setShowAdd] = useState(false)
+
+  const statsFor = (id: string) => {
+    const pairs = triggers.flatMap((t) => t.accounts.filter((a) => a.accountId === id).map((a) => ({ a, t })))
+    const triggerCount = new Set(pairs.map((p) => p.t.id)).size
+    const activeCount = pairs.filter((p) => p.a.active).length
+    const runs = pairs.reduce((s, p) => s + p.a.runs, 0)
+    return { triggerCount, activeCount, runs }
+  }
 
   return (
     <div className="space-y-6">
@@ -70,43 +80,65 @@ function Accounts() {
       </div>
 
       {accounts.length === 0 ? (
-        <div className="card p-16 text-center">
-          <p className="text-subt">Нет аккаунтов</p>
-          <Button className="mt-5 mx-auto" onClick={() => setShowAdd(true)}><Plus className="w-4 h-4" /> Подключить первый</Button>
+        <div className="card p-16 text-center flex flex-col items-center">
+          <div className="w-16 h-16 rounded-3xl bg-brand/10 flex items-center justify-center mb-5">
+            <UserPlus className="w-8 h-8 text-brand" />
+          </div>
+          <h3 className="text-[19px] font-semibold tracking-tight">Добавьте первый аккаунт</h3>
+          <p className="text-subt text-[14px] mt-1.5 max-w-sm">Подключите Instagram-аккаунт, чтобы настроить на нём триггеры и автоответы.</p>
+          <Button className="mt-6" onClick={() => setShowAdd(true)}><Plus className="w-4 h-4" /> Подключить аккаунт</Button>
         </div>
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {accounts.map((acc) => (
-            <div key={acc.id} className="card p-5">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#feda75] via-[#d62976] to-[#4f5bd5] flex items-center justify-center text-white font-semibold text-lg">
-                    {acc.username[0].toUpperCase()}
+          {accounts.map((acc) => {
+            const st = statsFor(acc.id)
+            return (
+              <Tilt key={acc.id}>
+                <div className="card p-5 relative overflow-hidden">
+                  <div className="absolute -top-10 -right-10 w-32 h-32 rounded-full bg-gradient-to-br from-brand/10 to-transparent blur-2xl pointer-events-none" />
+                  <div className="flex items-start justify-between relative">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#feda75] via-[#d62976] to-[#4f5bd5] flex items-center justify-center text-white font-semibold text-lg shadow-md">
+                        {acc.username[0].toUpperCase()}
+                      </div>
+                      <div>
+                        <div className="font-semibold text-[15px]">@{acc.username}</div>
+                        {acc.fullName && <div className="text-[13px] text-subt">{acc.fullName}</div>}
+                      </div>
+                    </div>
+                    <span className={cn('flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-1 rounded-full',
+                      acc.status === 'ACTIVE' ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn')}>
+                      <span className={cn('w-1.5 h-1.5 rounded-full', acc.status === 'ACTIVE' ? 'bg-ok' : 'bg-warn')} />
+                      {acc.status === 'ACTIVE' ? 'Активен' : 'Пауза'}
+                    </span>
                   </div>
-                  <div>
-                    <div className="font-semibold text-[15px]">@{acc.username}</div>
-                    {acc.fullName && <div className="text-[13px] text-subt">{acc.fullName}</div>}
+
+                  {/* per-account stats */}
+                  <div className="grid grid-cols-3 gap-2 mt-5 relative">
+                    <div className="rounded-2xl bg-canvas p-3 text-center">
+                      <div className="flex items-center justify-center gap-1 text-[15px] font-semibold"><Users className="w-3.5 h-3.5 text-subt" />{formatFollowers(acc.followers)}</div>
+                      <div className="text-[11px] text-subt mt-0.5">подписчики</div>
+                    </div>
+                    <div className="rounded-2xl bg-canvas p-3 text-center">
+                      <div className="flex items-center justify-center gap-1 text-[15px] font-semibold"><Zap className="w-3.5 h-3.5 text-brand" />{st.triggerCount}</div>
+                      <div className="text-[11px] text-subt mt-0.5">{st.activeCount} активны</div>
+                    </div>
+                    <div className="rounded-2xl bg-canvas p-3 text-center">
+                      <div className="flex items-center justify-center gap-1 text-[15px] font-semibold"><Send className="w-3.5 h-3.5 text-ok" />{st.runs.toLocaleString('ru')}</div>
+                      <div className="text-[11px] text-subt mt-0.5">ответов</div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 mt-4 pt-4 border-t border-black/[0.05] relative">
+                    <Button variant="secondary" size="sm" className="flex-1" onClick={() => toggleStatus(acc.id)}>
+                      {acc.status === 'ACTIVE' ? <><Pause className="w-3.5 h-3.5" /> Пауза</> : <><Play className="w-3.5 h-3.5" /> Запустить</>}
+                    </Button>
+                    <Button variant="danger" size="icon" onClick={() => removeAccount(acc.id)}><Trash2 className="w-4 h-4" /></Button>
                   </div>
                 </div>
-                <span className={cn('flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-1 rounded-full',
-                  acc.status === 'ACTIVE' ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn')}>
-                  <span className={cn('w-1.5 h-1.5 rounded-full', acc.status === 'ACTIVE' ? 'bg-ok' : 'bg-warn')} />
-                  {acc.status === 'ACTIVE' ? 'Активен' : 'Пауза'}
-                </span>
-              </div>
-
-              <div className="flex items-center gap-1.5 mt-4 text-[13px] text-subt">
-                <Users className="w-4 h-4" /> {formatFollowers(acc.followers)} подписчиков
-              </div>
-
-              <div className="flex gap-2 mt-4 pt-4 border-t border-black/[0.05]">
-                <Button variant="secondary" size="sm" className="flex-1" onClick={() => toggleStatus(acc.id)}>
-                  {acc.status === 'ACTIVE' ? <><Pause className="w-3.5 h-3.5" /> Пауза</> : <><Play className="w-3.5 h-3.5" /> Запустить</>}
-                </Button>
-                <Button variant="danger" size="icon" onClick={() => removeAccount(acc.id)}><Trash2 className="w-4 h-4" /></Button>
-              </div>
-            </div>
-          ))}
+              </Tilt>
+            )
+          })}
         </div>
       )}
 

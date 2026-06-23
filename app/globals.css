@@ -57,6 +57,43 @@
   to { transform: translateX(0); }
 }
 
+@keyframes aurora-float {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(6%, -4%) scale(1.08); }
+  66% { transform: translate(-5%, 5%) scale(0.95); }
+}
+
+/* Soft animated aurora background */
+.aurora {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.aurora::before,
+.aurora::after {
+  content: '';
+  position: absolute;
+  width: 50vw;
+  height: 50vw;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.5;
+  animation: aurora-float 22s ease-in-out infinite;
+}
+.aurora::before {
+  top: -10%;
+  left: -5%;
+  background: radial-gradient(circle at center, rgba(0, 113, 227, 0.35), transparent 70%);
+}
+.aurora::after {
+  bottom: -15%;
+  right: -10%;
+  background: radial-gradient(circle at center, rgba(94, 92, 230, 0.3), transparent 70%);
+  animation-delay: -11s;
+}
+
 @keyframes sheet-up {
   from { transform: translateY(100%); }
   to { transform: translateY(0); }

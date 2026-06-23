@@ -127,7 +127,13 @@ function TriggersScreen() {
                 </button>
               )
             })}
-            {filtered.length === 0 && <div className="py-10 text-center text-subt text-[13px]">Ничего не найдено</div>}
+            {filtered.length === 0 && (
+              <div className="py-10 text-center text-subt text-[13px]">
+                {accounts.length === 0 ? (
+                  <>Нет аккаунтов. Добавьте их во вкладке <a href="/accounts" className="text-brand font-medium hover:underline">«Аккаунты»</a></>
+                ) : 'Ничего не найдено'}
+              </div>
+            )}
           </div>
         </div>
 
