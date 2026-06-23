@@ -59,22 +59,27 @@ def login(payload: LoginPayload, x_worker_secret: str = Header(...)):
         settings = ig.login_by_credentials(payload.username, payload.password, payload.proxy)
         return {"sessionData": settings}
     except Exception as e:
+        err_type = type(e).__name__
         err = str(e)
-        if "bad_password" in err or "password" in err.lower():
-            detail = "Неверный пароль"
-        elif "two_factor" in err or "2fa" in err.lower():
-            detail = "Требуется двухфакторная аутентификация (2FA)"
-        elif "challenge_required" in err or "challenge" in err.lower():
-            detail = "Instagram требует подтверждение личности (challenge). Войдите вручную через приложение."
-        elif "feedback_required" in err:
-            detail = "Аккаунт временно заблокирован Instagram"
-        elif "user_not_found" in err or "not found" in err.lower():
-            detail = "Аккаунт не найден"
-        elif "rate" in err.lower() or "spam" in err.lower():
-            detail = "Слишком много запросов — подождите и попробуйте снова"
+        logging.warning("Login failed for %s [%s]: %s", payload.username, err_type, err)
+
+        if err_type in ("BadPassword", "IncorrectPassword"):
+            detail = "Неверный пароль. Проверьте логин и пароль."
+        elif err_type == "TwoFactorRequired":
+            detail = "Требуется двухфакторная аутентификация (2FA) — отключите её временно в настройках Instagram."
+        elif err_type in ("ChallengeRequired", "ChallengeUnknownStep", "SelectContactPointRecoveryForm"):
+            detail = "Instagram требует подтверждение с нового устройства. Войдите вручную в приложение и подтвердите, затем попробуйте снова."
+        elif err_type == "FeedbackRequired":
+            detail = "Аккаунт временно ограничен Instagram (FeedbackRequired)."
+        elif err_type == "SentryBlock":
+            detail = "Instagram заблокировал вход с этого IP-адреса. Попробуйте через прокси."
+        elif err_type == "PleaseWaitFewMinutes":
+            detail = "Слишком много запросов — подождите несколько минут и попробуйте снова."
+        elif err_type == "LoginRequired":
+            detail = "Instagram не принял авторизацию. Попробуйте через несколько минут."
         else:
-            detail = f"Ошибка Instagram: {err}"
-        logging.warning("Login failed for %s: %s", payload.username, err)
+            detail = f"{err_type}: {err}"
+
         raise HTTPException(status_code=400, detail=detail)
 
 
