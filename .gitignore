@@ -1,0 +1,22 @@
+# deps
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+
+# next
+.next/
+out/
+build/
+
+# env
+.env
+.env.local
+.env.*.local
+
+# prisma
+prisma/migrations/
+
+# misc
+.DS_Store
+*.log

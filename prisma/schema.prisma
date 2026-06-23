@@ -1,0 +1,142 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  password  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts  InstagramAccount[]
+  triggers  TriggerRule[]
+  templates Template[]
+}
+
+model InstagramAccount {
+  id          String        @id @default(cuid())
+  userId      String
+  username    String
+  role        AccountRole
+  sessionData Json?
+  proxy       String?
+  status      AccountStatus @default(ACTIVE)
+  lastChecked DateTime?
+  errorCount  Int           @default(0)
+  limits      Json?
+
+  user                User           @relation(fields: [userId], references: [id])
+  triggersAsResponder TriggerRule[]  @relation("ResponderRules")
+  triggersAsHelper    TriggerRule[]  @relation("HelperRules")
+  snapshots           Snapshot[]
+  events              Event[]
+  logs                Log[]
+
+  @@unique([userId, username])
+}
+
+enum AccountRole {
+  RESPONDER
+  HELPER
+  BOTH
+}
+
+enum AccountStatus {
+  ACTIVE
+  PAUSED
+  BLOCKED
+  CHALLENGE
+}
+
+model Snapshot {
+  id        String       @id @default(cuid())
+  accountId String
+  type      SnapshotType
+  data      Json
+  createdAt DateTime     @default(now())
+
+  account InstagramAccount @relation(fields: [accountId], references: [id])
+}
+
+enum SnapshotType {
+  FOLLOWERS
+  LIKES
+  COMMENTS
+}
+
+model Event {
+  id        String    @id @default(cuid())
+  accountId String
+  type      EventType
+  payload   Json
+  processed Boolean   @default(false)
+  createdAt DateTime  @default(now())
+
+  account InstagramAccount @relation(fields: [accountId], references: [id])
+  logs    Log[]
+}
+
+enum EventType {
+  NEW_FOLLOWER
+  NEW_COMMENT
+  NEW_LIKE
+  NEW_DIRECT_MESSAGE
+  STORY_MENTION
+}
+
+model TriggerRule {
+  id          String    @id @default(cuid())
+  userId      String
+  responderId String
+  helperId    String?
+  name        String
+  triggerType EventType
+  conditions  Json
+  actions     Json
+  isActive    Boolean   @default(true)
+  priority    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user      User              @relation(fields: [userId], references: [id])
+  responder InstagramAccount  @relation("ResponderRules", fields: [responderId], references: [id])
+  helper    InstagramAccount? @relation("HelperRules", fields: [helperId], references: [id])
+}
+
+model Template {
+  id         String   @id @default(cuid())
+  userId     String
+  name       String
+  content    String
+  category   String?
+  usageCount Int      @default(0)
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Log {
+  id        String   @id @default(cuid())
+  accountId String
+  eventId   String?
+  level     LogLevel
+  message   String
+  details   Json?
+  createdAt DateTime @default(now())
+
+  account InstagramAccount @relation(fields: [accountId], references: [id])
+  event   Event?           @relation(fields: [eventId], references: [id])
+}
+
+enum LogLevel {
+  INFO
+  WARN
+  ERROR
+  SUCCESS
+}
