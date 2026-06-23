@@ -27,7 +27,6 @@
 
 @layer base {
   * { @apply border-border; }
-  html { @apply dark; }
   body {
     @apply bg-black text-zinc-100 antialiased;
     font-feature-settings: "rlig" 1, "calt" 1;
