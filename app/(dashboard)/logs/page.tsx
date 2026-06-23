@@ -48,9 +48,9 @@ export default function LogsPage() {
             id: Date.now().toString(),
             timestamp: new Date().toISOString(),
             account: '@premium.brand',
-            type: 'SEND_DM',
+            type: 'SEND_DM' as const,
             message: 'Отправлено follow-up сообщение',
-            status: 'success',
+            status: 'success' as const,
           },
           ...prev,
         ].slice(0, 20))
