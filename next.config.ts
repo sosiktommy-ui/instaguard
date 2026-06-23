@@ -1,7 +1,5 @@
 import type { NextConfig } from 'next';
 
-const nextConfig: NextConfig = {
-  serverExternalPackages: ['@prisma/client', 'bullmq', 'ioredis', 'bcryptjs'],
-};
+const nextConfig: NextConfig = {};
 
 export default nextConfig;
