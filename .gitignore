@@ -14,8 +14,8 @@ build/
 .env.local
 .env.*.local
 
-# prisma
-prisma/migrations/
+# prisma — migrations нужны для деплоя
+# prisma/migrations/
 
 # misc
 .DS_Store
