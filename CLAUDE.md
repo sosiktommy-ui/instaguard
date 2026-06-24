@@ -112,6 +112,17 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-06-24
+
+#### feat: авторизация через куки
+- `workers/python/instagrapi_client.py`: новая функция `login_by_cookies(cookies, proxy)` — устанавливает `cl.cookie_dict`, верифицирует через `get_timeline_feed()`, возвращает `(settings, username)`
+- `workers/python/worker.py`: новый эндпоинт `POST /login-cookies`, модель `CookiePayload`
+- `lib/instagram/client.ts`: новая функция `loginByCookies(cookies, proxy?)`
+- `app/api/accounts/auth/route.ts`: поддержка `authMethod: 'cookies'` — парсит JSON или raw sessionid строку
+- `app/(dashboard)/accounts/page.tsx`: AddModal — переключатель режимов [Логин/Пароль | Куки], в режиме Куки — textarea для JSON или sessionid
+
+---
+
 ### 2026-06-23
 
 #### fix: точные ошибки instagrapi при логине
