@@ -21,6 +21,16 @@ def login_by_credentials(username: str, password: str, proxy: str | None = None)
     return cl.get_settings()
 
 
+def login_by_cookies(cookies: dict, proxy: str | None = None) -> tuple[dict, str]:
+    cl = Client()
+    if proxy:
+        cl.set_proxy(proxy)
+    cl.cookie_dict = cookies
+    cl.get_timeline_feed()
+    info = cl.account_info()
+    return cl.get_settings(), info.username
+
+
 def get_followers(session_data: dict, username: str, proxy: str | None = None, amount: int = 0) -> list[dict]:
     cl = build_client(session_data, proxy)
     user_id = cl.user_id_from_username(username)

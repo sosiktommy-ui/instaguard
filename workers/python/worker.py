@@ -42,6 +42,30 @@ class DMPayload(BaseModel):
     proxy: str | None = None
 
 
+class CookiePayload(BaseModel):
+    cookies: dict
+    proxy: str | None = None
+
+
+@app.post("/login-cookies")
+def login_cookies(payload: CookiePayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        settings, username = ig.login_by_cookies(payload.cookies, payload.proxy)
+        return {"sessionData": settings, "username": username}
+    except Exception as e:
+        err_type = type(e).__name__
+        err = str(e)
+        logging.warning("Cookie login failed [%s]: %s", err_type, err)
+        if err_type in ("LoginRequired", "ChallengeRequired"):
+            detail = "Куки недействительны или истекли — экспортируйте свежие куки из браузера."
+        elif err_type == "SentryBlock":
+            detail = "Instagram заблокировал вход с этого IP. Попробуйте через прокси."
+        else:
+            detail = f"{err_type}: {err}"
+        raise HTTPException(status_code=400, detail=detail)
+
+
 @app.post("/test-session")
 def test_session(payload: SessionPayload, x_worker_secret: str = Header(...)):
     _check_secret(x_worker_secret)

@@ -31,6 +31,10 @@ export async function loginByCredentials(username: string, password: string, pro
   return workerFetch<{ sessionData: object }>('/login', { username, password, proxy })
 }
 
+export async function loginByCookies(cookies: object, proxy?: string) {
+  return workerFetch<{ sessionData: object; username: string }>('/login-cookies', { cookies, proxy })
+}
+
 export async function getFollowers(session: object, username: string, proxy?: string) {
   return workerFetch<{ followers: Array<{ pk: string; username: string; full_name: string }> }>(
     '/followers',
