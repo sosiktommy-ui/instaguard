@@ -42,6 +42,10 @@
 | `/api/accounts/[id]` | DELETE, PATCH | Удаление / обновление аккаунта |
 | `/api/poll` | POST | Проверить подписчиков, отправить DM по триггерам |
 | `/api/logs` | GET | Последние 80 логов из БД |
+| `/api/triggers` | GET | Список триггеров из БД |
+| `/api/triggers` | POST | Создать триггеры (по одному на аккаунт) |
+| `/api/triggers/[id]` | DELETE | Удалить триггер |
+| `/api/triggers/[id]` | PATCH | Переключить isActive |
 
 ### Python воркер — эндпоинты (`workers/python/worker.py`)
 | Эндпоинт | Назначение |
@@ -111,6 +115,46 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 ---
 
 ## История изменений
+
+### 2026-06-27
+
+#### fix: система триггеров — сохранение в БД (срабатывания показывали 0)
+
+**Корневая причина:** триггеры хранились только в Zustand (localStorage). `/api/poll` запрашивал `triggersAsResponder` из PostgreSQL — всегда пустой массив. Account ID в Zustand были случайными (uid()), не совпадали с реальными ID в БД. `tick()` — чистая симуляция без Instagram.
+
+**Исправления:**
+
+`prisma/schema.prisma` + `prisma/migrations/20260626000001_add_trigger_fire_count/migration.sql`:
+- Добавлено поле `fireCount Int @default(0)` в `TriggerRule` — счётчик реальных отправленных DM
+
+`package.json`:
+- `build`: добавлен `prisma migrate deploy` перед `next build` — применяет новую миграцию при деплое
+
+`app/api/triggers/route.ts` (новый):
+- `GET` — список триггеров пользователя из БД (include responder.username)
+- `POST` — создаёт по одному `TriggerRule` на каждый выбранный аккаунт (accountIds[]); маппинг UI-типов → EventType: FOLLOW→NEW_FOLLOWER, COMMENT→NEW_COMMENT, LIKE→NEW_LIKE, STORY_REPLY→STORY_MENTION; actions = [{type:'SEND_MESSAGE', templates:[message], delayMin, delayMax}]
+
+`app/api/triggers/[id]/route.ts` (новый):
+- `DELETE` — удаляет триггер
+- `PATCH` — переключает isActive
+
+`app/api/poll/route.ts`:
+- После успешной отправки DM: `triggerRule.update({ fireCount: { increment: 1 } })`
+
+`lib/store.ts`:
+- `addAccount` принимает опциональный `id`; дедупликация по username (не добавляет дубли)
+
+`app/(dashboard)/accounts/page.tsx`:
+- `addAccount({ id: data.account.id, ... })` — теперь Zustand account ID = реальный DB UUID
+
+`app/(dashboard)/triggers/page.tsx` (переписан):
+- Загружает аккаунты из `/api/accounts` (не Zustand) — настоящие DB UUID
+- Сохраняет через `POST /api/triggers` (не Zustand)
+- Показывает список сохранённых триггеров из `GET /api/triggers` с реальным `fireCount`
+- Кнопки Вкл/Выкл (PATCH) и Удалить (DELETE) работают напрямую с БД
+- Убраны `tick()`, случайные uid(), `ActiveTriggersDock` (Zustand)
+
+---
 
 ### 2026-06-24
 

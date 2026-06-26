@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "TriggerRule" ADD COLUMN "fireCount" INTEGER NOT NULL DEFAULT 0;

@@ -52,7 +52,7 @@ function AddModal({ onClose, onAdded }: { onClose: () => void; onAdded: (usernam
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Ошибка авторизации'); setStep('form'); return }
 
-      addAccount({ username: data.account.username, followers: 0 })
+      addAccount({ id: data.account.id, username: data.account.username, followers: 0 })
       onAdded(data.account.username)
       onClose()
     } catch {

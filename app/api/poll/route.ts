@@ -55,9 +55,15 @@ export async function POST(req: NextRequest) {
           const text = template.replace(/\{\{username\}\}/gi, follower.username)
           try {
             await sendDM(account.sessionData as object, follower.pk, text, account.proxy ?? undefined)
-            await prisma.log.create({
-              data: { accountId: account.id, level: 'SUCCESS', message: `DM отправлен @${follower.username}` },
-            })
+            await Promise.all([
+              prisma.log.create({
+                data: { accountId: account.id, level: 'SUCCESS', message: `DM отправлен @${follower.username}` },
+              }),
+              prisma.triggerRule.update({
+                where: { id: trigger.id },
+                data: { fireCount: { increment: 1 } },
+              }),
+            ])
             dmsSent++
           } catch (e: any) {
             await prisma.log.create({

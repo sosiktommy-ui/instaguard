@@ -171,7 +171,7 @@ interface StoreState {
   draftAccounts: DraftAccount[]
   logs: LogEntry[]
 
-  addAccount: (a: Pick<Account, 'username' | 'fullName' | 'followers'>) => void
+  addAccount: (a: Pick<Account, 'username' | 'fullName' | 'followers'> & { id?: string }) => void
   removeAccount: (id: string) => void
   toggleAccountStatus: (id: string) => void
 
@@ -209,8 +209,9 @@ export const useStore = create<StoreState>()(
 
       addAccount: (a) =>
         set((s) => {
+          if (s.accounts.some((x) => x.username === a.username)) return {}
           get().log({ account: `@${a.username}`, level: 'SUCCESS', message: 'Аккаунт подключён' })
-          return { accounts: [...s.accounts, { ...a, id: uid(), status: 'ACTIVE', createdAt: new Date().toISOString() }] }
+          return { accounts: [...s.accounts, { ...a, id: a.id ?? uid(), status: 'ACTIVE', createdAt: new Date().toISOString() }] }
         }),
       removeAccount: (id) =>
         set((s) => ({

@@ -101,6 +101,7 @@ model TriggerRule {
   conditions  Json
   actions     Json
   isActive    Boolean   @default(true)
+  fireCount   Int       @default(0)
   priority    Int       @default(0)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
