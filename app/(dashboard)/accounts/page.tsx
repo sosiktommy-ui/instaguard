@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Play, Pause, Trash2, X, AtSign, Lock, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2 } from 'lucide-react'
+import { Plus, Play, Pause, Trash2, X, AtSign, Lock, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tilt } from '@/components/ui/Tilt'
 import { useStore, formatFollowers } from '@/lib/store'
@@ -160,10 +160,11 @@ function AddModal({ onClose, onAdded }: { onClose: () => void; onAdded: (usernam
 }
 
 function Accounts() {
-  const accounts      = useStore((s) => s.accounts)
-  const triggers      = useStore((s) => s.triggers)
-  const removeAccount = useStore((s) => s.removeAccount)
-  const toggleStatus  = useStore((s) => s.toggleAccountStatus)
+  const accounts               = useStore((s) => s.accounts)
+  const triggers               = useStore((s) => s.triggers)
+  const removeAccount          = useStore((s) => s.removeAccount)
+  const toggleStatus           = useStore((s) => s.toggleAccountStatus)
+  const updateAccountFollowers = useStore((s) => s.updateAccountFollowers)
 
   const [showAdd, setShowAdd]       = useState(false)
   const [realAccounts, setReal]     = useState<RealAccount[]>([])
@@ -199,6 +200,9 @@ function Accounts() {
         const totalDms = data.summary?.reduce((s: number, r: any) => s + r.dmsSent, 0) ?? 0
         const totalFollowers = data.summary?.reduce((s: number, r: any) => s + (r.totalFollowers ?? 0), 0) ?? 0
         const newFollowers = data.summary?.reduce((s: number, r: any) => s + (r.newFollowers ?? 0), 0) ?? 0
+        data.summary?.forEach((r: any) => {
+          if (r.totalFollowers != null) updateAccountFollowers(r.accountId, r.totalFollowers)
+        })
         setPollMsg(`Подписчиков в Instagram: ${totalFollowers} | Новых: ${newFollowers} | DM отправлено: ${totalDms}`)
         loadRealAccounts()
       } else {
@@ -217,6 +221,11 @@ function Accounts() {
     removeAccount(id)
     setReal((prev) => prev.filter((a) => a.id !== id))
     setLoadingIds((s) => { const n = new Set(s); n.delete(id); return n })
+  }
+
+  const handleResetSnapshot = async (id: string) => {
+    await fetch(`/api/accounts/${id}/reset-snapshot`, { method: 'DELETE' }).catch(() => null)
+    setPollMsg('Снапшот сброшен — при следующей проверке все подписчики будут считаться новыми')
   }
 
   const handleToggle = async (id: string, accId: string) => {
@@ -338,6 +347,12 @@ function Accounts() {
                       onClick={() => ra ? handleToggle(ra.id, acc.id) : toggleStatus(acc.id)}>
                       {status === 'ACTIVE' ? <><Pause className="w-3.5 h-3.5" /> Пауза</> : <><Play className="w-3.5 h-3.5" /> Запустить</>}
                     </Button>
+                    {ra && (
+                      <Button variant="secondary" size="icon" title="Сбросить снапшот подписчиков"
+                        onClick={() => handleResetSnapshot(ra.id)}>
+                        <RotateCcw className="w-4 h-4" />
+                      </Button>
+                    )}
                     <Button variant="danger" size="icon" disabled={isLoading}
                       onClick={() => ra ? handleDelete(ra.id, acc.username) : removeAccount(acc.id)}>
                       {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}

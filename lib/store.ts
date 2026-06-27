@@ -174,6 +174,7 @@ interface StoreState {
   addAccount: (a: Pick<Account, 'username' | 'fullName' | 'followers'> & { id?: string }) => void
   removeAccount: (id: string) => void
   toggleAccountStatus: (id: string) => void
+  updateAccountFollowers: (id: string, followers: number) => void
 
   addTrigger: (t: Omit<Trigger, 'id' | 'createdAt' | 'accounts'> & { accountIds: string[] }) => void
   removeTrigger: (id: string) => void
@@ -221,6 +222,10 @@ export const useStore = create<StoreState>()(
       toggleAccountStatus: (id) =>
         set((s) => ({
           accounts: s.accounts.map((x) => (x.id === id ? { ...x, status: x.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE' } : x)),
+        })),
+      updateAccountFollowers: (id, followers) =>
+        set((s) => ({
+          accounts: s.accounts.map((x) => (x.id === id ? { ...x, followers } : x)),
         })),
 
       addTrigger: ({ accountIds, ...t }) =>
