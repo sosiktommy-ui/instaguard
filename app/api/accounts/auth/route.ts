@@ -34,6 +34,14 @@ export async function POST(req: NextRequest) {
       clean = username.replace(/^@/, '').trim().toLowerCase()
       try {
         const result = await loginByCredentials(clean, password, proxy || undefined)
+        if (result.needsChallenge || !result.sessionData) {
+          return NextResponse.json({
+            needsChallenge: true,
+            stepName: result.stepName,
+            username: result.username ?? clean,
+            error: 'Instagram требует подтверждение (challenge). Введите код из письма/SMS.',
+          }, { status: 202 })
+        }
         sessionData = result.sessionData
       } catch (e: any) {
         return NextResponse.json({ error: e.message ?? 'Неверный логин или пароль' }, { status: 400 })

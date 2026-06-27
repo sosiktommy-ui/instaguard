@@ -167,7 +167,10 @@ export async function POST(req: NextRequest) {
             proxy: account.proxy,
           }
 
-          if (dmQueue) {
+          // Ручная проверка — отправляем СРАЗУ и синхронно (без зависимости от фонового
+          // BullMQ-воркера), чтобы пользователь видел результат немедленно.
+          // Авто-поллинг — кладём в очередь с задержкой 45–180с (безопаснее для аккаунта).
+          if (dmQueue && !isManual) {
             await dmQueue.add('send', job, { delay: delayMs, attempts: 2, backoff: { type: 'fixed', delay: 30_000 } })
           } else {
             await runActionsInline(job)

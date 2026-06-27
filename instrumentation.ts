@@ -56,23 +56,27 @@ export async function register() {
           return res.json()
         }
 
-        // Действия выполняются последовательно; любое выполненное считается срабатыванием
-        if (text) await call('/send-dm', { sessionData, toUserId: followerPk, text, proxy })
-        if (image) await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy })
-        if (doFollow) await call('/follow-user', { sessionData, userId: followerPk, proxy })
-        if (doLike) await call('/like-latest-media', { sessionData, userId: followerPk, proxy })
+        // Каждое действие независимо: ошибка лайка/подписки (напр. эндпоинт ещё не задеплоен)
+        // не должна блокировать DM и приводить к повторной отправке.
+        let success = false
+        const errors: string[] = []
+        if (text)     { try { await call('/send-dm', { sessionData, toUserId: followerPk, text, proxy }); success = true } catch (e: any) { errors.push(`DM: ${e.message}`) } }
+        if (image)    { try { await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy }); success = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
+        if (doFollow) { try { await call('/follow-user', { sessionData, userId: followerPk, proxy }); success = true } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
+        if (doLike)   { try { await call('/like-latest-media', { sessionData, userId: followerPk, proxy }); success = true } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
 
-        await Promise.all([
-          prisma.log.create({
-            data: { accountId, level: 'SUCCESS', message: `Сработал триггер «${triggerName}» → @${followerUsername}` },
-          }),
-          prisma.triggerRule.update({
-            where: { id: triggerId },
-            data: { fireCount: { increment: 1 } },
-          }),
-        ])
-
-        console.log(`[dm-worker] ✓ trigger fired for @${followerUsername}`)
+        if (success) {
+          await Promise.all([
+            prisma.log.create({
+              data: { accountId, level: errors.length ? 'WARN' : 'SUCCESS', message: `Сработал триггер «${triggerName}» → @${followerUsername}${errors.length ? ` (частично: ${errors.join('; ')})` : ''}` },
+            }),
+            prisma.triggerRule.update({ where: { id: triggerId }, data: { fireCount: { increment: 1 } } }),
+          ])
+          console.log(`[dm-worker] ✓ trigger fired for @${followerUsername}`)
+        } else {
+          // Ни одно действие не выполнено — бросаем, чтобы BullMQ повторил попытку
+          throw new Error(errors.join('; ') || 'Ни одно действие не выполнено')
+        }
       },
       {
         connection,
