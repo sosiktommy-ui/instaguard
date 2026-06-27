@@ -114,9 +114,14 @@ const PLATE_LABEL: Record<PlateState, string> = {
 }
 
 // ── Черновик триггера (используется и для шаблонов) ───────────────────────────
+type MatchMode = 'all' | 'specific'
+
 interface Draft {
   type: TriggerType
+  // действия (подписка): DM / лайк поста / подписка в ответ
   actDM: boolean; actLike: boolean; actFollow: boolean
+  // действия (комментарий): ответ в комментариях / лайк комментария
+  actCommentReply: boolean; actLikeComment: boolean
   name: string; message: string
   customOn: boolean
   linkOn: boolean; linkText: string; linkUrl: string
@@ -124,11 +129,17 @@ interface Draft {
   image: string
   conditions: Condition[]
   delayMin: number; delayMax: number
+  // сопоставление фраз для DM-ответа на комментарий
+  dmMatchMode: MatchMode; dmPhrases: string; dmExact: boolean
+  // ответ в комментариях (мин. 5 вариантов) + сопоставление фраз
+  commentReplies: string[]
+  crMatchMode: MatchMode; crPhrases: string; crExact: boolean
 }
 
 const DEFAULT_DRAFT: Draft = {
   type: 'FOLLOW',
   actDM: true, actLike: false, actFollow: false,
+  actCommentReply: false, actLikeComment: false,
   name: '',
   message: 'Привет, @{{username}}! Вижу, ты заинтересован в наших мероприятиях. Скажи, чем могу помочь? 🙌',
   customOn: false,
@@ -137,22 +148,44 @@ const DEFAULT_DRAFT: Draft = {
   image: '',
   conditions: [],
   delayMin: 45, delayMax: 180,
+  dmMatchMode: 'all', dmPhrases: '', dmExact: false,
+  commentReplies: ['', '', '', '', ''],
+  crMatchMode: 'all', crPhrases: '', crExact: false,
+}
+
+function splitPhrases(s: string): string[] {
+  return s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean)
 }
 
 function buildActions(d: Draft): any[] {
   const actions: any[] = []
-  if (d.actDM) {
-    actions.push({
-      type: 'SEND_MESSAGE',
-      enabled: true,
-      templates: [d.message],
-      delayMin: d.delayMin,
-      delayMax: d.delayMax,
+
+  if (d.type === 'COMMENT') {
+    if (d.actDM) actions.push({
+      type: 'SEND_MESSAGE', enabled: true,
+      templates: [d.message], delayMin: d.delayMin, delayMax: d.delayMax,
       link: d.customOn && d.linkOn ? { enabled: true, text: d.linkText, url: d.linkUrl } : undefined,
       image: d.image ? { enabled: true, url: d.image } : undefined,
-      dialogue: d.customOn && d.dialogOn ? { enabled: true, keyword: d.dialogKeyword, reply: d.dialogReply } : undefined,
+      match: { mode: d.dmMatchMode, phrases: splitPhrases(d.dmPhrases), exact: d.dmExact },
     })
+    if (d.actCommentReply) actions.push({
+      type: 'REPLY_COMMENT', enabled: true,
+      replies: d.commentReplies.map((x) => x.trim()).filter(Boolean),
+      delayMin: d.delayMin, delayMax: d.delayMax,
+      match: { mode: d.crMatchMode, phrases: splitPhrases(d.crPhrases), exact: d.crExact },
+    })
+    if (d.actLikeComment) actions.push({ type: 'LIKE_COMMENT', enabled: true })
+    return actions
   }
+
+  // FOLLOW / LIKE / STORY
+  if (d.actDM) actions.push({
+    type: 'SEND_MESSAGE', enabled: true,
+    templates: [d.message], delayMin: d.delayMin, delayMax: d.delayMax,
+    link: d.customOn && d.linkOn ? { enabled: true, text: d.linkText, url: d.linkUrl } : undefined,
+    image: d.image ? { enabled: true, url: d.image } : undefined,
+    dialogue: d.customOn && d.dialogOn ? { enabled: true, keyword: d.dialogKeyword, reply: d.dialogReply } : undefined,
+  })
   if (d.actLike) actions.push({ type: 'LIKE_MEDIA', enabled: true })
   if (d.actFollow) actions.push({ type: 'FOLLOW_BACK', enabled: true })
   return actions
@@ -170,6 +203,10 @@ function TriggerCard({ trigger, onToggle, onDelete }: {
   const msg = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
   const hasLike = actions.some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
   const hasFollow = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
+  const replyC = actions.find((a: any) => a.type === 'REPLY_COMMENT' && isOn(a))
+  const hasLikeComment = actions.some((a: any) => a.type === 'LIKE_COMMENT' && isOn(a))
+  const dmMatch = msg?.match?.mode === 'specific'
+  const crMatch = replyC?.match?.mode === 'specific'
   const msgText: string = msg?.templates?.[0] ?? ''
   const delayMin: number = msg?.delayMin ?? 45
   const delayMax: number = msg?.delayMax ?? 180
@@ -199,10 +236,12 @@ function TriggerCard({ trigger, onToggle, onDelete }: {
 
       {/* Бейджи действий */}
       <div className="flex items-center gap-1.5 flex-wrap">
-        {msg && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-brand/10 text-brand font-medium flex items-center gap-1"><Send className="w-3 h-3" /> DM</span>}
+        {msg && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-brand/10 text-brand font-medium flex items-center gap-1"><Send className="w-3 h-3" /> DM{dmMatch ? ' · фразы' : ''}</span>}
         {msg?.link?.enabled && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-brand/10 text-brand font-medium flex items-center gap-1"><Link2 className="w-3 h-3" /> ссылка</span>}
         {msg?.image?.enabled && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-brand/10 text-brand font-medium flex items-center gap-1"><ImageIcon className="w-3 h-3" /> фото</span>}
         {msg?.dialogue?.enabled && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-[#5e5ce6]/10 text-[#5e5ce6] font-medium flex items-center gap-1"><MessageSquare className="w-3 h-3" /> диалог</span>}
+        {replyC && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-ok/10 text-ok font-medium flex items-center gap-1"><MessageCircle className="w-3 h-3" /> коммент ×{(replyC.replies ?? []).filter(Boolean).length}{crMatch ? ' · фразы' : ''}</span>}
+        {hasLikeComment && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-[#ff2d92]/10 text-[#ff2d92] font-medium flex items-center gap-1"><Heart className="w-3 h-3" /> лайк коммента</span>}
         {hasLike && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-[#ff2d92]/10 text-[#ff2d92] font-medium flex items-center gap-1"><Heart className="w-3 h-3" /> лайк</span>}
         {hasFollow && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-ok/10 text-ok font-medium flex items-center gap-1"><UserCheck className="w-3 h-3" /> подписка</span>}
       </div>
@@ -250,6 +289,74 @@ function CheckRow({ on, onChange, icon: Icon, label }: {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// Сопоставление фраз: на все слова / на конкретные (+ точное совпадение)
+// ════════════════════════════════════════════════════════════════════════════
+function MatchConfig({ mode, phrases, exact, onMode, onPhrases, onExact, accent = '#0071e3' }: {
+  mode: MatchMode; phrases: string; exact: boolean
+  onMode: (m: MatchMode) => void; onPhrases: (s: string) => void; onExact: (b: boolean) => void
+  accent?: string
+}) {
+  return (
+    <div className="rounded-2xl border border-line/60 p-3 space-y-2 bg-canvas/50">
+      <div className="text-[11px] font-medium text-subt">На что реагировать</div>
+      <div className="segment w-full">
+        <button onClick={() => onMode('all')}
+          className={cn('flex-1 py-1.5 rounded-xl text-[12px] font-medium transition-colors', mode === 'all' ? 'bg-white shadow-sm text-ink' : 'text-subt')}>
+          На все слова
+        </button>
+        <button onClick={() => onMode('specific')}
+          className={cn('flex-1 py-1.5 rounded-xl text-[12px] font-medium transition-colors', mode === 'specific' ? 'bg-white shadow-sm text-ink' : 'text-subt')}>
+          Конкретные фразы
+        </button>
+      </div>
+      {mode === 'specific' && (
+        <>
+          <textarea value={phrases} onChange={(e) => onPhrases(e.target.value)}
+            className="field h-16 resize-none py-2 text-[12px]" placeholder="Фразы — по одной на строку (напр. Guest list)" />
+          <CheckRow on={exact} onChange={onExact} icon={Filter} label="Только точная фраза" />
+          {!exact && (
+            <div className="text-[10.5px] text-subt leading-snug">
+              Без точного совпадения бот реагирует и на «gueSt List», и на «suees liss» (опечатки, регистр)
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Варианты ответа в комментариях (минимум 5)
+// ════════════════════════════════════════════════════════════════════════════
+function CommentReplies({ list, onChange }: { list: string[]; onChange: (l: string[]) => void }) {
+  const filled = list.filter((x) => x.trim()).length
+  const setAt = (i: number, v: string) => onChange(list.map((x, idx) => idx === i ? v : x))
+  const add = () => onChange([...list, ''])
+  const remove = (i: number) => { if (list.length > 5) onChange(list.filter((_, idx) => idx !== i)) }
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="text-[11px] font-medium text-subt">
+          Варианты ответа <span className={cn(filled < 5 ? 'text-bad' : 'text-ok')}>({filled}/5 мин.)</span>
+        </div>
+        <button onClick={add} className="text-[11px] font-medium text-brand hover:underline">+ добавить</button>
+      </div>
+      <div className="space-y-1.5">
+        {list.map((v, i) => (
+          <div key={i} className="flex gap-2 items-center">
+            <input value={v} onChange={(e) => setAt(i, e.target.value)}
+              className="field py-1.5 text-[12px] flex-1" placeholder={`Вариант ${i + 1}`} />
+            <button onClick={() => remove(i)} disabled={list.length <= 5}
+              className="text-subt hover:text-bad p-1 disabled:opacity-25 disabled:hover:text-subt"><Trash2 size={13} /></button>
+          </div>
+        ))}
+      </div>
+      <div className="text-[10.5px] text-subt mt-1">Бот выбирает случайный вариант — для естественности и вариативности</div>
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Форма создания триггера
 // ════════════════════════════════════════════════════════════════════════════
 function CreateForm({
@@ -288,11 +395,12 @@ function CreateForm({
     return m
   }, [dbTriggers])
 
-  // Внешнее управление формой (из списка шаблонов)
+  // Внешнее управление формой (из списка шаблонов). Старые шаблоны мержим с дефолтом,
+  // чтобы новые поля (фразы, варианты ответа) не были undefined.
   useEffect(() => {
     formRef.current = {
       open: () => setOpen(true),
-      load: (draft: Draft) => { setD(draft); setOpen(true); setSaveMsg(null) },
+      load: (draft: Draft) => { setD({ ...DEFAULT_DRAFT, ...draft }); setOpen(true); setSaveMsg(null) },
     }
   }, [formRef])
 
@@ -304,8 +412,15 @@ function CreateForm({
   const toggleAll = () => setSelected(allSelected ? [] : filtered.map((a) => a.id))
   const toggleOne = (id: string) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id])
 
-  const anyAction = d.actDM || d.actLike || d.actFollow
-  const canSave = selected.length > 0 && d.name.trim() !== '' && anyAction && (!d.actDM || d.message.trim() !== '')
+  const isComment = d.type === 'COMMENT'
+  const matchOk = (mode: MatchMode, phrases: string) => mode === 'all' || splitPhrases(phrases).length > 0
+  const anyAction = isComment
+    ? (d.actDM || d.actCommentReply || d.actLikeComment)
+    : (d.actDM || d.actLike || d.actFollow)
+  const dmOk = !d.actDM || (d.message.trim() !== '' && (!isComment || matchOk(d.dmMatchMode, d.dmPhrases)))
+  const crOk = !isComment || !d.actCommentReply
+    || (d.commentReplies.filter((x) => x.trim()).length >= 5 && matchOk(d.crMatchMode, d.crPhrases))
+  const canSave = selected.length > 0 && d.name.trim() !== '' && anyAction && dmOk && crOk
 
   const onPickImage = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -473,11 +588,18 @@ function CreateForm({
               <div>
                 <div className="text-[11px] font-medium text-subt mb-1.5">Действие</div>
                 <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { k: 'actDM' as const,     icon: Send,      label: 'Директ',   color: '#0071e3' },
-                    { k: 'actLike' as const,   icon: Heart,     label: 'Лайк',     color: '#ff2d92' },
-                    { k: 'actFollow' as const, icon: UserCheck, label: 'Подписка', color: '#34c759' },
-                  ].map(({ k, icon: Icon, label, color }) => {
+                  {(isComment
+                    ? [
+                        { k: 'actDM' as const,           icon: Send,          label: 'Директ',  color: '#0071e3' },
+                        { k: 'actCommentReply' as const, icon: MessageCircle, label: 'Коммент', color: '#34c759' },
+                        { k: 'actLikeComment' as const,  icon: Heart,         label: 'Лайк',    color: '#ff2d92' },
+                      ]
+                    : [
+                        { k: 'actDM' as const,     icon: Send,      label: 'Директ',   color: '#0071e3' },
+                        { k: 'actLike' as const,   icon: Heart,     label: 'Лайк',     color: '#ff2d92' },
+                        { k: 'actFollow' as const, icon: UserCheck, label: 'Подписка', color: '#34c759' },
+                      ]
+                  ).map(({ k, icon: Icon, label, color }) => {
                     const on = d[k]
                     return (
                       <button key={k} onClick={() => set(k, !on)}
@@ -490,7 +612,9 @@ function CreateForm({
                     )
                   })}
                 </div>
-                {d.actFollow && <div className="text-[10.5px] text-subt mt-1">↳ Подписаться в ответ на нового подписчика</div>}
+                {!isComment && d.actFollow && <div className="text-[10.5px] text-subt mt-1">↳ Подписаться в ответ на нового подписчика</div>}
+                {isComment && d.actLikeComment && <div className="text-[10.5px] text-subt mt-1">↳ Лайкать все новые комментарии</div>}
+                {isComment && <div className="text-[10.5px] text-subt mt-1">Директ и Коммент срабатывают по своим фразам (ниже)</div>}
               </div>
 
               <input value={d.name} onChange={(e) => set('name', e.target.value)} className="field py-2 text-[13px]" placeholder="Название триггера" />
@@ -498,6 +622,15 @@ function CreateForm({
               {/* Настройки директа */}
               {d.actDM && (
                 <>
+                  {isComment && (
+                    <div className="rounded-2xl border border-line/60 p-3 space-y-2 bg-canvas/50">
+                      <div className="text-[12px] font-semibold flex items-center gap-1.5"><Send className="w-3.5 h-3.5 text-brand" /> Ответ в директ автору</div>
+                      <MatchConfig
+                        mode={d.dmMatchMode} phrases={d.dmPhrases} exact={d.dmExact}
+                        onMode={(m) => set('dmMatchMode', m)} onPhrases={(s) => set('dmPhrases', s)} onExact={(b) => set('dmExact', b)}
+                      />
+                    </div>
+                  )}
                   <div>
                     <div className="flex items-center gap-1.5 text-[11px] font-medium text-subt mb-1.5"><Send className="w-3 h-3" /> Текст DM</div>
                     <textarea value={d.message} onChange={(e) => set('message', e.target.value)}
@@ -526,13 +659,15 @@ function CreateForm({
                         </div>
                       )}
 
-                      <CheckRow on={d.dialogOn} onChange={(v) => set('dialogOn', v)} icon={MessageSquare} label="Продолжить диалог при ответе" />
-                      {d.dialogOn && (
-                        <div className="space-y-1.5 pl-6">
-                          <input value={d.dialogKeyword} onChange={(e) => set('dialogKeyword', e.target.value)} className="field py-1.5 text-[12px]" placeholder="Триггер-фраза в ответе (напр. «да»)" />
-                          <textarea value={d.dialogReply} onChange={(e) => set('dialogReply', e.target.value)} className="field h-14 resize-none py-1.5 text-[12px]" placeholder="Ответное сообщение бота" />
-                        </div>
-                      )}
+                      {!isComment && <>
+                        <CheckRow on={d.dialogOn} onChange={(v) => set('dialogOn', v)} icon={MessageSquare} label="Продолжить диалог при ответе" />
+                        {d.dialogOn && (
+                          <div className="space-y-1.5 pl-6">
+                            <input value={d.dialogKeyword} onChange={(e) => set('dialogKeyword', e.target.value)} className="field py-1.5 text-[12px]" placeholder="Триггер-фраза в ответе (напр. «да»)" />
+                            <textarea value={d.dialogReply} onChange={(e) => set('dialogReply', e.target.value)} className="field h-14 resize-none py-1.5 text-[12px]" placeholder="Ответное сообщение бота" />
+                          </div>
+                        )}
+                      </>}
                     </div>
                   )}
 
@@ -555,7 +690,21 @@ function CreateForm({
                 </>
               )}
 
-              {/* Условия */}
+              {/* Настройки ответа в комментариях */}
+              {isComment && d.actCommentReply && (
+                <div className="rounded-2xl border border-line/60 p-3 space-y-2.5 bg-canvas/50">
+                  <div className="text-[12px] font-semibold flex items-center gap-1.5"><MessageCircle className="w-3.5 h-3.5 text-ok" /> Ответ в комментариях</div>
+                  <MatchConfig
+                    mode={d.crMatchMode} phrases={d.crPhrases} exact={d.crExact}
+                    onMode={(m) => set('crMatchMode', m)} onPhrases={(s) => set('crPhrases', s)} onExact={(b) => set('crExact', b)}
+                    accent="#34c759"
+                  />
+                  <CommentReplies list={d.commentReplies} onChange={(l) => set('commentReplies', l)} />
+                </div>
+              )}
+
+              {/* Условия (для не-комментарных триггеров) */}
+              {!isComment && (
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center gap-1.5 text-[11px] font-medium text-subt"><Filter className="w-3 h-3" /> Условия</div>
@@ -579,6 +728,7 @@ function CreateForm({
                       ))}
                     </div>}
               </div>
+              )}
 
               {/* Задержки */}
               <div className="grid grid-cols-2 gap-2">
@@ -613,7 +763,10 @@ function CreateForm({
                 <Zap className="w-3.5 h-3.5" fill="white" />
                 {saving ? 'Сохранение…'
                   : selected.length === 0 ? 'Выберите аккаунты'
+                  : !d.name.trim() ? 'Введите название'
                   : !anyAction ? 'Выберите действие'
+                  : !dmOk ? 'Заполните текст и фразы DM'
+                  : !crOk ? 'Нужно минимум 5 вариантов ответа'
                   : `Создать для ${selected.length} акк.`}
               </Button>
             </div>

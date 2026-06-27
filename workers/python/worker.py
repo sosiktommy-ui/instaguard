@@ -62,6 +62,28 @@ class PhotoPayload(BaseModel):
     proxy: str | None = None
 
 
+class CommentsPayload(BaseModel):
+    sessionData: dict
+    username: str
+    proxy: str | None = None
+    mediaCount: int = 4
+    perMedia: int = 20
+
+
+class ReplyCommentPayload(BaseModel):
+    sessionData: dict
+    mediaId: str
+    text: str
+    commentId: str | None = None
+    proxy: str | None = None
+
+
+class LikeCommentPayload(BaseModel):
+    sessionData: dict
+    commentId: str
+    proxy: str | None = None
+
+
 class ChallengeCodePayload(BaseModel):
     username: str
     code: str
@@ -190,6 +212,37 @@ def send_dm_photo(payload: PhotoPayload, x_worker_secret: str = Header(...)):
         return ig.send_direct_photo(payload.sessionData, payload.toUserId, payload.image, payload.proxy)
     except Exception as e:
         logging.error("send_dm_photo error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/comments")
+def comments(payload: CommentsPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        result = ig.get_recent_comments(payload.sessionData, payload.username, payload.proxy, payload.mediaCount, payload.perMedia)
+        return {"comments": result}
+    except Exception as e:
+        logging.error("get_recent_comments error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/reply-comment")
+def reply_comment(payload: ReplyCommentPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        return ig.reply_to_comment(payload.sessionData, payload.mediaId, payload.text, payload.commentId, payload.proxy)
+    except Exception as e:
+        logging.error("reply_comment error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/like-comment")
+def like_comment(payload: LikeCommentPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        return ig.like_comment(payload.sessionData, payload.commentId, payload.proxy)
+    except Exception as e:
+        logging.error("like_comment error: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
 
 

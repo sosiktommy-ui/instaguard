@@ -327,3 +327,51 @@ def send_direct_photo(session_data: dict, to_user_id: str, image_b64: str, proxy
             os.unlink(tmp.name)
         except OSError:
             pass
+
+
+def get_recent_comments(session_data: dict, username: str, proxy: str | None = None,
+                        media_count: int = 4, per_media: int = 20) -> list[dict]:
+    """Собрать недавние комментарии под последними постами аккаунта.
+    Возвращает [{pk, text, user_pk, username, media_id}], исключая собственные комментарии."""
+    cl = build_client(session_data, proxy)
+    own_id = str(cl.user_id)
+    user_id = cl.user_id_from_username(username)
+    medias = cl.user_medias(user_id, amount=media_count)
+    out: list[dict] = []
+    for m in medias:
+        try:
+            comments = cl.media_comments(m.id, amount=per_media)
+        except Exception as e:
+            logger.warning("media_comments failed for %s: %s", m.id, e)
+            continue
+        for c in comments:
+            uid = str(c.user.pk)
+            if uid == own_id:
+                continue
+            out.append({
+                "pk": str(c.pk),
+                "text": c.text or "",
+                "user_pk": uid,
+                "username": c.user.username,
+                "media_id": str(m.id),
+            })
+    logger.info("get_recent_comments: @%s → %d comments", username, len(out))
+    return out
+
+
+def reply_to_comment(session_data: dict, media_id: str, text: str,
+                     comment_id: str | None = None, proxy: str | None = None) -> dict:
+    """Ответить комментарием под постом (опционально — реплаем на конкретный комментарий)."""
+    cl = build_client(session_data, proxy)
+    kwargs: dict = {}
+    if comment_id:
+        kwargs["replied_to_comment_pk"] = int(comment_id)
+    c = cl.media_comment(media_id, text, **kwargs)
+    return {"comment_id": str(getattr(c, "pk", "")), "status": "sent"}
+
+
+def like_comment(session_data: dict, comment_id: str, proxy: str | None = None) -> dict:
+    """Лайкнуть комментарий по его pk."""
+    cl = build_client(session_data, proxy)
+    ok = cl.comment_like(int(comment_id))
+    return {"status": "liked" if ok else "noop"}

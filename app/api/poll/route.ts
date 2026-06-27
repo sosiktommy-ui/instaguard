@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { getFollowers } from '@/lib/instagram/client'
+import {
+  getFollowers, getComments, sendDM, sendDMPhoto, replyComment, likeComment,
+} from '@/lib/instagram/client'
 import { Queue } from 'bullmq'
 
 // Минимум 10 минут между автоматическими проверками одного аккаунта
 const POLL_COOLDOWN_MS = 10 * 60 * 1000
 // Сколько последних подписчиков запрашивать у Instagram (лимит безопасности)
 const FOLLOWERS_FETCH_LIMIT = 50
+// Сколько последних постов и комментариев под каждым сканировать
+const COMMENT_MEDIA_COUNT = 4
+const COMMENT_PER_MEDIA = 20
 
 // Извлекает Set<pk> из снапшота в любом формате (старый: [{pk,username}], новый: string[])
 function extractKnownPks(data: unknown): Set<string> {
@@ -23,46 +28,99 @@ function getDmQueue() {
   return new Queue('dm-send', { connection: { url } })
 }
 
-// Выполняет все действия триггера для одного подписчика синхронно (когда нет Redis-очереди)
-async function runActionsInline(job: any) {
-  const { sendDM, sendDMPhoto, followUser, likeLatestMedia } = await import('@/lib/instagram/client')
+// ── Сопоставление фраз (для триггеров на комментарии) ─────────────────────────
+function norm(s: string): string {
+  return (s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim()
+}
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length
+  if (!m) return n
+  if (!n) return m
+  const prev = new Array(n + 1)
+  for (let j = 0; j <= n; j++) prev[j] = j
+  for (let i = 1; i <= m; i++) {
+    let diag = prev[0]
+    prev[0] = i
+    for (let j = 1; j <= n; j++) {
+      const tmp = prev[j]
+      prev[j] = a[i - 1] === b[j - 1] ? diag : 1 + Math.min(diag, prev[j], prev[j - 1])
+      diag = tmp
+    }
+  }
+  return prev[n]
+}
+function similarity(a: string, b: string): number {
+  const max = Math.max(a.length, b.length)
+  return max === 0 ? 1 : 1 - levenshtein(a, b) / max
+}
+/**
+ * match = { mode: 'all' | 'specific', phrases: string[], exact: boolean }
+ * exact=true  → строгое совпадение нормализованной фразы (регистр/пунктуация игнорируются)
+ * exact=false → подстрока ИЛИ близость по опечаткам ("suees liss" ≈ "guest list")
+ */
+function matchPhrase(text: string, match: any): boolean {
+  if (!match || match.mode === 'all') return true
+  const phrases: string[] = (match.phrases ?? []).map(norm).filter(Boolean)
+  if (!phrases.length) return true // фраз не задано — реагируем всегда
+  const t = norm(text)
+  if (!t) return false
+  if (match.exact) return phrases.some((p) => t === p)
+
+  return phrases.some((p) => {
+    if (t.includes(p)) return true
+    if (similarity(t, p) >= 0.6) return true
+    // фраза внутри длинного комментария с опечатками — скользящее окно по словам
+    const words = t.split(' ')
+    const pWords = p.split(' ').length
+    for (let i = 0; i < words.length; i++) {
+      for (let j = i + 1; j <= words.length && j <= i + pWords + 1; j++) {
+        if (similarity(words.slice(i, j).join(' '), p) >= 0.7) return true
+      }
+    }
+    return false
+  })
+}
+
+// Выполняет действия триггера-подписки для одного подписчика синхронно
+async function runFollowerActionsInline(job: any) {
+  const { followUser, likeLatestMedia } = await import('@/lib/instagram/client')
   const session = job.sessionData as object
   const proxy = job.proxy ?? undefined
   let success = false
   const errors: string[] = []
 
-  if (job.text) {
-    try { await sendDM(session, job.followerPk, job.text, proxy); success = true }
-    catch (e: any) { errors.push(`DM: ${e.message}`) }
-  }
-  if (job.image) {
-    try { await sendDMPhoto(session, job.followerPk, job.image, proxy); success = true }
-    catch (e: any) { errors.push(`фото: ${e.message}`) }
-  }
-  if (job.doFollow) {
-    try { await followUser(session, job.followerPk, proxy); success = true }
-    catch (e: any) { errors.push(`подписка: ${e.message}`) }
-  }
-  if (job.doLike) {
-    try { await likeLatestMedia(session, job.followerPk, proxy); success = true }
-    catch (e: any) { errors.push(`лайк: ${e.message}`) }
-  }
+  if (job.text)   { try { await sendDM(session, job.followerPk, job.text, proxy); success = true } catch (e: any) { errors.push(`DM: ${e.message}`) } }
+  if (job.image)  { try { await sendDMPhoto(session, job.followerPk, job.image, proxy); success = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
+  if (job.doFollow) { try { await followUser(session, job.followerPk, proxy); success = true } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
+  if (job.doLike)   { try { await likeLatestMedia(session, job.followerPk, proxy); success = true } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
 
   if (success) {
     await Promise.all([
-      prisma.log.create({ data: { accountId: job.accountId, level: 'SUCCESS', message: `Сработал триггер «${job.triggerName}» → @${job.followerUsername}` } }),
+      prisma.log.create({ data: { accountId: job.accountId, level: errors.length ? 'WARN' : 'SUCCESS', message: `Сработал триггер «${job.triggerName}» → @${job.followerUsername}${errors.length ? ` (частично: ${errors.join('; ')})` : ''}` } }),
       prisma.triggerRule.update({ where: { id: job.triggerId }, data: { fireCount: { increment: 1 } } }),
     ])
-  }
-  if (errors.length) {
-    await prisma.log.create({ data: { accountId: job.accountId, level: errors.length && !success ? 'ERROR' : 'WARN', message: `@${job.followerUsername}: ${errors.join('; ')}` } })
+  } else if (errors.length) {
+    await prisma.log.create({ data: { accountId: job.accountId, level: 'ERROR', message: `@${job.followerUsername}: ${errors.join('; ')}` } })
   }
 }
 
+interface PollSummary {
+  accountId: string
+  totalFollowers: number
+  newFollowers: number
+  dmsQueued: number
+  triggersFound: number
+  totalComments: number
+  newComments: number
+  commentActions: number
+  skipped?: string
+}
+
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => ({})) as { accountId?: string }
+  const body = await req.json().catch(() => ({})) as { accountId?: string; manual?: boolean }
   const { accountId } = body
-  const isManual = Boolean(accountId) // ручная проверка конкретного аккаунта
+  // Ручная проверка: указан конкретный аккаунт ИЛИ явный флаг manual (кнопка «Проверить»)
+  const isManual = Boolean(accountId) || body.manual === true
 
   const where = accountId
     ? { id: accountId, status: 'ACTIVE' as const }
@@ -71,20 +129,12 @@ export async function POST(req: NextRequest) {
   const accounts = await prisma.instagramAccount.findMany({
     where,
     include: {
-      triggersAsResponder: { where: { isActive: true, triggerType: 'NEW_FOLLOWER' } },
-      snapshots: { orderBy: { createdAt: 'desc' }, take: 1 },
+      triggersAsResponder: { where: { isActive: true } },
+      snapshots: { orderBy: { createdAt: 'desc' } },
     },
   })
 
-  const summary: {
-    accountId: string
-    totalFollowers: number
-    newFollowers: number
-    dmsQueued: number
-    triggersFound: number
-    skipped?: string
-  }[] = []
-
+  const summary: PollSummary[] = []
   const dmQueue = getDmQueue()
 
   for (const account of accounts) {
@@ -94,89 +144,138 @@ export async function POST(req: NextRequest) {
     if (!isManual && account.lastChecked) {
       const elapsed = Date.now() - account.lastChecked.getTime()
       if (elapsed < POLL_COOLDOWN_MS) {
-        summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, triggersFound: 0, skipped: 'cooldown' })
+        summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, triggersFound: 0, totalComments: 0, newComments: 0, commentActions: 0, skipped: 'cooldown' })
         continue
       }
     }
 
+    const triggers = account.triggersAsResponder
+    const followerTriggers = triggers.filter((t) => t.triggerType === 'NEW_FOLLOWER')
+    const commentTriggers = triggers.filter((t) => t.triggerType === 'NEW_COMMENT')
+
+    const session = account.sessionData as object
+    const proxy = account.proxy ?? undefined
+    const s: PollSummary = {
+      accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0,
+      triggersFound: triggers.length, totalComments: 0, newComments: 0, commentActions: 0,
+    }
+
     try {
-      // Запрашиваем только последние N подписчиков (не всех — это риск бана)
-      const { followers } = await getFollowers(
-        account.sessionData as object,
-        account.username,
-        account.proxy ?? undefined,
-        FOLLOWERS_FETCH_LIMIT
-      )
+      // ── Поток подписчиков ────────────────────────────────────────────────
+      if (followerTriggers.length) {
+        const { followers } = await getFollowers(session, account.username, proxy, FOLLOWERS_FETCH_LIMIT)
+        const snapFollowers = account.snapshots.find((sn) => sn.type === 'FOLLOWERS')
+        const knownPks = extractKnownPks(snapFollowers?.data)
+        const newFollowers = followers.filter((f) => !knownPks.has(String(f.pk)))
+        followers.forEach((f) => knownPks.add(String(f.pk)))
 
-      // Восстанавливаем множество известных pk из снапшота (любой формат)
-      const knownPks = extractKnownPks(account.snapshots[0]?.data)
+        await prisma.$transaction([
+          prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'FOLLOWERS' } }),
+          prisma.snapshot.create({ data: { accountId: account.id, type: 'FOLLOWERS', data: Array.from(knownPks) } }),
+        ])
 
-      // Новые = те кого раньше не видели
-      const newFollowers = followers.filter((f) => !knownPks.has(String(f.pk)))
+        s.totalFollowers = followers.length
+        s.newFollowers = newFollowers.length
 
-      // Обновляем множество: добавляем всех только что полученных
-      followers.forEach((f) => knownPks.add(String(f.pk)))
+        for (const trigger of followerTriggers) {
+          const actions = (trigger.actions ?? []) as any[]
+          const isOn = (a: any) => a && a.enabled !== false
+          const msgAction = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
+          const doFollow = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
+          const doLike = actions.some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
+          if (!msgAction?.templates?.[0] && !doFollow && !doLike) continue
 
-      // Заменяем снапшот атомарно: удаляем старый, создаём новый с накопленными pk
-      await prisma.$transaction([
-        prisma.snapshot.deleteMany({ where: { accountId: account.id } }),
-        prisma.snapshot.create({
-          data: { accountId: account.id, type: 'FOLLOWERS', data: Array.from(knownPks) },
-        }),
-      ])
+          const template: string = msgAction?.templates?.[0] ?? ''
+          const delayMin: number = msgAction?.delayMin ?? 45
+          const delayMax: number = msgAction?.delayMax ?? 180
+          const link = msgAction?.link
+          const image: string | undefined = msgAction?.image?.enabled ? msgAction.image.url : undefined
 
-      let dmsQueued = 0
-      const triggersFound = account.triggersAsResponder.length
+          for (const follower of newFollowers) {
+            let text = template.replace(/\{\{username\}\}/gi, follower.username)
+            if (link?.enabled && link.url) text += `\n\n${link.text ? link.text + ': ' : ''}${link.url}`
+            const delayMs = Math.round((delayMin + Math.random() * (delayMax - delayMin)) * 1000)
 
-      for (const trigger of account.triggersAsResponder) {
-        const actions = (trigger.actions ?? []) as any[]
-        // Поддержка старого формата (без поля enabled) и нового
-        const isOn = (a: any) => a && a.enabled !== false
-        const msgAction = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
-        const doFollow = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
-        const doLike = actions.some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
+            const job = {
+              sessionData: account.sessionData, accountId: account.id,
+              triggerId: trigger.id, triggerName: trigger.name,
+              followerPk: follower.pk, followerUsername: follower.username,
+              text: text.trim(), image, doFollow, doLike, proxy: account.proxy,
+            }
 
-        // Нет ни одного действия — пропускаем триггер
-        if (!msgAction?.templates?.[0] && !doFollow && !doLike) continue
-
-        const template: string = msgAction?.templates?.[0] ?? ''
-        const delayMin: number = msgAction?.delayMin ?? 45
-        const delayMax: number = msgAction?.delayMax ?? 180
-        const link = msgAction?.link
-        const image: string | undefined = msgAction?.image?.enabled ? msgAction.image.url : undefined
-
-        for (const follower of newFollowers) {
-          let text = template.replace(/\{\{username\}\}/gi, follower.username)
-          // Instagram DM не поддерживает inline-кнопки — ссылка добавляется текстом (IG делает её кликабельной)
-          if (link?.enabled && link.url) {
-            text += `\n\n${link.text ? link.text + ': ' : ''}${link.url}`
+            if (dmQueue && !isManual) {
+              await dmQueue.add('send', job, { delay: delayMs, attempts: 2, backoff: { type: 'fixed', delay: 30_000 } })
+            } else {
+              await runFollowerActionsInline(job)
+            }
+            s.dmsQueued++
           }
-          const delayMs = Math.round((delayMin + Math.random() * (delayMax - delayMin)) * 1000)
+        }
+      }
 
-          const job = {
-            sessionData: account.sessionData,
-            accountId: account.id,
-            triggerId: trigger.id,
-            triggerName: trigger.name,
-            followerPk: follower.pk,
-            followerUsername: follower.username,
-            text: text.trim(),
-            image,
-            doFollow,
-            doLike,
-            proxy: account.proxy,
+      // ── Поток комментариев ───────────────────────────────────────────────
+      if (commentTriggers.length) {
+        const { comments } = await getComments(session, account.username, proxy, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA)
+        const snapComments = account.snapshots.find((sn) => sn.type === 'COMMENTS')
+        const knownC = extractKnownPks(snapComments?.data)
+        const newComments = comments.filter((c) => !knownC.has(String(c.pk)))
+        comments.forEach((c) => knownC.add(String(c.pk)))
+
+        await prisma.$transaction([
+          prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'COMMENTS' } }),
+          prisma.snapshot.create({ data: { accountId: account.id, type: 'COMMENTS', data: Array.from(knownC) } }),
+        ])
+
+        s.totalComments = comments.length
+        s.newComments = newComments.length
+
+        for (const c of newComments) {
+          for (const trigger of commentTriggers) {
+            const actions = (trigger.actions ?? []) as any[]
+            const isOn = (a: any) => a && a.enabled !== false
+            const dm = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
+            const reply = actions.find((a: any) => a.type === 'REPLY_COMMENT' && isOn(a))
+            const likeCmt = actions.some((a: any) => a.type === 'LIKE_COMMENT' && isOn(a))
+
+            let fired = false
+            const errors: string[] = []
+
+            // Лайк комментария — на все новые комментарии (без фильтра по фразе)
+            if (likeCmt) {
+              try { await likeComment(session, c.pk, proxy); fired = true }
+              catch (e: any) { errors.push(`лайк коммента: ${e.message}`) }
+            }
+
+            // DM автору комментария — по фильтру фраз
+            if (dm?.templates?.[0] && matchPhrase(c.text, dm.match)) {
+              let text = (dm.templates[0] as string).replace(/\{\{username\}\}/gi, c.username)
+              if (dm.link?.enabled && dm.link.url) text += `\n\n${dm.link.text ? dm.link.text + ': ' : ''}${dm.link.url}`
+              try {
+                await sendDM(session, c.user_pk, text.trim(), proxy); fired = true
+                if (dm.image?.enabled && dm.image.url) await sendDMPhoto(session, c.user_pk, dm.image.url, proxy)
+              } catch (e: any) { errors.push(`DM: ${e.message}`) }
+            }
+
+            // Ответ в комментариях — по фильтру фраз, случайный вариант из списка
+            if (reply && matchPhrase(c.text, reply.match)) {
+              const variants: string[] = (reply.replies ?? []).filter(Boolean)
+              if (variants.length) {
+                const pick = variants[Math.floor(Math.random() * variants.length)].replace(/\{\{username\}\}/gi, c.username)
+                try { await replyComment(session, c.media_id, pick, c.pk, proxy); fired = true }
+                catch (e: any) { errors.push(`ответ: ${e.message}`) }
+              }
+            }
+
+            if (fired) {
+              await Promise.all([
+                prisma.log.create({ data: { accountId: account.id, level: errors.length ? 'WARN' : 'SUCCESS', message: `Коммент @${c.username} → «${trigger.name}»${errors.length ? ` (частично: ${errors.join('; ')})` : ''}` } }),
+                prisma.triggerRule.update({ where: { id: trigger.id }, data: { fireCount: { increment: 1 } } }),
+              ])
+              s.commentActions++
+            } else if (errors.length) {
+              await prisma.log.create({ data: { accountId: account.id, level: 'ERROR', message: `Коммент @${c.username}: ${errors.join('; ')}` } })
+            }
           }
-
-          // Ручная проверка — отправляем СРАЗУ и синхронно (без зависимости от фонового
-          // BullMQ-воркера), чтобы пользователь видел результат немедленно.
-          // Авто-поллинг — кладём в очередь с задержкой 45–180с (безопаснее для аккаунта).
-          if (dmQueue && !isManual) {
-            await dmQueue.add('send', job, { delay: delayMs, attempts: 2, backoff: { type: 'fixed', delay: 30_000 } })
-          } else {
-            await runActionsInline(job)
-          }
-
-          dmsQueued++
         }
       }
 
@@ -184,8 +283,7 @@ export async function POST(req: NextRequest) {
         where: { id: account.id },
         data: { lastChecked: new Date(), errorCount: 0 },
       })
-
-      summary.push({ accountId: account.id, totalFollowers: followers.length, newFollowers: newFollowers.length, dmsQueued, triggersFound })
+      summary.push(s)
     } catch (e: any) {
       await prisma.instagramAccount.update({
         where: { id: account.id },
@@ -194,7 +292,7 @@ export async function POST(req: NextRequest) {
       await prisma.log.create({
         data: { accountId: account.id, level: 'ERROR', message: `Ошибка проверки: ${e.message}` },
       })
-      summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, triggersFound: 0 })
+      summary.push(s)
     }
   }
 

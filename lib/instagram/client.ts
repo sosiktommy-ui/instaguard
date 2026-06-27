@@ -40,6 +40,20 @@ export async function likeLatestMedia(session: object, userId: string, proxy?: s
   return workerFetch('/like-latest-media', { sessionData: session, userId, proxy })
 }
 
+export interface IgComment { pk: string; text: string; user_pk: string; username: string; media_id: string }
+
+export async function getComments(session: object, username: string, proxy?: string, mediaCount = 4, perMedia = 20) {
+  return workerFetch<{ comments: IgComment[] }>('/comments', { sessionData: session, username, proxy, mediaCount, perMedia })
+}
+
+export async function replyComment(session: object, mediaId: string, text: string, commentId?: string, proxy?: string) {
+  return workerFetch('/reply-comment', { sessionData: session, mediaId, text, commentId, proxy })
+}
+
+export async function likeComment(session: object, commentId: string, proxy?: string) {
+  return workerFetch('/like-comment', { sessionData: session, commentId, proxy })
+}
+
 export async function loginByCredentials(username: string, password: string, proxy?: string) {
   return workerFetch<{ sessionData?: object; needsChallenge?: boolean; stepName?: string; username?: string }>('/login', { username, password, proxy })
 }
