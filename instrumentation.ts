@@ -57,15 +57,16 @@ export async function register() {
           return res.json()
         }
 
-        // Каждое действие независимо: ошибка лайка/подписки (напр. эндпоинт ещё не задеплоен)
-        // не должна блокировать DM и приводить к повторной отправке.
+        // Каждое действие независимо: ошибка лайка/подписки не блокирует DM.
+        // Между действиями — случайная пауза (2-8 с) для естественности.
+        const rd = (a: number, b: number) => new Promise<void>((r) => setTimeout(r, Math.round((a + Math.random() * (b - a)) * 1000)))
         let success = false
         const errors: string[] = []
         if (text)     { try { await call('/send-dm', { sessionData, toUserId: followerPk, text, proxy }); success = true } catch (e: any) { errors.push(`DM: ${e.message}`) } }
-        if (image)    { try { await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy }); success = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
-        if (doFollow) { try { await call('/follow-user', { sessionData, userId: followerPk, proxy }); success = true } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
-        if (doLike)   { try { await call('/like-latest-media', { sessionData, userId: followerPk, proxy }); success = true } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
-        if (viewStories) { try { await call('/user-stories', { sessionData, userId: followerPk, like: storyLike, proxy }); success = true } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
+        if (image)    { await rd(2, 5); try { await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy }); success = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
+        if (doFollow) { await rd(3, 8); try { await call('/follow-user', { sessionData, userId: followerPk, proxy }); success = true } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
+        if (doLike)   { await rd(4, 10); try { await call('/like-latest-media', { sessionData, userId: followerPk, proxy }); success = true } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
+        if (viewStories) { await rd(5, 12); try { await call('/user-stories', { sessionData, userId: followerPk, like: storyLike, proxy }); success = true } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
 
         if (success) {
           await Promise.all([

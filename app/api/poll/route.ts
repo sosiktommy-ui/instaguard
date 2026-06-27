@@ -8,11 +8,17 @@ import { Queue } from 'bullmq'
 
 // Минимум 10 минут между автоматическими проверками одного аккаунта
 const POLL_COOLDOWN_MS = 10 * 60 * 1000
+// Комментарии проверяем реже — раз в 60 минут (они меняются медленнее)
+const COMMENT_COOLDOWN_MS = 60 * 60 * 1000
 // Сколько последних подписчиков запрашивать у Instagram (лимит безопасности)
 const FOLLOWERS_FETCH_LIMIT = 50
 // Сколько последних постов и комментариев под каждым сканировать
-const COMMENT_MEDIA_COUNT = 4
-const COMMENT_PER_MEDIA = 20
+const COMMENT_MEDIA_COUNT = 3
+const COMMENT_PER_MEDIA = 15
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+const randDelay = (minS: number, maxS: number) =>
+  sleep(Math.round((minS + Math.random() * (maxS - minS)) * 1000))
 
 // Извлекает Set<pk> из снапшота в любом формате (старый: [{pk,username}], новый: string[])
 function extractKnownPks(data: unknown): Set<string> {
@@ -90,10 +96,10 @@ async function runFollowerActionsInline(job: any) {
   const errors: string[] = []
 
   if (job.text)   { try { await sendDM(session, job.followerPk, job.text, proxy); success = true } catch (e: any) { errors.push(`DM: ${e.message}`) } }
-  if (job.image)  { try { await sendDMPhoto(session, job.followerPk, job.image, proxy); success = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
-  if (job.doFollow) { try { await followUser(session, job.followerPk, proxy); success = true } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
-  if (job.doLike)   { try { await likeLatestMedia(session, job.followerPk, proxy); success = true } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
-  if (job.viewStories) { try { await viewStories(session, job.followerPk, job.storyLike, proxy); success = true } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
+  if (job.image)  { await randDelay(2, 5); try { await sendDMPhoto(session, job.followerPk, job.image, proxy); success = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
+  if (job.doFollow) { await randDelay(3, 7); try { await followUser(session, job.followerPk, proxy); success = true } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
+  if (job.doLike)   { await randDelay(3, 8); try { await likeLatestMedia(session, job.followerPk, proxy); success = true } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
+  if (job.viewStories) { await randDelay(4, 10); try { await viewStories(session, job.followerPk, job.storyLike, proxy); success = true } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
 
   if (success) {
     await Promise.all([
@@ -218,12 +224,15 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // ── Поток комментариев ───────────────────────────────────────────────
-      if (commentTriggers.length) {
+      // ── Поток комментариев (отдельный кулдаун — реже чем подписчики) ────
+      const snapCommentsMeta = account.snapshots.find((sn) => sn.type === 'COMMENTS')
+      const commentElapsed = snapCommentsMeta
+        ? Date.now() - new Date(snapCommentsMeta.createdAt).getTime()
+        : Infinity
+      if (commentTriggers.length && (isManual || commentElapsed >= COMMENT_COOLDOWN_MS)) {
         const { comments } = await getComments(session, account.username, proxy, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA)
-        const snapComments = account.snapshots.find((sn) => sn.type === 'COMMENTS')
-        const hadBaseline = Boolean(snapComments)
-        const knownC = extractKnownPks(snapComments?.data)
+        const hadBaseline = Boolean(snapCommentsMeta)
+        const knownC = extractKnownPks(snapCommentsMeta?.data)
         // Первая проверка (нет снапшота) — только фиксируем базу, НЕ реагируем на старые комменты,
         // иначе бот разом ответит на все существующие. Реагируем только на появившиеся после базы.
         const newComments = hadBaseline ? comments.filter((c) => !knownC.has(String(c.pk))) : []
@@ -274,7 +283,7 @@ export async function POST(req: NextRequest) {
               }
             }
 
-            // Подписан (или проверки нет): сначала коммент, потом подписка, потом DM, потом сторис
+            // Подписан (или проверки нет): действия с паузами между ними
             if (!gatedStop) {
               if (reply) {
                 const variants: string[] = (reply.replies ?? []).filter(Boolean)
@@ -285,22 +294,29 @@ export async function POST(req: NextRequest) {
                 }
               }
               if (likeCmt) {
+                await randDelay(1, 3)
                 try { await likeComment(session, c.pk, proxy); fired = true }
                 catch (e: any) { errors.push(`лайк коммента: ${e.message}`) }
               }
               if (doFollow) {
+                await randDelay(2, 5)
                 try { await followUser(session, c.user_pk, proxy); fired = true }
                 catch (e: any) { errors.push(`подписка: ${e.message}`) }
               }
               if (dm?.templates?.[0]) {
+                await randDelay(3, 8)
                 let text = String(dm.templates[0]).replace(/\{\{username\}\}/gi, c.username)
                 if (dm.link?.enabled && dm.link.url) text += `\n\n${dm.link.text ? dm.link.text + ': ' : ''}${dm.link.url}`
                 try {
                   await sendDM(session, c.user_pk, text.trim(), proxy); fired = true
-                  if (dm.image?.enabled && dm.image.url) await sendDMPhoto(session, c.user_pk, dm.image.url, proxy)
+                  if (dm.image?.enabled && dm.image.url) {
+                    await randDelay(2, 4)
+                    await sendDMPhoto(session, c.user_pk, dm.image.url, proxy)
+                  }
                 } catch (e: any) { errors.push(`DM: ${e.message}`) }
               }
               if (storiesAct) {
+                await randDelay(3, 7)
                 try { await viewStories(session, c.user_pk, Boolean(storiesAct.like), proxy); fired = true }
                 catch (e: any) { errors.push(`сторис: ${e.message}`) }
               }

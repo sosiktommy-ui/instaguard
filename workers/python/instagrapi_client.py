@@ -2,6 +2,8 @@ import os
 import base64
 import json
 import logging
+import random
+import time
 import urllib.parse
 
 from instagrapi import Client
@@ -109,12 +111,21 @@ def _is_mobile_session(cookies: dict) -> bool:
 
 
 def build_client(session_data: dict, proxy: str | None = None) -> Client:
+    """Build a Client from saved session data. Does NOT call get_timeline_feed —
+    that's only done during login/session-test to avoid suspicious bursts of
+    identical requests before each action."""
     cl = Client()
     if proxy:
         cl.set_proxy(_normalize_proxy(proxy))
     cl.set_settings(session_data)
-    cl.get_timeline_feed()
     return cl
+
+
+def test_session_live(session_data: dict, proxy: str | None = None) -> bool:
+    """Verify a session is still alive by loading the timeline feed."""
+    cl = build_client(session_data, proxy)
+    cl.get_timeline_feed()
+    return True
 
 
 def _try_solve_recaptcha(page_url: str = 'https://www.instagram.com/challenge/') -> str | None:
@@ -309,6 +320,23 @@ def like_latest_media(session_data: dict, user_id: str, proxy: str | None = None
     return {"status": "liked", "media_id": str(medias[0].id)}
 
 
+def like_user_medias(session_data: dict, user_id: str, amount: int = 3, proxy: str | None = None) -> dict:
+    """Зайти на профиль пользователя и пролайкать его последние посты (если они есть)."""
+    cl = build_client(session_data, proxy)
+    medias = cl.user_medias(int(user_id), amount=amount)
+    if not medias:
+        return {"status": "no_media", "liked": 0}
+    liked = 0
+    for m in medias:
+        try:
+            cl.media_like(m.id)
+            liked += 1
+            time.sleep(random.uniform(2.0, 5.0))  # пауза между лайками
+        except Exception as e:
+            logger.warning("media_like failed for %s: %s", getattr(m, "id", "?"), e)
+    return {"status": "liked", "liked": liked}
+
+
 def send_direct_photo(session_data: dict, to_user_id: str, image_b64: str, proxy: str | None = None) -> dict:
     """Отправить фото в директ. image_b64 — data-URL или чистый base64."""
     import tempfile, os
@@ -380,7 +408,12 @@ def like_comment(session_data: dict, comment_id: str, proxy: str | None = None) 
 def get_friendship(session_data: dict, user_id: str, proxy: str | None = None) -> dict:
     """Статус отношений: following — мы подписаны на него; followed_by — он подписан на нас."""
     cl = build_client(session_data, proxy)
-    fs = cl.user_friendship_v1(int(user_id))
+    fs = None
+    try:
+        fs = cl.user_friendship_v1(int(user_id))
+    except Exception as e:
+        logger.warning("user_friendship_v1 failed, trying friendship_show: %s", e)
+        fs = cl.friendship_show(int(user_id))
     return {
         "following": bool(getattr(fs, "following", False)),
         "followed_by": bool(getattr(fs, "followed_by", False)),
@@ -408,6 +441,7 @@ def view_stories(session_data: dict, user_id: str, like: bool = False, proxy: st
             try:
                 cl.story_like(s.id)
                 liked += 1
+                time.sleep(random.uniform(1.5, 4.0))  # пауза между лайками сторис
             except Exception as e:
                 logger.warning("story_like failed for %s: %s", getattr(s, "id", "?"), e)
 

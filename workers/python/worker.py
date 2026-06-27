@@ -125,7 +125,7 @@ def login_cookies(payload: CookiePayload, x_worker_secret: str = Header(...)):
 def test_session(payload: SessionPayload, x_worker_secret: str = Header(...)):
     _check_secret(x_worker_secret)
     try:
-        ig.build_client(payload.sessionData, payload.proxy)
+        ig.test_session_live(payload.sessionData, payload.proxy)
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
