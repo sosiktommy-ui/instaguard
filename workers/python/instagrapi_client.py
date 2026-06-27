@@ -441,8 +441,35 @@ def view_stories(session_data: dict, user_id: str, like: bool = False, proxy: st
             try:
                 cl.story_like(s.id)
                 liked += 1
-                time.sleep(random.uniform(1.5, 4.0))  # пауза между лайками сторис
+                time.sleep(random.uniform(1.5, 4.0))
             except Exception as e:
                 logger.warning("story_like failed for %s: %s", getattr(s, "id", "?"), e)
+
+    return {"status": "ok", "viewed": viewed, "liked": liked}
+
+
+def view_stories_natural(session_data: dict, user_id: str, like: bool = False, proxy: str | None = None) -> dict:
+    """Просмотр сторис по одной с паузами — как реальный пользователь."""
+    cl = build_client(session_data, proxy)
+    stories = cl.user_stories(int(user_id))
+    if not stories:
+        return {"status": "no_stories", "viewed": 0, "liked": 0}
+
+    viewed = 0
+    liked = 0
+    for s in stories:
+        try:
+            cl.story_seen([int(s.pk)])  # по одной
+            viewed += 1
+            time.sleep(random.uniform(2.0, 5.0))  # пауза как при реальном просмотре
+            if like:
+                try:
+                    cl.story_like(s.id)
+                    liked += 1
+                    time.sleep(random.uniform(1.0, 2.5))
+                except Exception as e:
+                    logger.warning("story_like failed: %s", e)
+        except Exception as e:
+            logger.warning("story_seen failed for %s: %s", getattr(s, "pk", "?"), e)
 
     return {"status": "ok", "viewed": viewed, "liked": liked}

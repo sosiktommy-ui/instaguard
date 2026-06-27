@@ -290,7 +290,7 @@ def like_user_medias(payload: LikeMediasPayload, x_worker_secret: str = Header(.
 def user_stories(payload: StoriesPayload, x_worker_secret: str = Header(...)):
     _check_secret(x_worker_secret)
     try:
-        return ig.view_stories(payload.sessionData, payload.userId, payload.like, payload.proxy)
+        return ig.view_stories_natural(payload.sessionData, payload.userId, payload.like, payload.proxy)
     except Exception as e:
         logging.error("user_stories error: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
