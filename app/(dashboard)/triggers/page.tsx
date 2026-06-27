@@ -84,19 +84,38 @@ function TrigBadge({ meta, active, size = 30, title, tip = true }: {
   )
 }
 
+// Плавный счётчик цифр
+function useCountUp(value: number, dur = 900) {
+  const [n, setN] = useState(0)
+  useEffect(() => {
+    let raf = 0
+    let start: number | null = null
+    const tick = (ts: number) => {
+      if (start === null) start = ts
+      const p = Math.min(1, (ts - start) / dur)
+      setN(Math.round(value * (1 - Math.pow(1 - p, 3))))
+      if (p < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [value, dur])
+  return n
+}
+
 // Объёмная карточка статистики
-function StatCard({ icon: Icon, color, value, label, tip }: {
-  icon: any; color: string; value: React.ReactNode; label: string; tip: string
+function StatCard({ icon: Icon, color, value, label, tip, delay = 0 }: {
+  icon: any; color: string; value: number; label: string; tip: string; delay?: number
 }) {
+  const n = useCountUp(value)
   return (
-    <div className="card card-3d gloss px-5 py-4 flex items-center gap-3 relative overflow-hidden">
+    <div className="card card-3d gloss rise px-5 py-4 flex items-center gap-3 relative overflow-hidden" style={{ animationDelay: `${delay}ms` }}>
       <div className="absolute right-3 top-3 z-10"><Hint text={tip} /></div>
       <div className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 float-y"
         style={{ background: `linear-gradient(145deg, ${color}, ${darken(color)})`, boxShadow: `0 5px 16px ${hexA(color, 0.5)}, inset 0 1.5px 1px rgba(255,255,255,0.5), inset 0 -2px 4px ${hexA(darken(color, 0.6), 0.5)}` }}>
         <Icon className="w-5 h-5 text-white" />
       </div>
       <div>
-        <div className="text-[24px] font-semibold tracking-tighter leading-none">{value}</div>
+        <div className="text-[24px] font-semibold tracking-tighter leading-none tabular-nums">{n.toLocaleString('ru')}</div>
         <div className="text-[12px] text-subt mt-1">{label}</div>
       </div>
     </div>
@@ -222,8 +241,8 @@ function buildActions(d: Draft): any[] {
 // ════════════════════════════════════════════════════════════════════════════
 // Карточка существующего триггера
 // ════════════════════════════════════════════════════════════════════════════
-function TriggerCard({ trigger, onToggle, onDelete }: {
-  trigger: DbTrigger; onToggle: () => void; onDelete: () => void
+function TriggerCard({ trigger, onToggle, onDelete, index = 0 }: {
+  trigger: DbTrigger; onToggle: () => void; onDelete: () => void; index?: number
 }) {
   const meta = META_BY_DB[trigger.triggerType]
   const actions = trigger.actions ?? []
@@ -251,7 +270,7 @@ function TriggerCard({ trigger, onToggle, onDelete }: {
   }
 
   return (
-    <div className={cn('card card-3d p-4 flex flex-col gap-3 transition-all', !trigger.isActive && 'opacity-55')}>
+    <div className={cn('card card-3d rise p-4 flex flex-col gap-3 transition-all', !trigger.isActive && 'opacity-55')} style={{ animationDelay: `${index * 70}ms` }}>
       <div className="flex items-start gap-3">
         {meta
           ? <TrigBadge meta={meta} active={trigger.isActive} size={40} />
@@ -694,8 +713,8 @@ function CreateForm({
                   return (
                     <Tilt key={m.key} max={6}>
                       <button onClick={() => set('type', m.key)}
-                        className={cn('w-full flex items-center gap-3 p-3 rounded-2xl border text-left transition-all duration-200',
-                          on ? 'bg-white' : 'border-line/60 hover:border-line hover:bg-white/60')}
+                        className={cn('w-full flex items-center gap-3 p-3 rounded-2xl border text-left transition-all duration-200 neon',
+                          on ? 'bg-white neon-on' : 'border-line/60 hover:border-line hover:bg-white/60')}
                         style={on ? { borderColor: m.color, boxShadow: `0 10px 26px ${hexA(m.color, 0.28)}, 0 0 0 3px ${hexA(m.color, 0.14)}, inset 0 1px 0 rgba(255,255,255,0.7)` } : undefined}>
                         <TrigBadge meta={m} active={on} size={38} tip={false} />
                         <span className="min-w-0">
@@ -725,8 +744,8 @@ function CreateForm({
                     return (
                       <Tooltip key={k} content={tip} className="flex">
                         <button onClick={() => set(k, !on)}
-                          className={cn('w-full flex flex-col items-center gap-1.5 py-2.5 rounded-2xl border transition-all duration-200 active:scale-95',
-                            on ? 'bg-white -translate-y-0.5' : 'border-line/60 text-subt hover:border-line hover:-translate-y-0.5')}
+                          className={cn('w-full flex flex-col items-center gap-1.5 py-2.5 rounded-2xl border transition-all duration-200 active:scale-95 neon',
+                            on ? 'bg-white -translate-y-0.5 neon-on' : 'border-line/60 text-subt hover:border-line hover:-translate-y-0.5')}
                           style={on ? { borderColor: color, boxShadow: `0 6px 16px ${hexA(color, 0.3)}, 0 0 0 3px ${hexA(color, 0.12)}, inset 0 1px 0 rgba(255,255,255,0.7)` } : undefined}>
                           <span className="rounded-xl flex items-center justify-center transition-transform" style={on ? { width: 30, height: 30, background: `linear-gradient(145deg, ${color}, ${darken(color)})`, boxShadow: `0 3px 9px ${hexA(color, 0.5)}, inset 0 1px 1px rgba(255,255,255,0.5)`, color: '#fff' } : { width: 30, height: 30 }}>
                             <Icon className="w-4 h-4" style={on ? undefined : { color: '#9ca3af' }} />
@@ -844,7 +863,7 @@ function CreateForm({
                 </button>
               )}
 
-              <Button className="w-full mt-1 sheen" onClick={save} disabled={!canSave || saving}>
+              <Button className="w-full mt-1 sheen grad-anim bg-gradient-to-r from-brand via-[#5e5ce6] to-brand text-white hover:brightness-105" onClick={save} disabled={!canSave || saving}>
                 <Zap className="w-3.5 h-3.5" fill="white" />
                 {saving ? 'Сохранение…'
                   : selected.length === 0 ? 'Выберите аккаунты'
@@ -968,9 +987,9 @@ function TriggersScreen() {
   return (
     <div className="space-y-5 pb-24">
       <div className="grid grid-cols-3 gap-3">
-        <StatCard icon={Zap} color="#0071e3" value={activeTriggers.length} label="Активных" tip="Сколько триггеров сейчас включено и работает" />
-        <StatCard icon={Send} color="#34c759" value={totalFires.toLocaleString('ru')} label="Срабатываний" tip="Суммарно отправлено сообщений / выполнено действий по всем триггерам" />
-        <StatCard icon={Users} color="#5e5ce6" value={dbAccounts.filter((a) => a.status === 'ACTIVE').length} label="Аккаунтов" tip="Активные Instagram-аккаунты, готовые к работе" />
+        <StatCard icon={Zap} color="#0071e3" value={activeTriggers.length} label="Активных" tip="Сколько триггеров сейчас включено и работает" delay={0} />
+        <StatCard icon={Send} color="#34c759" value={totalFires} label="Срабатываний" tip="Суммарно отправлено сообщений / выполнено действий по всем триггерам" delay={90} />
+        <StatCard icon={Users} color="#5e5ce6" value={dbAccounts.filter((a) => a.status === 'ACTIVE').length} label="Аккаунтов" tip="Активные Instagram-аккаунты, готовые к работе" delay={180} />
       </div>
 
       <div className="card overflow-hidden">
@@ -1005,8 +1024,8 @@ function TriggersScreen() {
               <>
                 <div className="text-[11px] font-semibold text-subt uppercase tracking-wider px-1">Активные</div>
                 <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {activeTriggers.map((t) => (
-                    <TriggerCard key={t.id} trigger={t} onToggle={() => toggleTrigger(t.id, t.isActive)} onDelete={() => deleteTrigger(t.id)} />
+                  {activeTriggers.map((t, i) => (
+                    <TriggerCard key={t.id} trigger={t} index={i} onToggle={() => toggleTrigger(t.id, t.isActive)} onDelete={() => deleteTrigger(t.id)} />
                   ))}
                 </div>
               </>
@@ -1015,8 +1034,8 @@ function TriggersScreen() {
               <>
                 <div className="text-[11px] font-semibold text-subt uppercase tracking-wider px-1 mt-2">Выключенные</div>
                 <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {inactiveTriggers.map((t) => (
-                    <TriggerCard key={t.id} trigger={t} onToggle={() => toggleTrigger(t.id, t.isActive)} onDelete={() => deleteTrigger(t.id)} />
+                  {inactiveTriggers.map((t, i) => (
+                    <TriggerCard key={t.id} trigger={t} index={i} onToggle={() => toggleTrigger(t.id, t.isActive)} onDelete={() => deleteTrigger(t.id)} />
                   ))}
                 </div>
               </>

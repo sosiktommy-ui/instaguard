@@ -192,11 +192,47 @@
   pointer-events: none;
 }
 
-/* Вращающаяся неоновая рамка (для выбранных карточек) */
+/* Каскадное появление */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(16px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+.rise { animation: rise 0.55s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+/* Живой градиент (кнопки/текст) */
+@keyframes gradient-pan { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
+.grad-anim { background-size: 200% auto; animation: gradient-pan 3.5s linear infinite; }
+
+/* Вращающаяся неоновая рамка вокруг элемента (game-style) */
 @keyframes spin-border { to { transform: rotate(360deg); } }
+.neon { position: relative; }
+.neon::before {
+  content: '';
+  position: absolute;
+  inset: -1.5px;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(from 0deg, #0071e3, #5e5ce6, #ff5fa2, #22d3ee, #0071e3);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.25s;
+  animation: spin-border 4s linear infinite;
+  pointer-events: none;
+}
+.neon-on::before { opacity: 1; }
+
+/* Пульсирующее кольцо-свечение */
+@keyframes halo {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(94,92,230,0.0); }
+  50%      { box-shadow: 0 0 22px 2px rgba(94,92,230,0.35); }
+}
+.halo { animation: halo 3s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .pulse-glow, .float-y, .sheen::after { animation: none !important; }
+  .pulse-glow, .float-y, .sheen::after, .grad-anim, .neon::before, .halo, .rise { animation: none !important; }
+  .rise { opacity: 1 !important; transform: none !important; }
 }
 
 /* Slim, unobtrusive scrollbars */
