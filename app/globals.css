@@ -156,6 +156,19 @@
 }
 .float-y { animation: float-y 5s ease-in-out infinite; }
 
+/* Дрейф цветных орбов для живого фона */
+@keyframes drift-a {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%      { transform: translate(8%, -6%) scale(1.12); }
+  66%      { transform: translate(-6%, 7%) scale(0.92); }
+}
+@keyframes drift-b {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%      { transform: translate(-9%, 5%) scale(0.9); }
+  66%      { transform: translate(7%, -8%) scale(1.15); }
+}
+.orb { position: absolute; border-radius: 9999px; filter: blur(90px); will-change: transform; }
+
 /* Объёмная карточка с приподнятием и цветным свечением при наведении */
 .card-3d {
   transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
