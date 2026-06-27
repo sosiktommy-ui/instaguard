@@ -1,10 +1,21 @@
-from instagrapi import Client
+import os
 import base64
 import json
 import logging
 import urllib.parse
 
+from instagrapi import Client
+from instagrapi.exceptions import ChallengeRequired
+
 logger = logging.getLogger(__name__)
+
+TWOCAPTCHA_KEY = os.getenv('TWOCAPTCHA_API_KEY', '')
+
+# In-memory store for pending challenge sessions: username → {settings, api_path, proxy}
+_challenge_sessions: dict[str, dict] = {}
+
+# Instagram reCAPTCHA site key (used in challenge pages)
+_IG_RECAPTCHA_SITEKEY = '6LenUD0UAAAAABGHhh5oqMVnHlC2tDHWwHkM79Nl'
 
 
 def _parse_mobile_session(raw: str) -> dict:
@@ -87,12 +98,143 @@ def build_client(session_data: dict, proxy: str | None = None) -> Client:
     return cl
 
 
+def _try_solve_recaptcha(page_url: str = 'https://www.instagram.com/challenge/') -> str | None:
+    """Try to solve Instagram reCAPTCHA via 2captcha. Returns the g-recaptcha-response token or None."""
+    if not TWOCAPTCHA_KEY:
+        return None
+    try:
+        from twocaptcha import TwoCaptcha
+        solver = TwoCaptcha(TWOCAPTCHA_KEY)
+        result = solver.recaptcha(sitekey=_IG_RECAPTCHA_SITEKEY, url=page_url)
+        token = result.get('code', '')
+        logger.info("2captcha solved reCAPTCHA, token=%s...", token[:20])
+        return token
+    except Exception as e:
+        logger.warning("2captcha solve failed: %s", e)
+        return None
+
+
 def login_by_credentials(username: str, password: str, proxy: str | None = None) -> dict:
+    """
+    Returns {'sessionData': dict} on success.
+    Returns {'needsChallenge': True, 'stepName': str, 'username': str} when challenge is required
+    (challenge session stored internally — call submit_challenge_code next).
+    Raises Exception on hard failure.
+    """
     cl = Client()
     if proxy:
         cl.set_proxy(proxy)
-    cl.login(username, password)
-    return cl.get_settings()
+
+    try:
+        cl.login(username, password)
+        return {'sessionData': cl.get_settings()}
+
+    except ChallengeRequired:
+        challenge = cl.last_json.get('challenge', {})
+        api_path = challenge.get('api_path', '')
+
+        if not api_path:
+            raise Exception("Требуется подтверждение Instagram. Войдите вручную в приложение.")
+
+        # Fetch challenge info
+        try:
+            resp = cl.private.get(f'https://i.instagram.com{api_path}?next=%2F')
+            challenge_data = resp.json()
+        except Exception as e:
+            raise Exception(f"ChallengeRequired: не удалось получить тип challenge ({e})")
+
+        step_name = challenge_data.get('step_name', '')
+        logger.info("Challenge step=%s for @%s api_path=%s", step_name, username, api_path)
+
+        # Try automatic resolution depending on step type
+        if step_name == 'delta_login_review':
+            # "Was this you?" — confirm "it was me"
+            try:
+                confirm = cl.private.post(
+                    f'https://i.instagram.com{api_path}',
+                    data={'choice': '0'}
+                ).json()
+                if confirm.get('action') == 'close' or confirm.get('status') == 'ok':
+                    cl.get_timeline_feed()
+                    logger.info("delta_login_review confirmed, login complete for @%s", username)
+                    return {'sessionData': cl.get_settings()}
+                step_name = confirm.get('step_name', step_name)
+            except Exception as e:
+                logger.warning("delta_login_review confirm failed: %s", e)
+
+        if step_name in ('recaptcha', 'captcha'):
+            # Try to solve with 2captcha
+            token = _try_solve_recaptcha()
+            if token:
+                try:
+                    solve_resp = cl.private.post(
+                        f'https://i.instagram.com{api_path}',
+                        data={'g-recaptcha-response': token}
+                    ).json()
+                    if solve_resp.get('action') == 'close' or solve_resp.get('status') == 'ok':
+                        cl.get_timeline_feed()
+                        return {'sessionData': cl.get_settings()}
+                    step_name = solve_resp.get('step_name', step_name)
+                    logger.info("After captcha solve, step=%s", step_name)
+                except Exception as e:
+                    logger.warning("Captcha submit failed: %s", e)
+
+        if step_name == 'select_verify_method':
+            # Trigger code send to email (choice=1)
+            try:
+                send_resp = cl.private.post(
+                    f'https://i.instagram.com{api_path}',
+                    data={'choice': '1'}
+                ).json()
+                step_name = send_resp.get('step_name', step_name)
+                logger.info("Email code requested, next step=%s", step_name)
+            except Exception as e:
+                logger.warning("Could not request email code: %s", e)
+
+        # Store challenge session so submit_challenge_code can continue
+        _challenge_sessions[username] = {
+            'settings': cl.get_settings(),
+            'api_path': api_path,
+            'proxy': proxy,
+        }
+
+        return {'needsChallenge': True, 'stepName': step_name, 'username': username}
+
+
+def submit_challenge_code(username: str, code: str) -> dict:
+    """Submit the verification code received by email/SMS. Returns {'sessionData': dict}."""
+    pending = _challenge_sessions.get(username)
+    if not pending:
+        raise Exception("Нет активного challenge. Начните авторизацию заново.")
+
+    cl = Client()
+    if pending.get('proxy'):
+        cl.set_proxy(pending['proxy'])
+    cl.set_settings(pending['settings'])
+
+    api_path = pending['api_path']
+
+    try:
+        resp = cl.private.post(
+            f'https://i.instagram.com{api_path}',
+            data={'security_code': code}
+        )
+        resp_data = resp.json()
+        logger.info("Challenge code submit response: %s", resp_data)
+
+        status = resp_data.get('status', '')
+        action = resp_data.get('action', '')
+
+        if status == 'ok' or action == 'close':
+            cl.get_timeline_feed()
+            del _challenge_sessions[username]
+            return {'sessionData': cl.get_settings()}
+
+        msg = resp_data.get('message', str(resp_data))
+        raise Exception(f"Неверный код подтверждения: {msg}")
+
+    except Exception as e:
+        raise Exception(f"Ошибка подтверждения: {e}")
 
 
 def login_by_cookies(cookies: dict, proxy: str | None = None) -> tuple[dict, str]:
@@ -129,3 +271,40 @@ def send_direct_message(session_data: dict, to_user_id: str, text: str, proxy: s
     cl = build_client(session_data, proxy)
     thread = cl.direct_send(text, [int(to_user_id)])
     return {"thread_id": str(thread.id), "status": "sent"}
+
+
+def follow_user(session_data: dict, user_id: str, proxy: str | None = None) -> dict:
+    """Подписаться в ответ на пользователя по его pk."""
+    cl = build_client(session_data, proxy)
+    ok = cl.user_follow(int(user_id))
+    return {"status": "followed" if ok else "noop"}
+
+
+def like_latest_media(session_data: dict, user_id: str, proxy: str | None = None) -> dict:
+    """Лайкнуть последний пост пользователя по его pk."""
+    cl = build_client(session_data, proxy)
+    medias = cl.user_medias(int(user_id), amount=1)
+    if not medias:
+        return {"status": "no_media"}
+    cl.media_like(medias[0].id)
+    return {"status": "liked", "media_id": str(medias[0].id)}
+
+
+def send_direct_photo(session_data: dict, to_user_id: str, image_b64: str, proxy: str | None = None) -> dict:
+    """Отправить фото в директ. image_b64 — data-URL или чистый base64."""
+    import tempfile, os
+    cl = build_client(session_data, proxy)
+    raw = image_b64.split(',', 1)[1] if image_b64.startswith('data:') else image_b64
+    data = base64.b64decode(raw)
+    tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
+    try:
+        tmp.write(data)
+        tmp.flush()
+        tmp.close()
+        thread = cl.direct_send_photo(tmp.name, [int(to_user_id)])
+        return {"thread_id": str(thread.id), "status": "sent"}
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass

@@ -1,6 +1,7 @@
 import os
 import logging
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import instagrapi_client as ig
@@ -48,6 +49,24 @@ class CookiePayload(BaseModel):
     proxy: str | None = None
 
 
+class ActionPayload(BaseModel):
+    sessionData: dict
+    userId: str
+    proxy: str | None = None
+
+
+class PhotoPayload(BaseModel):
+    sessionData: dict
+    toUserId: str
+    image: str
+    proxy: str | None = None
+
+
+class ChallengeCodePayload(BaseModel):
+    username: str
+    code: str
+
+
 @app.post("/login-cookies")
 def login_cookies(payload: CookiePayload, x_worker_secret: str = Header(...)):
     _check_secret(x_worker_secret)
@@ -81,8 +100,11 @@ def test_session(payload: SessionPayload, x_worker_secret: str = Header(...)):
 def login(payload: LoginPayload, x_worker_secret: str = Header(...)):
     _check_secret(x_worker_secret)
     try:
-        settings = ig.login_by_credentials(payload.username, payload.password, payload.proxy)
-        return {"sessionData": settings}
+        result = ig.login_by_credentials(payload.username, payload.password, payload.proxy)
+        if result.get('needsChallenge'):
+            # 202 = challenge required, not an error
+            return JSONResponse(status_code=202, content=result)
+        return result
     except Exception as e:
         err_type = type(e).__name__
         err = str(e)
@@ -108,6 +130,17 @@ def login(payload: LoginPayload, x_worker_secret: str = Header(...)):
         raise HTTPException(status_code=400, detail=detail)
 
 
+@app.post("/login-challenge")
+def login_challenge(payload: ChallengeCodePayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        result = ig.submit_challenge_code(payload.username, payload.code)
+        return result
+    except Exception as e:
+        logging.warning("Challenge code failed for %s: %s", payload.username, e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/followers")
 def followers(payload: FollowersPayload, x_worker_secret: str = Header(...)):
     _check_secret(x_worker_secret)
@@ -127,6 +160,36 @@ def send_dm(payload: DMPayload, x_worker_secret: str = Header(...)):
         return result
     except Exception as e:
         logging.error("send_dm error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/follow-user")
+def follow_user(payload: ActionPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        return ig.follow_user(payload.sessionData, payload.userId, payload.proxy)
+    except Exception as e:
+        logging.error("follow_user error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/like-latest-media")
+def like_latest_media(payload: ActionPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        return ig.like_latest_media(payload.sessionData, payload.userId, payload.proxy)
+    except Exception as e:
+        logging.error("like_latest_media error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/send-dm-photo")
+def send_dm_photo(payload: PhotoPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        return ig.send_direct_photo(payload.sessionData, payload.toUserId, payload.image, payload.proxy)
+    except Exception as e:
+        logging.error("send_dm_photo error: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
 
 

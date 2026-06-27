@@ -23,6 +23,42 @@ function getDmQueue() {
   return new Queue('dm-send', { connection: { url } })
 }
 
+// Выполняет все действия триггера для одного подписчика синхронно (когда нет Redis-очереди)
+async function runActionsInline(job: any) {
+  const { sendDM, sendDMPhoto, followUser, likeLatestMedia } = await import('@/lib/instagram/client')
+  const session = job.sessionData as object
+  const proxy = job.proxy ?? undefined
+  let success = false
+  const errors: string[] = []
+
+  if (job.text) {
+    try { await sendDM(session, job.followerPk, job.text, proxy); success = true }
+    catch (e: any) { errors.push(`DM: ${e.message}`) }
+  }
+  if (job.image) {
+    try { await sendDMPhoto(session, job.followerPk, job.image, proxy); success = true }
+    catch (e: any) { errors.push(`фото: ${e.message}`) }
+  }
+  if (job.doFollow) {
+    try { await followUser(session, job.followerPk, proxy); success = true }
+    catch (e: any) { errors.push(`подписка: ${e.message}`) }
+  }
+  if (job.doLike) {
+    try { await likeLatestMedia(session, job.followerPk, proxy); success = true }
+    catch (e: any) { errors.push(`лайк: ${e.message}`) }
+  }
+
+  if (success) {
+    await Promise.all([
+      prisma.log.create({ data: { accountId: job.accountId, level: 'SUCCESS', message: `Сработал триггер «${job.triggerName}» → @${job.followerUsername}` } }),
+      prisma.triggerRule.update({ where: { id: job.triggerId }, data: { fireCount: { increment: 1 } } }),
+    ])
+  }
+  if (errors.length) {
+    await prisma.log.create({ data: { accountId: job.accountId, level: errors.length && !success ? 'ERROR' : 'WARN', message: `@${job.followerUsername}: ${errors.join('; ')}` } })
+  }
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({})) as { accountId?: string }
   const { accountId } = body
@@ -94,43 +130,47 @@ export async function POST(req: NextRequest) {
 
       for (const trigger of account.triggersAsResponder) {
         const actions = (trigger.actions ?? []) as any[]
-        const msgAction = actions.find((a: any) => a.type === 'SEND_MESSAGE')
-        if (!msgAction?.templates?.[0]) continue
+        // Поддержка старого формата (без поля enabled) и нового
+        const isOn = (a: any) => a && a.enabled !== false
+        const msgAction = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
+        const doFollow = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
+        const doLike = actions.some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
 
-        const template: string = msgAction.templates[0]
-        const delayMin: number = msgAction.delayMin ?? 45
-        const delayMax: number = msgAction.delayMax ?? 180
+        // Нет ни одного действия — пропускаем триггер
+        if (!msgAction?.templates?.[0] && !doFollow && !doLike) continue
+
+        const template: string = msgAction?.templates?.[0] ?? ''
+        const delayMin: number = msgAction?.delayMin ?? 45
+        const delayMax: number = msgAction?.delayMax ?? 180
+        const link = msgAction?.link
+        const image: string | undefined = msgAction?.image?.enabled ? msgAction.image.url : undefined
 
         for (const follower of newFollowers) {
-          const text = template.replace(/\{\{username\}\}/gi, follower.username)
+          let text = template.replace(/\{\{username\}\}/gi, follower.username)
+          // Instagram DM не поддерживает inline-кнопки — ссылка добавляется текстом (IG делает её кликабельной)
+          if (link?.enabled && link.url) {
+            text += `\n\n${link.text ? link.text + ': ' : ''}${link.url}`
+          }
           const delayMs = Math.round((delayMin + Math.random() * (delayMax - delayMin)) * 1000)
 
+          const job = {
+            sessionData: account.sessionData,
+            accountId: account.id,
+            triggerId: trigger.id,
+            triggerName: trigger.name,
+            followerPk: follower.pk,
+            followerUsername: follower.username,
+            text: text.trim(),
+            image,
+            doFollow,
+            doLike,
+            proxy: account.proxy,
+          }
+
           if (dmQueue) {
-            await dmQueue.add(
-              'send',
-              {
-                sessionData: account.sessionData,
-                accountId: account.id,
-                triggerId: trigger.id,
-                triggerName: trigger.name,
-                followerPk: follower.pk,
-                followerUsername: follower.username,
-                text,
-                proxy: account.proxy,
-              },
-              { delay: delayMs, attempts: 2, backoff: { type: 'fixed', delay: 30_000 } }
-            )
+            await dmQueue.add('send', job, { delay: delayMs, attempts: 2, backoff: { type: 'fixed', delay: 30_000 } })
           } else {
-            const { sendDM } = await import('@/lib/instagram/client')
-            try {
-              await sendDM(account.sessionData as object, follower.pk, text, account.proxy ?? undefined)
-              await Promise.all([
-                prisma.log.create({ data: { accountId: account.id, level: 'SUCCESS', message: `DM @${follower.username} (${trigger.name})` } }),
-                prisma.triggerRule.update({ where: { id: trigger.id }, data: { fireCount: { increment: 1 } } }),
-              ])
-            } catch (e: any) {
-              await prisma.log.create({ data: { accountId: account.id, level: 'ERROR', message: `Ошибка DM @${follower.username}: ${e.message}` } })
-            }
+            await runActionsInline(job)
           }
 
           dmsQueued++

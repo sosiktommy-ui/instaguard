@@ -27,6 +27,18 @@ export async function sendDM(session: object, toUserId: string, message: string,
   return workerFetch('/send-dm', { sessionData: session, toUserId, text: message, proxy })
 }
 
+export async function sendDMPhoto(session: object, toUserId: string, image: string, proxy?: string) {
+  return workerFetch('/send-dm-photo', { sessionData: session, toUserId, image, proxy })
+}
+
+export async function followUser(session: object, userId: string, proxy?: string) {
+  return workerFetch('/follow-user', { sessionData: session, userId, proxy })
+}
+
+export async function likeLatestMedia(session: object, userId: string, proxy?: string) {
+  return workerFetch('/like-latest-media', { sessionData: session, userId, proxy })
+}
+
 export async function loginByCredentials(username: string, password: string, proxy?: string) {
   return workerFetch<{ sessionData: object }>('/login', { username, password, proxy })
 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { getCurrentUser } from '@/lib/auth'
+import { getUserOrFirst } from '@/lib/auth'
 
 const TYPE_MAP: Record<string, string> = {
   FOLLOW: 'NEW_FOLLOWER',
@@ -10,12 +10,12 @@ const TYPE_MAP: Record<string, string> = {
 }
 
 export async function GET() {
-  const user = await getCurrentUser()
+  const user = await getUserOrFirst()
   if (!user) return NextResponse.json([], { status: 401 })
 
   const triggers = await prisma.triggerRule.findMany({
     where: { userId: user.id },
-    include: { responder: { select: { id: true, username: true } } },
+    include: { responder: { select: { id: true, username: true, status: true, errorCount: true } } },
     orderBy: { createdAt: 'desc' },
   })
 
@@ -23,18 +23,31 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const user = await getUserOrFirst()
+  if (!user) return NextResponse.json({ error: 'Нет пользователя в БД' }, { status: 401 })
 
-  const { name, accountIds, type, conditions, message, delayMin, delayMax } = await req.json()
+  const body = await req.json()
+  const { name, accountIds, type, conditions } = body
   if (!name || !accountIds?.length || !type) {
-    return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
+    return NextResponse.json({ error: 'Заполните название и выберите аккаунты' }, { status: 400 })
   }
 
   const triggerType = TYPE_MAP[type]
-  if (!triggerType) return NextResponse.json({ error: 'Invalid type' }, { status: 400 })
+  if (!triggerType) return NextResponse.json({ error: 'Неизвестный тип события' }, { status: 400 })
 
-  const actions = [{ type: 'SEND_MESSAGE', templates: [message ?? ''], delayMin: delayMin ?? 45, delayMax: delayMax ?? 180 }]
+  // actions может прийти готовым массивом (новый UI) либо из плоских полей (старый UI)
+  let actions: any[]
+  if (Array.isArray(body.actions) && body.actions.length) {
+    actions = body.actions
+  } else {
+    actions = [{
+      type: 'SEND_MESSAGE',
+      enabled: true,
+      templates: [body.message ?? ''],
+      delayMin: body.delayMin ?? 45,
+      delayMax: body.delayMax ?? 180,
+    }]
+  }
 
   const created = await Promise.all(
     (accountIds as string[]).map((responderId) =>

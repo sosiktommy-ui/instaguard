@@ -37,26 +37,34 @@ export async function register() {
       async (job) => {
         const {
           sessionData, accountId, triggerId, triggerName,
-          followerPk, followerUsername, text, proxy,
+          followerPk, followerUsername, text, image, doFollow, doLike, proxy,
         } = job.data
 
         const workerUrl = process.env.PYTHON_WORKER_URL ?? 'http://localhost:8001'
         const workerSecret = process.env.PYTHON_WORKER_SECRET ?? ''
 
-        const res = await fetch(`${workerUrl}/send-dm`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Worker-Secret': workerSecret },
-          body: JSON.stringify({ sessionData, toUserId: followerPk, text, proxy }),
-        })
-
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}))
-          throw new Error(err.detail ?? `HTTP ${res.status}`)
+        const call = async (path: string, body: object) => {
+          const res = await fetch(`${workerUrl}${path}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Worker-Secret': workerSecret },
+            body: JSON.stringify(body),
+          })
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}))
+            throw new Error(err.detail ?? `HTTP ${res.status}`)
+          }
+          return res.json()
         }
+
+        // Действия выполняются последовательно; любое выполненное считается срабатыванием
+        if (text) await call('/send-dm', { sessionData, toUserId: followerPk, text, proxy })
+        if (image) await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy })
+        if (doFollow) await call('/follow-user', { sessionData, userId: followerPk, proxy })
+        if (doLike) await call('/like-latest-media', { sessionData, userId: followerPk, proxy })
 
         await Promise.all([
           prisma.log.create({
-            data: { accountId, level: 'SUCCESS', message: `DM @${followerUsername} (${triggerName})` },
+            data: { accountId, level: 'SUCCESS', message: `Сработал триггер «${triggerName}» → @${followerUsername}` },
           }),
           prisma.triggerRule.update({
             where: { id: triggerId },
@@ -64,7 +72,7 @@ export async function register() {
           }),
         ])
 
-        console.log(`[dm-worker] ✓ DM sent to @${followerUsername}`)
+        console.log(`[dm-worker] ✓ trigger fired for @${followerUsername}`)
       },
       {
         connection,

@@ -1,5 +1,6 @@
 import { SignJWT, jwtVerify } from 'jose'
 import { cookies } from 'next/headers'
+import { prisma } from '@/lib/prisma'
 
 const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET ?? 'super-secret-jwt-key-change-in-production'
@@ -35,6 +36,20 @@ export async function getCurrentUser() {
   } catch {
     return null
   }
+}
+
+/**
+ * Возвращает текущего пользователя по JWT-сессии, а если её нет —
+ * первого пользователя в БД. Приложение по факту однопользовательское
+ * (см. /api/accounts и /api/accounts/auth), поэтому без валидного куки
+ * не должно падать с Unauthorized.
+ */
+export async function getUserOrFirst() {
+  const session = await getCurrentUser()
+  if (session) return session
+  const first = await prisma.user.findFirst({ select: { id: true, email: true } })
+  if (!first) return null
+  return { id: first.id, email: first.email }
 }
 
 export async function logout() {
