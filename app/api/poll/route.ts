@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import {
   getFollowers, getComments, sendDM, sendDMPhoto, replyComment, likeComment,
-  getFriendship, viewStories, followUser, likeLatestMedia,
+  getFriendship, viewStories, followUser, likeLatestMedia, likeUserMedias,
 } from '@/lib/instagram/client'
 import { Queue } from 'bullmq'
 
+// Сколько последних постов автора комментария лайкать (действие «Лайк» в триггере «Комментарий»)
+const COMMENT_LIKE_POSTS = 3
 // Минимум 10 минут между автоматическими проверками одного аккаунта
 const POLL_COOLDOWN_MS = 10 * 60 * 1000
 // Комментарии проверяем реже — раз в 60 минут (они меняются медленнее)
@@ -257,6 +259,8 @@ export async function POST(req: NextRequest) {
             const dm = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
             const reply = actions.find((a: any) => a.type === 'REPLY_COMMENT' && isOn(a))
             const gate = actions.find((a: any) => a.type === 'COMMENT_GATE' && isOn(a))
+            // «Лайк» в триггере комментарий = лайкнуть посты автора (LIKE_MEDIA); LIKE_COMMENT — легаси (лайк коммента)
+            const doLikePosts = actions.some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
             const likeCmt = actions.some((a: any) => a.type === 'LIKE_COMMENT' && isOn(a))
             const doFollow = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
             const storiesAct = actions.find((a: any) => a.type === 'VIEW_STORIES' && isOn(a))
@@ -292,6 +296,11 @@ export async function POST(req: NextRequest) {
                   try { await replyComment(session, c.media_id, pick, c.pk, proxy); fired = true }
                   catch (e: any) { errors.push(`ответ: ${e.message}`) }
                 }
+              }
+              if (doLikePosts) {
+                await randDelay(2, 5)
+                try { await likeUserMedias(session, c.user_pk, COMMENT_LIKE_POSTS, proxy); fired = true }
+                catch (e: any) { errors.push(`лайк постов: ${e.message}`) }
               }
               if (likeCmt) {
                 await randDelay(1, 3)

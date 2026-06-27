@@ -90,6 +90,13 @@ class FriendshipPayload(BaseModel):
     proxy: str | None = None
 
 
+class LikeMediasPayload(BaseModel):
+    sessionData: dict
+    userId: str
+    amount: int = 3
+    proxy: str | None = None
+
+
 class StoriesPayload(BaseModel):
     sessionData: dict
     userId: str
@@ -266,6 +273,16 @@ def friendship(payload: FriendshipPayload, x_worker_secret: str = Header(...)):
         return ig.get_friendship(payload.sessionData, payload.userId, payload.proxy)
     except Exception as e:
         logging.error("friendship error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/like-user-medias")
+def like_user_medias(payload: LikeMediasPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        return ig.like_user_medias(payload.sessionData, payload.userId, payload.amount, payload.proxy)
+    except Exception as e:
+        logging.error("like_user_medias error: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
 
 

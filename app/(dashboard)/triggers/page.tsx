@@ -163,7 +163,8 @@ function buildActions(d: Draft): any[] {
     if (d.actDM) actions.push(msg())
     if (d.actCommentReply) actions.push({ type: 'REPLY_COMMENT', enabled: true, replies: d.commentReplies.map((x) => x.trim()).filter(Boolean) })
     if (d.actDM && d.cmtCheckSub) actions.push({ type: 'COMMENT_GATE', enabled: true, text: d.cmtGateText })
-    if (d.actLikeComment) actions.push({ type: 'LIKE_COMMENT', enabled: true })
+    // «Лайк» в комментарии = зайти к автору и лайкнуть его посты
+    if (d.actLikeComment) actions.push({ type: 'LIKE_MEDIA', enabled: true })
     if (d.actFollow) actions.push({ type: 'FOLLOW_BACK', enabled: true })
     if (d.actStories && (d.storyView || d.storyLike)) actions.push(stories())
     return actions
@@ -236,7 +237,7 @@ function TriggerCard({ trigger, onToggle, onDelete }: {
         {msg?.image?.enabled && badge('#0071e3', ImageIcon, 'фото')}
         {reply && badge('#34c759', MessageCircle, `коммент ×${(reply.replies ?? []).filter(Boolean).length}`)}
         {hasLikeComment && badge('#ff2d92', Heart, 'лайк коммента')}
-        {hasLike && badge('#ff2d92', Heart, 'лайк')}
+        {hasLike && badge('#ff2d92', Heart, isComment ? 'лайк постов' : 'лайк')}
         {hasFollow && badge('#34c759', UserCheck, 'подписка')}
         {storiesAct && badge('#ff9f0a', Clapperboard, storiesAct.like ? 'сторис + лайк' : 'сторис')}
       </div>
@@ -680,6 +681,8 @@ function CreateForm({
                     )
                   })}
                 </div>
+                {isComment && d.actLikeComment && <div className="text-[10.5px] text-subt mt-1.5">↳ Бот зайдёт к автору комментария и пролайкает его посты (если есть)</div>}
+                {isComment && d.actFollow && <div className="text-[10.5px] text-subt mt-1">↳ Подписаться на автора комментария</div>}
               </div>
 
               <input value={d.name} onChange={(e) => set('name', e.target.value)} className="field py-2 text-[13px]" placeholder="Название триггера" />

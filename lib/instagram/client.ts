@@ -40,6 +40,10 @@ export async function likeLatestMedia(session: object, userId: string, proxy?: s
   return workerFetch('/like-latest-media', { sessionData: session, userId, proxy })
 }
 
+export async function likeUserMedias(session: object, userId: string, amount = 3, proxy?: string) {
+  return workerFetch<{ status: string; liked: number }>('/like-user-medias', { sessionData: session, userId, amount, proxy })
+}
+
 export interface IgComment { pk: string; text: string; user_pk: string; username: string; media_id: string }
 
 export async function getComments(session: object, username: string, proxy?: string, mediaCount = 4, perMedia = 20) {
