@@ -11,6 +11,25 @@ logger = logging.getLogger(__name__)
 
 TWOCAPTCHA_KEY = os.getenv('TWOCAPTCHA_API_KEY', '')
 
+
+def _normalize_proxy(proxy: str | None) -> str | None:
+    """Normalize proxy to http://user:pass@host:port regardless of input format."""
+    if not proxy:
+        return None
+    proxy = proxy.strip()
+    if proxy.startswith(('http://', 'https://', 'socks5://', 'socks4://')):
+        return proxy
+    # user:pass@host:port  →  http://user:pass@host:port
+    if '@' in proxy:
+        return f'http://{proxy}'
+    # host:port:user:pass  →  http://user:pass@host:port
+    parts = proxy.split(':')
+    if len(parts) == 4:
+        host, port, user, password = parts
+        return f'http://{user}:{password}@{host}:{port}'
+    # host:port  →  http://host:port
+    return f'http://{proxy}'
+
 # In-memory store for pending challenge sessions: username → {settings, api_path, proxy}
 _challenge_sessions: dict[str, dict] = {}
 
@@ -92,7 +111,7 @@ def _is_mobile_session(cookies: dict) -> bool:
 def build_client(session_data: dict, proxy: str | None = None) -> Client:
     cl = Client()
     if proxy:
-        cl.set_proxy(proxy)
+        cl.set_proxy(_normalize_proxy(proxy))
     cl.set_settings(session_data)
     cl.get_timeline_feed()
     return cl
@@ -123,7 +142,7 @@ def login_by_credentials(username: str, password: str, proxy: str | None = None)
     """
     cl = Client()
     if proxy:
-        cl.set_proxy(proxy)
+        cl.set_proxy(_normalize_proxy(proxy))
 
     try:
         cl.login(username, password)
@@ -240,7 +259,7 @@ def submit_challenge_code(username: str, code: str) -> dict:
 def login_by_cookies(cookies: dict, proxy: str | None = None) -> tuple[dict, str]:
     cl = Client()
     if proxy:
-        cl.set_proxy(proxy)
+        cl.set_proxy(_normalize_proxy(proxy))
 
     if _is_mobile_session(cookies):
         # Pipe-delimited Android session export — parse and reconstruct proper settings

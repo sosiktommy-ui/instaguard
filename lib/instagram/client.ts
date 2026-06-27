@@ -10,7 +10,8 @@ async function workerFetch<T = any>(path: string, body: object): Promise<T> {
     },
     body: JSON.stringify(body),
   })
-  if (!res.ok) {
+  // 202 = challenge required (not an error — parse normally)
+  if (!res.ok && res.status !== 202) {
     let detail: string
     try {
       const data = await res.json()
@@ -40,7 +41,11 @@ export async function likeLatestMedia(session: object, userId: string, proxy?: s
 }
 
 export async function loginByCredentials(username: string, password: string, proxy?: string) {
-  return workerFetch<{ sessionData: object }>('/login', { username, password, proxy })
+  return workerFetch<{ sessionData?: object; needsChallenge?: boolean; stepName?: string; username?: string }>('/login', { username, password, proxy })
+}
+
+export async function submitChallengeCode(username: string, code: string) {
+  return workerFetch<{ sessionData: object }>('/login-challenge', { username, code })
 }
 
 export async function loginByCookies(cookies: object, proxy?: string) {

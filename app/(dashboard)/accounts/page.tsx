@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Play, Pause, Trash2, X, AtSign, Lock, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw } from 'lucide-react'
+import { Plus, Play, Pause, Trash2, X, AtSign, Lock, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tilt } from '@/components/ui/Tilt'
 import { useStore, formatFollowers } from '@/lib/store'
@@ -172,6 +172,8 @@ function Accounts() {
   const [polling, setPolling]       = useState(false)
   const [pollMsg, setPollMsg]       = useState('')
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set())
+  const [editProxyId, setEditProxyId]   = useState<string | null>(null)
+  const [editProxyVal, setEditProxyVal] = useState('')
 
   const loadRealAccounts = useCallback(async () => {
     try {
@@ -225,6 +227,18 @@ function Accounts() {
   const handleResetSnapshot = async (id: string) => {
     await fetch(`/api/accounts/${id}/reset-snapshot`, { method: 'DELETE' }).catch(() => null)
     setPollMsg('Снапшот сброшен — при следующей проверке все подписчики будут считаться новыми')
+  }
+
+  const handleSaveProxy = async (id: string) => {
+    const proxy = editProxyVal.trim()
+    await fetch(`/api/accounts/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proxy: proxy || null }),
+    }).catch(() => null)
+    setReal((prev) => prev.map((a) => a.id === id ? { ...a, proxy: proxy || null } : a))
+    setEditProxyId(null)
+    setPollMsg(`Прокси ${proxy ? 'обновлён' : 'удалён'} для аккаунта`)
   }
 
   const handleToggle = async (id: string, accId: string) => {
@@ -340,6 +354,42 @@ function Accounts() {
                   {ra?.errorCount ? (
                     <div className="mt-3 text-[12px] text-bad text-center">⚠ {ra.errorCount} ошибок</div>
                   ) : null}
+
+                  {/* Прокси — показываем/редактируем */}
+                  {ra && (
+                    <div className="mt-3 relative">
+                      {editProxyId === ra.id ? (
+                        <div className="flex gap-1.5">
+                          <input
+                            autoFocus
+                            value={editProxyVal}
+                            onChange={(e) => setEditProxyVal(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleSaveProxy(ra.id); if (e.key === 'Escape') setEditProxyId(null) }}
+                            className="field flex-1 font-mono text-[11px] py-1.5"
+                            placeholder="user:pass@host:port"
+                          />
+                          <button onClick={() => handleSaveProxy(ra.id)}
+                            className="px-2 rounded-xl bg-ok/10 text-ok hover:bg-ok/20 transition-colors">
+                            <Check className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => setEditProxyId(null)}
+                            className="px-2 rounded-xl bg-canvas text-subt hover:text-ink transition-colors">
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => { setEditProxyId(ra.id); setEditProxyVal(ra.proxy ?? '') }}
+                          className="w-full flex items-center gap-1.5 text-[11px] text-subt hover:text-ink transition-colors group">
+                          <Globe className="w-3 h-3 shrink-0" />
+                          <span className="truncate font-mono">
+                            {ra.proxy ? ra.proxy : 'Без прокси — нажмите чтобы добавить'}
+                          </span>
+                          <Pencil className="w-3 h-3 shrink-0 opacity-0 group-hover:opacity-100 ml-auto" />
+                        </button>
+                      )}
+                    </div>
+                  )}
 
                   <div className="flex gap-2 mt-4 pt-4 border-t border-black/[0.05] relative">
                     <Button variant="secondary" size="sm" className="flex-1"
