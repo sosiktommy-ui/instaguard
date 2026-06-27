@@ -33,6 +33,7 @@ class FollowersPayload(BaseModel):
     sessionData: dict
     username: str
     proxy: str | None = None
+    amount: int = 50
 
 
 class DMPayload(BaseModel):
@@ -111,7 +112,7 @@ def login(payload: LoginPayload, x_worker_secret: str = Header(...)):
 def followers(payload: FollowersPayload, x_worker_secret: str = Header(...)):
     _check_secret(x_worker_secret)
     try:
-        result = ig.get_followers(payload.sessionData, payload.username, payload.proxy)
+        result = ig.get_followers(payload.sessionData, payload.username, payload.proxy, payload.amount)
         return {"followers": result}
     except Exception as e:
         logging.error("get_followers error: %s", e)

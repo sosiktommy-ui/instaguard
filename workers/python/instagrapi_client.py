@@ -113,14 +113,16 @@ def login_by_cookies(cookies: dict, proxy: str | None = None) -> tuple[dict, str
     return cl.get_settings(), info.username
 
 
-def get_followers(session_data: dict, username: str, proxy: str | None = None, amount: int = 0) -> list[dict]:
+def get_followers(session_data: dict, username: str, proxy: str | None = None, amount: int = 50) -> list[dict]:
     cl = build_client(session_data, proxy)
     user_id = cl.user_id_from_username(username)
     followers = cl.user_followers(user_id, amount=amount)
-    return [
+    result = [
         {"pk": str(u.pk), "username": u.username, "full_name": u.full_name}
         for u in followers.values()
     ]
+    logger.info("get_followers: @%s → %d followers (amount=%d)", username, len(result), amount)
+    return result
 
 
 def send_direct_message(session_data: dict, to_user_id: str, text: str, proxy: str | None = None) -> dict:

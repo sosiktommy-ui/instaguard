@@ -197,13 +197,13 @@ function Accounts() {
       const res = await fetch('/api/poll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       const data = await res.json()
       if (data.ok) {
-        const totalDms = data.summary?.reduce((s: number, r: any) => s + r.dmsSent, 0) ?? 0
+        const totalDms = data.summary?.reduce((s: number, r: any) => s + (r.dmsQueued ?? r.dmsSent ?? 0), 0) ?? 0
         const totalFollowers = data.summary?.reduce((s: number, r: any) => s + (r.totalFollowers ?? 0), 0) ?? 0
         const newFollowers = data.summary?.reduce((s: number, r: any) => s + (r.newFollowers ?? 0), 0) ?? 0
         data.summary?.forEach((r: any) => {
           if (r.totalFollowers != null) updateAccountFollowers(r.accountId, r.totalFollowers)
         })
-        setPollMsg(`Подписчиков в Instagram: ${totalFollowers} | Новых: ${newFollowers} | DM отправлено: ${totalDms}`)
+        setPollMsg(`Подписчиков: ${totalFollowers} | Новых: ${newFollowers} | DM в очереди: ${totalDms}`)
         loadRealAccounts()
       } else {
         setPollMsg(data.error ?? 'Ошибка')
