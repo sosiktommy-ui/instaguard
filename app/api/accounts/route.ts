@@ -6,7 +6,7 @@ export async function GET() {
     const accounts = await prisma.instagramAccount.findMany({
       orderBy: { id: 'desc' },
       select: {
-        id: true, username: true, status: true,
+        id: true, username: true, status: true, role: true,
         lastChecked: true, errorCount: true, proxy: true,
         snapshots: { orderBy: { createdAt: 'desc' }, take: 1, select: { data: true } },
       },
@@ -15,6 +15,7 @@ export async function GET() {
       id: a.id,
       username: a.username,
       status: a.status,
+      role: a.role,
       lastChecked: a.lastChecked,
       errorCount: a.errorCount,
       proxy: a.proxy,

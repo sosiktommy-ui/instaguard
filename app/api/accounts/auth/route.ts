@@ -4,7 +4,8 @@ import { loginByCredentials, loginByCookies } from '@/lib/instagram/client'
 
 export async function POST(req: NextRequest) {
   try {
-    const { username, password, proxy, authMethod, cookies } = await req.json()
+    const { username, password, proxy, authMethod, cookies, role } = await req.json()
+    const accountRole: 'RESPONDER' | 'HELPER' | 'BOTH' = role === 'HELPER' ? 'HELPER' : 'RESPONDER'
 
     let sessionData: object
     let clean = ''
@@ -58,13 +59,13 @@ export async function POST(req: NextRequest) {
     const account = existing
       ? await prisma.instagramAccount.update({
           where: { id: existing.id },
-          data: { sessionData, status: 'ACTIVE', lastChecked: new Date(), proxy: proxy || null },
+          data: { sessionData, status: 'ACTIVE', lastChecked: new Date(), proxy: proxy || null, role: accountRole },
         })
       : await prisma.instagramAccount.create({
           data: {
             userId: user.id,
             username: clean,
-            role: 'RESPONDER',
+            role: accountRole,
             sessionData,
             proxy: proxy || null,
             status: 'ACTIVE',
