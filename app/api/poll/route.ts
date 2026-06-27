@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
     },
   })
 
-  const summary: { accountId: string; newFollowers: number; dmsSent: number }[] = []
+  const summary: { accountId: string; totalFollowers: number; newFollowers: number; dmsSent: number }[] = []
 
   for (const account of accounts) {
     if (!account.sessionData) continue
