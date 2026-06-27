@@ -84,6 +84,19 @@ class LikeCommentPayload(BaseModel):
     proxy: str | None = None
 
 
+class FriendshipPayload(BaseModel):
+    sessionData: dict
+    userId: str
+    proxy: str | None = None
+
+
+class StoriesPayload(BaseModel):
+    sessionData: dict
+    userId: str
+    like: bool = False
+    proxy: str | None = None
+
+
 class ChallengeCodePayload(BaseModel):
     username: str
     code: str
@@ -243,6 +256,26 @@ def like_comment(payload: LikeCommentPayload, x_worker_secret: str = Header(...)
         return ig.like_comment(payload.sessionData, payload.commentId, payload.proxy)
     except Exception as e:
         logging.error("like_comment error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/friendship")
+def friendship(payload: FriendshipPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        return ig.get_friendship(payload.sessionData, payload.userId, payload.proxy)
+    except Exception as e:
+        logging.error("friendship error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/user-stories")
+def user_stories(payload: StoriesPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        return ig.view_stories(payload.sessionData, payload.userId, payload.like, payload.proxy)
+    except Exception as e:
+        logging.error("user_stories error: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
 
 

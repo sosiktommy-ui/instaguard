@@ -54,6 +54,14 @@ export async function likeComment(session: object, commentId: string, proxy?: st
   return workerFetch('/like-comment', { sessionData: session, commentId, proxy })
 }
 
+export async function getFriendship(session: object, userId: string, proxy?: string) {
+  return workerFetch<{ following: boolean; followed_by: boolean }>('/friendship', { sessionData: session, userId, proxy })
+}
+
+export async function viewStories(session: object, userId: string, like = false, proxy?: string) {
+  return workerFetch<{ status: string; viewed: number; liked: number }>('/user-stories', { sessionData: session, userId, like, proxy })
+}
+
 export async function loginByCredentials(username: string, password: string, proxy?: string) {
   return workerFetch<{ sessionData?: object; needsChallenge?: boolean; stepName?: string; username?: string }>('/login', { username, password, proxy })
 }

@@ -5,13 +5,11 @@ import {
   Search, Check, Trash2, Users, Zap, Send, Filter,
   Heart, MessageCircle, UserPlus, Clapperboard, RefreshCw,
   Plus, ChevronDown, ChevronUp, ToggleLeft, ToggleRight,
-  Link2, MessageSquare, Bookmark, FileText, X, UserCheck,
+  Link2, Bookmark, FileText, X, UserCheck, Eye,
   Image as ImageIcon, Sparkles,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import {
-  TriggerType, Condition, ConditionType, CONDITION_LABELS,
-} from '@/lib/store'
+import { TriggerType } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { cn } from '@/lib/utils'
 
@@ -41,13 +39,8 @@ function darken(hex: string, f = 0.8) {
 }
 
 // ── 3D-иконка триггера (горит цветом, если активна; серая, если нет) ──────────
-function TrigBadge({
-  meta, active, size = 30, title,
-}: {
-  meta: typeof TRIG_META[number]
-  active: boolean
-  size?: number
-  title?: string
+function TrigBadge({ meta, active, size = 30, title }: {
+  meta: typeof TRIG_META[number]; active: boolean; size?: number; title?: string
 }) {
   const Icon = meta.Icon
   return (
@@ -89,6 +82,7 @@ interface DbTrigger {
   isActive: boolean
   fireCount: number
   actions: any[]
+  conditions?: any
   createdAt: string
   responder: { id: string; username: string }
 }
@@ -106,12 +100,8 @@ const PLATE_STYLE: Record<PlateState, string> = {
   red:    'border-bad/40 bg-bad/[0.06]',
   yellow: 'border-warn/45 bg-warn/[0.07]',
 }
-const PLATE_DOT: Record<PlateState, string> = {
-  green: 'bg-ok', blue: 'bg-brand', red: 'bg-bad', yellow: 'bg-warn',
-}
-const PLATE_LABEL: Record<PlateState, string> = {
-  green: 'Активно', blue: 'Готов', red: 'Проблема', yellow: 'Ошибки',
-}
+const PLATE_DOT: Record<PlateState, string> = { green: 'bg-ok', blue: 'bg-brand', red: 'bg-bad', yellow: 'bg-warn' }
+const PLATE_LABEL: Record<PlateState, string> = { green: 'Активно', blue: 'Готов', red: 'Проблема', yellow: 'Ошибки' }
 
 // ── Черновик триггера (используется и для шаблонов) ───────────────────────────
 type MatchMode = 'all' | 'specific'
@@ -120,79 +110,75 @@ interface Draft {
   type: TriggerType
   // действия (подписка): DM / лайк поста / подписка в ответ
   actDM: boolean; actLike: boolean; actFollow: boolean
-  // действия (комментарий): ответ в комментариях / лайк комментария
-  actCommentReply: boolean; actLikeComment: boolean
+  // действия (комментарий): лайк коммента / ответ в комментариях
+  actLikeComment: boolean; actCommentReply: boolean
+  // сторис (общее для всех событий)
+  actStories: boolean; storyView: boolean; storyLike: boolean
+  // проверка подписки (комментарий)
+  cmtCheckSub: boolean; cmtGateText: string
   name: string; message: string
   customOn: boolean
   linkOn: boolean; linkText: string; linkUrl: string
-  dialogOn: boolean; dialogKeyword: string; dialogReply: string
   image: string
-  conditions: Condition[]
   delayMin: number; delayMax: number
-  // сопоставление фраз для DM-ответа на комментарий
+  // сигнал / сопоставление фраз (для комментария — общий; в подписке не используется)
   dmMatchMode: MatchMode; dmPhrases: string; dmExact: boolean
-  // ответ в комментариях (мин. 5 вариантов) + сопоставление фраз
   commentReplies: string[]
-  crMatchMode: MatchMode; crPhrases: string; crExact: boolean
 }
 
 const DEFAULT_DRAFT: Draft = {
   type: 'FOLLOW',
   actDM: true, actLike: false, actFollow: false,
-  actCommentReply: false, actLikeComment: false,
+  actLikeComment: false, actCommentReply: false,
+  actStories: false, storyView: true, storyLike: false,
+  cmtCheckSub: false, cmtGateText: 'Подпишись, чтобы я смог написать тебе в директ 💌',
   name: '',
   message: 'Привет, @{{username}}! Вижу, ты заинтересован в наших мероприятиях. Скажи, чем могу помочь? 🙌',
   customOn: false,
   linkOn: false, linkText: '', linkUrl: '',
-  dialogOn: false, dialogKeyword: '', dialogReply: '',
   image: '',
-  conditions: [],
   delayMin: 45, delayMax: 180,
   dmMatchMode: 'all', dmPhrases: '', dmExact: false,
   commentReplies: ['', '', '', '', ''],
-  crMatchMode: 'all', crPhrases: '', crExact: false,
 }
 
 function splitPhrases(s: string): string[] {
   return s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean)
 }
+function buildSignal(d: Draft) {
+  return { mode: d.dmMatchMode, phrases: splitPhrases(d.dmPhrases), exact: d.dmExact }
+}
 
 function buildActions(d: Draft): any[] {
   const actions: any[] = []
+  const msg = () => ({
+    type: 'SEND_MESSAGE', enabled: true, templates: [d.message],
+    delayMin: d.delayMin, delayMax: d.delayMax,
+    link: d.customOn && d.linkOn ? { enabled: true, text: d.linkText, url: d.linkUrl } : undefined,
+    image: d.image ? { enabled: true, url: d.image } : undefined,
+  })
+  const stories = () => ({ type: 'VIEW_STORIES', enabled: true, like: d.storyLike })
 
   if (d.type === 'COMMENT') {
-    if (d.actDM) actions.push({
-      type: 'SEND_MESSAGE', enabled: true,
-      templates: [d.message], delayMin: d.delayMin, delayMax: d.delayMax,
-      link: d.customOn && d.linkOn ? { enabled: true, text: d.linkText, url: d.linkUrl } : undefined,
-      image: d.image ? { enabled: true, url: d.image } : undefined,
-      match: { mode: d.dmMatchMode, phrases: splitPhrases(d.dmPhrases), exact: d.dmExact },
-    })
-    if (d.actCommentReply) actions.push({
-      type: 'REPLY_COMMENT', enabled: true,
-      replies: d.commentReplies.map((x) => x.trim()).filter(Boolean),
-      delayMin: d.delayMin, delayMax: d.delayMax,
-      match: { mode: d.crMatchMode, phrases: splitPhrases(d.crPhrases), exact: d.crExact },
-    })
+    if (d.actDM) actions.push(msg())
+    if (d.actCommentReply) actions.push({ type: 'REPLY_COMMENT', enabled: true, replies: d.commentReplies.map((x) => x.trim()).filter(Boolean) })
+    if (d.actDM && d.cmtCheckSub) actions.push({ type: 'COMMENT_GATE', enabled: true, text: d.cmtGateText })
     if (d.actLikeComment) actions.push({ type: 'LIKE_COMMENT', enabled: true })
+    if (d.actFollow) actions.push({ type: 'FOLLOW_BACK', enabled: true })
+    if (d.actStories && (d.storyView || d.storyLike)) actions.push(stories())
     return actions
   }
 
   // FOLLOW / LIKE / STORY
-  if (d.actDM) actions.push({
-    type: 'SEND_MESSAGE', enabled: true,
-    templates: [d.message], delayMin: d.delayMin, delayMax: d.delayMax,
-    link: d.customOn && d.linkOn ? { enabled: true, text: d.linkText, url: d.linkUrl } : undefined,
-    image: d.image ? { enabled: true, url: d.image } : undefined,
-    dialogue: d.customOn && d.dialogOn ? { enabled: true, keyword: d.dialogKeyword, reply: d.dialogReply } : undefined,
-  })
+  if (d.actDM) actions.push(msg())
   if (d.actLike) actions.push({ type: 'LIKE_MEDIA', enabled: true })
   if (d.actFollow) actions.push({ type: 'FOLLOW_BACK', enabled: true })
+  if (d.actStories && (d.storyView || d.storyLike)) actions.push(stories())
   return actions
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Карточка существующего триггера в списке
+// Карточка существующего триггера
 // ════════════════════════════════════════════════════════════════════════════
 function TriggerCard({ trigger, onToggle, onDelete }: {
   trigger: DbTrigger; onToggle: () => void; onDelete: () => void
@@ -201,15 +187,23 @@ function TriggerCard({ trigger, onToggle, onDelete }: {
   const actions = trigger.actions ?? []
   const isOn = (a: any) => a && a.enabled !== false
   const msg = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
+  const reply = actions.find((a: any) => a.type === 'REPLY_COMMENT' && isOn(a))
   const hasLike = actions.some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
-  const hasFollow = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
-  const replyC = actions.find((a: any) => a.type === 'REPLY_COMMENT' && isOn(a))
   const hasLikeComment = actions.some((a: any) => a.type === 'LIKE_COMMENT' && isOn(a))
-  const dmMatch = msg?.match?.mode === 'specific'
-  const crMatch = replyC?.match?.mode === 'specific'
+  const hasFollow = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
+  const hasGate = actions.some((a: any) => a.type === 'COMMENT_GATE' && isOn(a))
+  const storiesAct = actions.find((a: any) => a.type === 'VIEW_STORIES' && isOn(a))
+  const isComment = trigger.triggerType === 'NEW_COMMENT'
+  const sigSpecific = isComment && trigger.conditions?.mode === 'specific'
   const msgText: string = msg?.templates?.[0] ?? ''
   const delayMin: number = msg?.delayMin ?? 45
   const delayMax: number = msg?.delayMax ?? 180
+
+  const badge = (color: string, Icon: any, label: string) => (
+    <span className="text-[10.5px] px-2 py-0.5 rounded-full font-medium flex items-center gap-1" style={{ background: hexA(color, 0.12), color }}>
+      <Icon className="w-3 h-3" /> {label}
+    </span>
+  )
 
   return (
     <div className={cn('card p-4 flex flex-col gap-3 transition-all', !trigger.isActive && 'opacity-55')}>
@@ -234,16 +228,17 @@ function TriggerCard({ trigger, onToggle, onDelete }: {
         </button>
       </div>
 
-      {/* Бейджи действий */}
       <div className="flex items-center gap-1.5 flex-wrap">
-        {msg && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-brand/10 text-brand font-medium flex items-center gap-1"><Send className="w-3 h-3" /> DM{dmMatch ? ' · фразы' : ''}</span>}
-        {msg?.link?.enabled && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-brand/10 text-brand font-medium flex items-center gap-1"><Link2 className="w-3 h-3" /> ссылка</span>}
-        {msg?.image?.enabled && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-brand/10 text-brand font-medium flex items-center gap-1"><ImageIcon className="w-3 h-3" /> фото</span>}
-        {msg?.dialogue?.enabled && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-[#5e5ce6]/10 text-[#5e5ce6] font-medium flex items-center gap-1"><MessageSquare className="w-3 h-3" /> диалог</span>}
-        {replyC && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-ok/10 text-ok font-medium flex items-center gap-1"><MessageCircle className="w-3 h-3" /> коммент ×{(replyC.replies ?? []).filter(Boolean).length}{crMatch ? ' · фразы' : ''}</span>}
-        {hasLikeComment && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-[#ff2d92]/10 text-[#ff2d92] font-medium flex items-center gap-1"><Heart className="w-3 h-3" /> лайк коммента</span>}
-        {hasLike && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-[#ff2d92]/10 text-[#ff2d92] font-medium flex items-center gap-1"><Heart className="w-3 h-3" /> лайк</span>}
-        {hasFollow && <span className="text-[10.5px] px-2 py-0.5 rounded-full bg-ok/10 text-ok font-medium flex items-center gap-1"><UserCheck className="w-3 h-3" /> подписка</span>}
+        {sigSpecific && badge('#34c759', Filter, 'фразы')}
+        {hasGate && badge('#0071e3', UserCheck, 'проверка подписки')}
+        {msg && badge('#0071e3', Send, 'DM')}
+        {msg?.link?.enabled && badge('#0071e3', Link2, 'ссылка')}
+        {msg?.image?.enabled && badge('#0071e3', ImageIcon, 'фото')}
+        {reply && badge('#34c759', MessageCircle, `коммент ×${(reply.replies ?? []).filter(Boolean).length}`)}
+        {hasLikeComment && badge('#ff2d92', Heart, 'лайк коммента')}
+        {hasLike && badge('#ff2d92', Heart, 'лайк')}
+        {hasFollow && badge('#34c759', UserCheck, 'подписка')}
+        {storiesAct && badge('#ff9f0a', Clapperboard, storiesAct.like ? 'сторис + лайк' : 'сторис')}
       </div>
 
       <div className="grid grid-cols-2 gap-2">
@@ -257,9 +252,7 @@ function TriggerCard({ trigger, onToggle, onDelete }: {
         </div>
       </div>
 
-      {msgText && (
-        <div className="text-[12px] text-subt bg-canvas rounded-xl px-3 py-2 leading-relaxed line-clamp-2">{msgText}</div>
-      )}
+      {msgText && <div className="text-[12px] text-subt bg-canvas rounded-xl px-3 py-2 leading-relaxed line-clamp-2">{msgText}</div>}
 
       <div className="flex justify-end pt-1 border-t border-black/[0.04]">
         <button onClick={onDelete} className="flex items-center gap-1.5 text-[12px] text-subt hover:text-bad transition-colors">
@@ -271,13 +264,14 @@ function TriggerCard({ trigger, onToggle, onDelete }: {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Чекбокс-строка (для кастомных опций)
+// Мелкие UI-кирпичи
 // ════════════════════════════════════════════════════════════════════════════
-function CheckRow({ on, onChange, icon: Icon, label }: {
-  on: boolean; onChange: (v: boolean) => void; icon: any; label: string
+function CheckRow({ on, onChange, icon: Icon, label, disabled }: {
+  on: boolean; onChange: (v: boolean) => void; icon: any; label: string; disabled?: boolean
 }) {
   return (
-    <button onClick={() => onChange(!on)} className="w-full flex items-center gap-2.5 py-1.5 text-left">
+    <button onClick={() => !disabled && onChange(!on)} disabled={disabled}
+      className={cn('w-full flex items-center gap-2.5 py-1.5 text-left', disabled && 'opacity-40')}>
       <span className={cn('w-4 h-4 rounded-md border flex items-center justify-center shrink-0 transition-colors',
         on ? 'bg-brand border-brand' : 'border-line')}>
         {on && <Check className="w-2.5 h-2.5 text-white" />}
@@ -288,17 +282,30 @@ function CheckRow({ on, onChange, icon: Icon, label }: {
   )
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// Сопоставление фраз: на все слова / на конкретные (+ точное совпадение)
-// ════════════════════════════════════════════════════════════════════════════
-function MatchConfig({ mode, phrases, exact, onMode, onPhrases, onExact, accent = '#0071e3' }: {
+// Сворачиваемая группа (аккордеон)
+function Group({ title, icon: Icon, accent = '#0071e3', defaultOpen = true, children }: {
+  title: string; icon?: any; accent?: string; defaultOpen?: boolean; children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="rounded-2xl border border-line/60 overflow-hidden">
+      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center gap-2 px-3 py-2.5 bg-canvas/60 hover:bg-canvas transition-colors">
+        {Icon && <span className="w-6 h-6 rounded-lg flex items-center justify-center shrink-0" style={{ background: hexA(accent, 0.12) }}><Icon className="w-3.5 h-3.5" style={{ color: accent }} /></span>}
+        <span className="text-[12.5px] font-semibold">{title}</span>
+        {open ? <ChevronUp className="w-3.5 h-3.5 text-subt ml-auto" /> : <ChevronDown className="w-3.5 h-3.5 text-subt ml-auto" />}
+      </button>
+      {open && <div className="p-3 space-y-2.5">{children}</div>}
+    </div>
+  )
+}
+
+// Сопоставление фраз: на все слова / конкретные (+ точное совпадение)
+function MatchConfig({ mode, phrases, exact, onMode, onPhrases, onExact }: {
   mode: MatchMode; phrases: string; exact: boolean
   onMode: (m: MatchMode) => void; onPhrases: (s: string) => void; onExact: (b: boolean) => void
-  accent?: string
 }) {
   return (
-    <div className="rounded-2xl border border-line/60 p-3 space-y-2 bg-canvas/50">
-      <div className="text-[11px] font-medium text-subt">На что реагировать</div>
+    <div className="space-y-2">
       <div className="segment w-full">
         <button onClick={() => onMode('all')}
           className={cn('flex-1 py-1.5 rounded-xl text-[12px] font-medium transition-colors', mode === 'all' ? 'bg-white shadow-sm text-ink' : 'text-subt')}>
@@ -325,9 +332,7 @@ function MatchConfig({ mode, phrases, exact, onMode, onPhrases, onExact, accent 
   )
 }
 
-// ════════════════════════════════════════════════════════════════════════════
 // Варианты ответа в комментариях (минимум 5)
-// ════════════════════════════════════════════════════════════════════════════
 function CommentReplies({ list, onChange }: { list: string[]; onChange: (l: string[]) => void }) {
   const filled = list.filter((x) => x.trim()).length
   const setAt = (i: number, v: string) => onChange(list.map((x, idx) => idx === i ? v : x))
@@ -351,8 +356,75 @@ function CommentReplies({ list, onChange }: { list: string[]; onChange: (l: stri
           </div>
         ))}
       </div>
-      <div className="text-[10.5px] text-subt mt-1">Бот выбирает случайный вариант — для естественности и вариативности</div>
+      <div className="text-[10.5px] text-subt mt-1">Бот выбирает случайный вариант — для естественности</div>
     </div>
+  )
+}
+
+// Блок «Сообщение»: картинка сверху → текст → кастомный текст (везде одинаково)
+function MessageBlock({ d, set, fileRef, onPickImage }: {
+  d: Draft; set: <K extends keyof Draft>(k: K, v: Draft[K]) => void
+  fileRef: React.RefObject<HTMLInputElement>; onPickImage: (e: React.ChangeEvent<HTMLInputElement>) => void
+}) {
+  return (
+    <>
+      {/* 1. Картинка — сверху */}
+      <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-subt"><ImageIcon className="w-3 h-3" /> Картинка</div>
+          {d.image && <button onClick={() => set('image', '')} className="text-[11px] text-bad hover:underline">Убрать</button>}
+        </div>
+        {d.image ? (
+          <img src={d.image} alt="" className="w-full max-h-40 object-cover rounded-2xl border border-line/60" />
+        ) : (
+          <button onClick={() => fileRef.current?.click()}
+            className="w-full py-3 rounded-2xl border border-dashed border-line text-[12px] text-subt hover:border-brand hover:text-brand transition-colors">
+            + Загрузить изображение
+          </button>
+        )}
+        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickImage} />
+      </div>
+
+      {/* 2. Текст — снизу */}
+      <div>
+        <div className="flex items-center gap-1.5 text-[11px] font-medium text-subt mb-1.5"><Send className="w-3 h-3" /> Текст сообщения</div>
+        <textarea value={d.message} onChange={(e) => set('message', e.target.value)}
+          className="field h-20 resize-none text-[13px] leading-relaxed" placeholder="Используйте {{username}}" />
+      </div>
+
+      {/* 3. Кастомный текст — в самом низу */}
+      <button onClick={() => set('customOn', !d.customOn)}
+        className={cn('flex items-center justify-center gap-1.5 py-2 w-full rounded-2xl border text-[12.5px] font-medium transition-all',
+          d.customOn ? 'border-brand bg-brand/5 text-brand' : 'border-line/60 text-subt hover:border-line')}>
+        <Sparkles className="w-3.5 h-3.5" /> {d.customOn ? 'Кастомный текст включён' : 'Кастомный текст'}
+      </button>
+      {d.customOn && (
+        <div className="rounded-2xl border border-line/60 p-3 space-y-2 bg-canvas/50">
+          <CheckRow on={d.linkOn} onChange={(v) => set('linkOn', v)} icon={Link2} label="Ссылка-кнопка" />
+          {d.linkOn && (
+            <div className="space-y-1.5 pl-6">
+              <input value={d.linkText} onChange={(e) => set('linkText', e.target.value)} className="field py-1.5 text-[12px]" placeholder="Текст (напр. «Записаться»)" />
+              <input value={d.linkUrl} onChange={(e) => set('linkUrl', e.target.value)} className="field py-1.5 text-[12px]" placeholder="https://…" />
+              {d.linkUrl && (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand text-white text-[12px] font-medium">
+                  <Link2 className="w-3 h-3" /> {d.linkText || d.linkUrl}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  )
+}
+
+// Группа «Сторис»: просмотр + лайк
+function StoriesBlock({ d, set }: { d: Draft; set: <K extends keyof Draft>(k: K, v: Draft[K]) => void }) {
+  return (
+    <Group title="Сторис" icon={Clapperboard} accent="#ff9f0a">
+      <CheckRow on={d.storyView} onChange={(v) => set('storyView', v)} icon={Eye} label="Просмотреть сторис пользователя" />
+      <CheckRow on={d.storyLike} onChange={(v) => { set('storyLike', v); if (v) set('storyView', true) }} icon={Heart} label="Пролайкать просмотренные сторис" />
+    </Group>
   )
 }
 
@@ -377,14 +449,12 @@ function CreateForm({
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState<{ text: string; ok: boolean } | null>(null)
 
-  // Шаблоны
   const [tplName, setTplName] = useState('')
   const [tplSaving, setTplSaving] = useState(false)
   const [showTplSave, setShowTplSave] = useState(false)
 
   const fileRef = useRef<HTMLInputElement>(null)
 
-  // Активные типы триггеров по каждому аккаунту (для 3D-иконок и цвета плашки)
   const activeByAccount = useMemo(() => {
     const m = new Map<string, Set<string>>()
     for (const t of dbTriggers) {
@@ -395,8 +465,6 @@ function CreateForm({
     return m
   }, [dbTriggers])
 
-  // Внешнее управление формой (из списка шаблонов). Старые шаблоны мержим с дефолтом,
-  // чтобы новые поля (фразы, варианты ответа) не были undefined.
   useEffect(() => {
     formRef.current = {
       open: () => setOpen(true),
@@ -413,14 +481,20 @@ function CreateForm({
   const toggleOne = (id: string) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id])
 
   const isComment = d.type === 'COMMENT'
-  const matchOk = (mode: MatchMode, phrases: string) => mode === 'all' || splitPhrases(phrases).length > 0
+  const matchOk = d.dmMatchMode === 'all' || splitPhrases(d.dmPhrases).length > 0
+  const repliesFilled = d.commentReplies.filter((x) => x.trim()).length
+
+  // Для комментария «ответ в комментариях» и «проверка подписки» — под-настройки Директа,
+  // поэтому самостоятельными действиями не считаются.
   const anyAction = isComment
-    ? (d.actDM || d.actCommentReply || d.actLikeComment)
-    : (d.actDM || d.actLike || d.actFollow)
-  const dmOk = !d.actDM || (d.message.trim() !== '' && (!isComment || matchOk(d.dmMatchMode, d.dmPhrases)))
-  const crOk = !isComment || !d.actCommentReply
-    || (d.commentReplies.filter((x) => x.trim()).length >= 5 && matchOk(d.crMatchMode, d.crPhrases))
-  const canSave = selected.length > 0 && d.name.trim() !== '' && anyAction && dmOk && crOk
+    ? (d.actDM || d.actLikeComment || d.actFollow || d.actStories)
+    : (d.actDM || d.actLike || d.actFollow || d.actStories)
+  const dmOk = !d.actDM || d.message.trim() !== ''
+  const crOk = !isComment || !d.actCommentReply || repliesFilled >= 5
+  const gateOk = !isComment || !d.cmtCheckSub || d.cmtGateText.trim() !== ''
+  const sigOk = !isComment || matchOk
+  const storiesOk = !d.actStories || d.storyView || d.storyLike
+  const canSave = selected.length > 0 && d.name.trim() !== '' && anyAction && dmOk && crOk && gateOk && sigOk && storiesOk
 
   const onPickImage = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -435,20 +509,15 @@ function CreateForm({
     if (!canSave) return
     setSaving(true); setSaveMsg(null)
     try {
+      const conditions = isComment ? buildSignal(d) : []
       const res = await fetch('/api/triggers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: d.name.trim(), accountIds: selected, type: d.type,
-          conditions: d.conditions, actions: buildActions(d),
-        }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: d.name.trim(), accountIds: selected, type: d.type, conditions, actions: buildActions(d) }),
       })
       const data = await res.json()
       if (res.ok) {
         setSaveMsg({ text: `Создано триггеров: ${data.count}`, ok: true })
-        setSelected([])
-        setD({ ...DEFAULT_DRAFT })
-        onCreated()
+        setSelected([]); setD({ ...DEFAULT_DRAFT }); onCreated()
       } else {
         setSaveMsg({ text: data.error ?? 'Ошибка', ok: false })
       }
@@ -464,14 +533,12 @@ function CreateForm({
     setTplSaving(true)
     try {
       const res = await fetch('/api/templates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: tplName.trim(), draft: d }),
       })
       if (res.ok) {
         setSaveMsg({ text: 'Шаблон сохранён', ok: true })
-        setShowTplSave(false); setTplName('')
-        onCreated() // перезагрузит и список шаблонов
+        setShowTplSave(false); setTplName(''); onCreated()
       } else {
         const data = await res.json()
         setSaveMsg({ text: data.error ?? 'Ошибка', ok: false })
@@ -483,14 +550,26 @@ function CreateForm({
     }
   }
 
+  // Чипы действий зависят от события
+  const chips = isComment
+    ? [
+        { k: 'actDM' as const,          icon: Send,      label: 'Директ',   color: '#0071e3' },
+        { k: 'actLikeComment' as const, icon: Heart,     label: 'Лайк',     color: '#ff2d92' },
+        { k: 'actFollow' as const,      icon: UserCheck, label: 'Подписка', color: '#34c759' },
+        { k: 'actStories' as const,     icon: Clapperboard, label: 'Сторис', color: '#ff9f0a' },
+      ]
+    : [
+        { k: 'actDM' as const,      icon: Send,         label: 'Директ',   color: '#0071e3' },
+        { k: 'actLike' as const,    icon: Heart,        label: 'Лайк',     color: '#ff2d92' },
+        { k: 'actFollow' as const,  icon: UserCheck,    label: 'Подписка', color: '#34c759' },
+        { k: 'actStories' as const, icon: Clapperboard, label: 'Сторис',   color: '#ff9f0a' },
+      ]
+
   return (
     <div className="card overflow-hidden">
-      <button onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between px-5 py-4 hover:bg-black/[0.02] transition-colors">
+      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between px-5 py-4 hover:bg-black/[0.02] transition-colors">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-xl bg-brand/10 flex items-center justify-center">
-            <Plus className="w-4 h-4 text-brand" />
-          </div>
+          <div className="w-8 h-8 rounded-xl bg-brand/10 flex items-center justify-center"><Plus className="w-4 h-4 text-brand" /></div>
           <span className="font-semibold text-[15px]">Создать триггер</span>
         </div>
         {open ? <ChevronUp className="w-4 h-4 text-subt" /> : <ChevronDown className="w-4 h-4 text-subt" />}
@@ -513,7 +592,7 @@ function CreateForm({
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-subt" />
                 <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Поиск…" className="field pl-9 py-2 text-[13px]" />
               </div>
-              <div className="space-y-1.5 max-h-[340px] overflow-y-auto pr-1">
+              <div className="space-y-1.5 max-h-[420px] overflow-y-auto pr-1">
                 {loadingAccounts ? (
                   <div className="py-6 text-center text-subt text-[12px]">Загрузка…</div>
                 ) : filtered.length === 0 ? (
@@ -584,22 +663,11 @@ function CreateForm({
                 Настройка
               </span>
 
-              {/* Действия */}
+              {/* Действия (чипы) */}
               <div>
                 <div className="text-[11px] font-medium text-subt mb-1.5">Действие</div>
-                <div className="grid grid-cols-3 gap-2">
-                  {(isComment
-                    ? [
-                        { k: 'actDM' as const,           icon: Send,          label: 'Директ',  color: '#0071e3' },
-                        { k: 'actCommentReply' as const, icon: MessageCircle, label: 'Коммент', color: '#34c759' },
-                        { k: 'actLikeComment' as const,  icon: Heart,         label: 'Лайк',    color: '#ff2d92' },
-                      ]
-                    : [
-                        { k: 'actDM' as const,     icon: Send,      label: 'Директ',   color: '#0071e3' },
-                        { k: 'actLike' as const,   icon: Heart,     label: 'Лайк',     color: '#ff2d92' },
-                        { k: 'actFollow' as const, icon: UserCheck, label: 'Подписка', color: '#34c759' },
-                      ]
-                  ).map(({ k, icon: Icon, label, color }) => {
+                <div className="grid grid-cols-4 gap-2">
+                  {chips.map(({ k, icon: Icon, label, color }) => {
                     const on = d[k]
                     return (
                       <button key={k} onClick={() => set(k, !on)}
@@ -607,127 +675,85 @@ function CreateForm({
                           on ? 'bg-white' : 'border-line/60 text-subt hover:border-line')}
                         style={on ? { borderColor: color, boxShadow: `0 0 0 3px ${hexA(color, 0.12)}` } : undefined}>
                         <Icon className="w-4 h-4" style={on ? { color } : undefined} />
-                        <span className="text-[11.5px] font-medium" style={on ? { color } : undefined}>{label}</span>
+                        <span className="text-[11px] font-medium" style={on ? { color } : undefined}>{label}</span>
                       </button>
                     )
                   })}
                 </div>
-                {!isComment && d.actFollow && <div className="text-[10.5px] text-subt mt-1">↳ Подписаться в ответ на нового подписчика</div>}
-                {isComment && d.actLikeComment && <div className="text-[10.5px] text-subt mt-1">↳ Лайкать все новые комментарии</div>}
-                {isComment && <div className="text-[10.5px] text-subt mt-1">Директ и Коммент срабатывают по своим фразам (ниже)</div>}
               </div>
 
               <input value={d.name} onChange={(e) => set('name', e.target.value)} className="field py-2 text-[13px]" placeholder="Название триггера" />
 
-              {/* Настройки директа */}
-              {d.actDM && (
+              {/* ════ КОММЕНТАРИЙ ════ */}
+              {isComment ? (
                 <>
-                  {isComment && (
-                    <div className="rounded-2xl border border-line/60 p-3 space-y-2 bg-canvas/50">
-                      <div className="text-[12px] font-semibold flex items-center gap-1.5"><Send className="w-3.5 h-3.5 text-brand" /> Ответ в директ автору</div>
-                      <MatchConfig
-                        mode={d.dmMatchMode} phrases={d.dmPhrases} exact={d.dmExact}
-                        onMode={(m) => set('dmMatchMode', m)} onPhrases={(s) => set('dmPhrases', s)} onExact={(b) => set('dmExact', b)}
-                      />
-                    </div>
-                  )}
-                  <div>
-                    <div className="flex items-center gap-1.5 text-[11px] font-medium text-subt mb-1.5"><Send className="w-3 h-3" /> Текст DM</div>
-                    <textarea value={d.message} onChange={(e) => set('message', e.target.value)}
-                      className="field h-20 resize-none text-[13px] leading-relaxed" placeholder="Используйте {{username}}" />
-                  </div>
-
-                  {/* Кнопка «кастом» */}
-                  <button onClick={() => set('customOn', !d.customOn)}
-                    className={cn('flex items-center justify-center gap-1.5 py-2 rounded-2xl border text-[12.5px] font-medium transition-all',
-                      d.customOn ? 'border-brand bg-brand/5 text-brand' : 'border-line/60 text-subt hover:border-line')}>
-                    <Sparkles className="w-3.5 h-3.5" /> {d.customOn ? 'Кастомный текст включён' : 'Кастомный текст'}
-                  </button>
-
-                  {d.customOn && (
-                    <div className="rounded-2xl border border-line/60 p-3 space-y-2 bg-canvas/50">
-                      <CheckRow on={d.linkOn} onChange={(v) => set('linkOn', v)} icon={Link2} label="Ссылка-кнопка" />
-                      {d.linkOn && (
-                        <div className="space-y-1.5 pl-6">
-                          <input value={d.linkText} onChange={(e) => set('linkText', e.target.value)} className="field py-1.5 text-[12px]" placeholder="Текст (напр. «Записаться»)" />
-                          <input value={d.linkUrl} onChange={(e) => set('linkUrl', e.target.value)} className="field py-1.5 text-[12px]" placeholder="https://…" />
-                          {d.linkUrl && (
-                            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand text-white text-[12px] font-medium">
-                              <Link2 className="w-3 h-3" /> {d.linkText || d.linkUrl}
-                            </div>
-                          )}
+                  {/* Крупная галочка «Проверять подписку» — выше сигнала (часть директа) */}
+                  {d.actDM && (
+                    <div className={cn('rounded-2xl border-2 p-3 transition-all', d.cmtCheckSub ? 'border-brand bg-brand/5' : 'border-line/70')}>
+                      <button onClick={() => set('cmtCheckSub', !d.cmtCheckSub)} className="w-full flex items-center gap-2.5 text-left">
+                        <span className={cn('w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0', d.cmtCheckSub ? 'bg-brand border-brand' : 'border-line')}>
+                          {d.cmtCheckSub && <Check className="w-3 h-3 text-white" />}
+                        </span>
+                        <UserCheck className="w-4 h-4" style={{ color: d.cmtCheckSub ? '#0071e3' : '#6e6e73' }} />
+                        <span className="text-[13px] font-semibold">Проверять подписку</span>
+                      </button>
+                      {d.cmtCheckSub && (
+                        <div className="mt-2.5 pl-7 space-y-1.5">
+                          <div className="text-[10.5px] text-subt leading-snug">Если автор НЕ подписан — бот пишет приглашение в комментарии и НЕ шлёт DM. Если подписан — отвечает и шлёт DM.</div>
+                          <textarea value={d.cmtGateText} onChange={(e) => set('cmtGateText', e.target.value)}
+                            className="field h-14 resize-none py-1.5 text-[12px]" placeholder="Текст для неподписанных (напр. «Подпишись, чтобы получить DM 💌»)" />
                         </div>
                       )}
-
-                      {!isComment && <>
-                        <CheckRow on={d.dialogOn} onChange={(v) => set('dialogOn', v)} icon={MessageSquare} label="Продолжить диалог при ответе" />
-                        {d.dialogOn && (
-                          <div className="space-y-1.5 pl-6">
-                            <input value={d.dialogKeyword} onChange={(e) => set('dialogKeyword', e.target.value)} className="field py-1.5 text-[12px]" placeholder="Триггер-фраза в ответе (напр. «да»)" />
-                            <textarea value={d.dialogReply} onChange={(e) => set('dialogReply', e.target.value)} className="field h-14 resize-none py-1.5 text-[12px]" placeholder="Ответное сообщение бота" />
-                          </div>
-                        )}
-                      </>}
                     </div>
                   )}
 
-                  {/* Картинка */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <div className="flex items-center gap-1.5 text-[11px] font-medium text-subt"><ImageIcon className="w-3 h-3" /> Картинка</div>
-                      {d.image && <button onClick={() => set('image', '')} className="text-[11px] text-bad hover:underline">Убрать</button>}
-                    </div>
-                    {d.image ? (
-                      <img src={d.image} alt="" className="w-full max-h-40 object-cover rounded-2xl border border-line/60" />
-                    ) : (
-                      <button onClick={() => fileRef.current?.click()}
-                        className="w-full py-3 rounded-2xl border border-dashed border-line text-[12px] text-subt hover:border-brand hover:text-brand transition-colors">
-                        + Загрузить изображение
-                      </button>
-                    )}
-                    <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickImage} />
-                  </div>
+                  {/* Группа «Сигнал» — на что реагировать (общая для всего триггера) */}
+                  <Group title="Сигнал — на что реагировать" icon={Filter} accent="#5e5ce6">
+                    <MatchConfig
+                      mode={d.dmMatchMode} phrases={d.dmPhrases} exact={d.dmExact}
+                      onMode={(m) => set('dmMatchMode', m)} onPhrases={(s) => set('dmPhrases', s)} onExact={(b) => set('dmExact', b)}
+                    />
+                  </Group>
+
+                  {d.actDM && (
+                    <>
+                      {/* Галочка «Ответ в комментариях» — между сигналом и сообщением */}
+                      <div className={cn('rounded-2xl border p-2.5 transition-all', d.actCommentReply ? 'border-ok/50 bg-ok/[0.06]' : 'border-line/60')}>
+                        <button onClick={() => set('actCommentReply', !d.actCommentReply)} className="w-full flex items-center gap-2.5 text-left">
+                          <span className={cn('w-4 h-4 rounded-md border flex items-center justify-center shrink-0', d.actCommentReply ? 'bg-ok border-ok' : 'border-line')}>
+                            {d.actCommentReply && <Check className="w-2.5 h-2.5 text-white" />}
+                          </span>
+                          <MessageCircle className="w-3.5 h-3.5" style={{ color: d.actCommentReply ? '#34c759' : '#6e6e73' }} />
+                          <span className="text-[12.5px] font-medium">Ответ в комментариях</span>
+                        </button>
+                      </div>
+
+                      {d.actCommentReply && (
+                        <Group title="Комментарии" icon={MessageCircle} accent="#34c759">
+                          <CommentReplies list={d.commentReplies} onChange={(l) => set('commentReplies', l)} />
+                        </Group>
+                      )}
+
+                      {/* Группа «Сообщение» (директ) */}
+                      <Group title="Сообщение (директ)" icon={Send}>
+                        <MessageBlock d={d} set={set} fileRef={fileRef} onPickImage={onPickImage} />
+                      </Group>
+                    </>
+                  )}
+
+                  {d.actStories && <StoriesBlock d={d} set={set} />}
                 </>
-              )}
-
-              {/* Настройки ответа в комментариях */}
-              {isComment && d.actCommentReply && (
-                <div className="rounded-2xl border border-line/60 p-3 space-y-2.5 bg-canvas/50">
-                  <div className="text-[12px] font-semibold flex items-center gap-1.5"><MessageCircle className="w-3.5 h-3.5 text-ok" /> Ответ в комментариях</div>
-                  <MatchConfig
-                    mode={d.crMatchMode} phrases={d.crPhrases} exact={d.crExact}
-                    onMode={(m) => set('crMatchMode', m)} onPhrases={(s) => set('crPhrases', s)} onExact={(b) => set('crExact', b)}
-                    accent="#34c759"
-                  />
-                  <CommentReplies list={d.commentReplies} onChange={(l) => set('commentReplies', l)} />
-                </div>
-              )}
-
-              {/* Условия (для не-комментарных триггеров) */}
-              {!isComment && (
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="flex items-center gap-1.5 text-[11px] font-medium text-subt"><Filter className="w-3 h-3" /> Условия</div>
-                  <button onClick={() => set('conditions', [...d.conditions, { type: 'KEYWORDS', value: '' }])} className="text-[11px] font-medium text-brand hover:underline">+ добавить</button>
-                </div>
-                {d.conditions.length === 0
-                  ? <div className="text-[11px] text-subt">Без условий — срабатывает всегда</div>
-                  : <div className="space-y-1.5">
-                      {d.conditions.map((c, i) => (
-                        <div key={i} className="flex gap-2 items-center">
-                          <select value={c.type}
-                            onChange={(e) => set('conditions', d.conditions.map((x, idx) => idx === i ? { ...x, type: e.target.value as ConditionType } : x))}
-                            className="field py-1.5 text-[11px] w-32 shrink-0 cursor-pointer">
-                            {(Object.keys(CONDITION_LABELS) as ConditionType[]).map((ct) => <option key={ct} value={ct}>{CONDITION_LABELS[ct]}</option>)}
-                          </select>
-                          <input value={c.value}
-                            onChange={(e) => set('conditions', d.conditions.map((x, idx) => idx === i ? { ...x, value: e.target.value } : x))}
-                            className="field py-1.5 text-[11px] flex-1" placeholder="значение…" />
-                          <button onClick={() => set('conditions', d.conditions.filter((_, idx) => idx !== i))} className="text-subt hover:text-bad p-1"><Trash2 size={13} /></button>
-                        </div>
-                      ))}
-                    </div>}
-              </div>
+              ) : (
+                /* ════ ПОДПИСКА / ЛАЙК / СТОРИС ════ */
+                <>
+                  {d.actDM && (
+                    <Group title="Сообщение" icon={Send}>
+                      <MessageBlock d={d} set={set} fileRef={fileRef} onPickImage={onPickImage} />
+                    </Group>
+                  )}
+                  {d.actFollow && <div className="text-[10.5px] text-subt -mt-1">↳ Подписаться в ответ на нового подписчика</div>}
+                  {d.actStories && <StoriesBlock d={d} set={set} />}
+                </>
               )}
 
               {/* Задержки */}
@@ -765,8 +791,11 @@ function CreateForm({
                   : selected.length === 0 ? 'Выберите аккаунты'
                   : !d.name.trim() ? 'Введите название'
                   : !anyAction ? 'Выберите действие'
-                  : !dmOk ? 'Заполните текст и фразы DM'
+                  : !sigOk ? 'Заполните фразы сигнала'
+                  : !dmOk ? 'Заполните текст DM'
+                  : !gateOk ? 'Заполните текст для неподписанных'
                   : !crOk ? 'Нужно минимум 5 вариантов ответа'
+                  : !storiesOk ? 'Отметьте действие со сторис'
                   : `Создать для ${selected.length} акк.`}
               </Button>
             </div>
@@ -814,9 +843,7 @@ function TemplatesDrawer({ templates, loading, onClose, onApply, onDelete, onRel
                   <div className="font-medium text-[13px] truncate">{t.name}</div>
                   <div className="text-[11px] text-subt truncate">{t.draft?.message || meta?.label || '—'}</div>
                 </div>
-                {t.draft && (
-                  <Button size="sm" variant="secondary" onClick={() => { onApply(t.draft!); onClose() }}>Применить</Button>
-                )}
+                {t.draft && <Button size="sm" variant="secondary" onClick={() => { onApply(t.draft!); onClose() }}>Применить</Button>}
                 <button onClick={() => onDelete(t.id)} className="p-1.5 text-subt hover:text-bad"><Trash2 className="w-4 h-4" /></button>
               </div>
             )
@@ -846,13 +873,11 @@ function TriggersScreen() {
     try { const res = await fetch('/api/accounts'); if (res.ok) setDbAccounts(await res.json()) } catch {}
     setLoadingAccounts(false)
   }, [])
-
   const loadTriggers = useCallback(async () => {
     setLoadingTriggers(true)
     try { const res = await fetch('/api/triggers'); if (res.ok) setDbTriggers(await res.json()) } catch {}
     setLoadingTriggers(false)
   }, [])
-
   const loadTemplates = useCallback(async () => {
     setLoadingTemplates(true)
     try { const res = await fetch('/api/templates'); if (res.ok) setTemplates(await res.json()) } catch {}
@@ -883,34 +908,30 @@ function TriggersScreen() {
 
   return (
     <div className="space-y-5 pb-24">
-      {/* Шапка со статистикой + кнопка шаблонов */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="grid grid-cols-3 gap-3 flex-1">
-          <div className="card px-5 py-4 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-brand/10 flex items-center justify-center shrink-0"><Zap className="w-5 h-5 text-brand" /></div>
-            <div>
-              <div className="text-[22px] font-semibold tracking-tighter leading-none">{activeTriggers.length}</div>
-              <div className="text-[12px] text-subt mt-1">Активных</div>
-            </div>
+      <div className="grid grid-cols-3 gap-3">
+        <div className="card px-5 py-4 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-brand/10 flex items-center justify-center shrink-0"><Zap className="w-5 h-5 text-brand" /></div>
+          <div>
+            <div className="text-[22px] font-semibold tracking-tighter leading-none">{activeTriggers.length}</div>
+            <div className="text-[12px] text-subt mt-1">Активных</div>
           </div>
-          <div className="card px-5 py-4 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-ok/10 flex items-center justify-center shrink-0"><Send className="w-5 h-5 text-ok" /></div>
-            <div>
-              <div className="text-[22px] font-semibold tracking-tighter leading-none">{totalFires.toLocaleString('ru')}</div>
-              <div className="text-[12px] text-subt mt-1">Срабатываний</div>
-            </div>
+        </div>
+        <div className="card px-5 py-4 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-ok/10 flex items-center justify-center shrink-0"><Send className="w-5 h-5 text-ok" /></div>
+          <div>
+            <div className="text-[22px] font-semibold tracking-tighter leading-none">{totalFires.toLocaleString('ru')}</div>
+            <div className="text-[12px] text-subt mt-1">Срабатываний</div>
           </div>
-          <div className="card px-5 py-4 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#5e5ce6]/10 flex items-center justify-center shrink-0"><Users className="w-5 h-5 text-[#5e5ce6]" /></div>
-            <div>
-              <div className="text-[22px] font-semibold tracking-tighter leading-none">{dbAccounts.filter((a) => a.status === 'ACTIVE').length}</div>
-              <div className="text-[12px] text-subt mt-1">Аккаунтов</div>
-            </div>
+        </div>
+        <div className="card px-5 py-4 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-[#5e5ce6]/10 flex items-center justify-center shrink-0"><Users className="w-5 h-5 text-[#5e5ce6]" /></div>
+          <div>
+            <div className="text-[22px] font-semibold tracking-tighter leading-none">{dbAccounts.filter((a) => a.status === 'ACTIVE').length}</div>
+            <div className="text-[12px] text-subt mt-1">Аккаунтов</div>
           </div>
         </div>
       </div>
 
-      {/* Список триггеров */}
       <div className="card overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-black/[0.05]">
           <div className="flex items-center gap-2">
@@ -935,7 +956,7 @@ function TriggersScreen() {
           <div className="py-14 flex flex-col items-center gap-3 text-center px-6">
             <div className="w-14 h-14 rounded-3xl bg-brand/8 flex items-center justify-center"><Zap className="w-7 h-7 text-brand/50" /></div>
             <div className="font-semibold text-[16px] tracking-tight text-ink/70">Триггеров пока нет</div>
-            <div className="text-[13px] text-subt max-w-xs">Создайте первый триггер ниже — система будет автоматически реагировать на новых подписчиков</div>
+            <div className="text-[13px] text-subt max-w-xs">Создайте первый триггер ниже — система будет автоматически реагировать на события</div>
           </div>
         ) : (
           <div className="p-4 space-y-3">
@@ -963,7 +984,6 @@ function TriggersScreen() {
         )}
       </div>
 
-      {/* Форма создания */}
       <CreateForm
         dbAccounts={dbAccounts}
         dbTriggers={dbTriggers}

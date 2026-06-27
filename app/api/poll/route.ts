@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import {
   getFollowers, getComments, sendDM, sendDMPhoto, replyComment, likeComment,
+  getFriendship, viewStories, followUser, likeLatestMedia,
 } from '@/lib/instagram/client'
 import { Queue } from 'bullmq'
 
@@ -83,7 +84,6 @@ function matchPhrase(text: string, match: any): boolean {
 
 // Выполняет действия триггера-подписки для одного подписчика синхронно
 async function runFollowerActionsInline(job: any) {
-  const { followUser, likeLatestMedia } = await import('@/lib/instagram/client')
   const session = job.sessionData as object
   const proxy = job.proxy ?? undefined
   let success = false
@@ -93,6 +93,7 @@ async function runFollowerActionsInline(job: any) {
   if (job.image)  { try { await sendDMPhoto(session, job.followerPk, job.image, proxy); success = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
   if (job.doFollow) { try { await followUser(session, job.followerPk, proxy); success = true } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
   if (job.doLike)   { try { await likeLatestMedia(session, job.followerPk, proxy); success = true } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
+  if (job.viewStories) { try { await viewStories(session, job.followerPk, job.storyLike, proxy); success = true } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
 
   if (success) {
     await Promise.all([
@@ -183,7 +184,10 @@ export async function POST(req: NextRequest) {
           const msgAction = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
           const doFollow = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
           const doLike = actions.some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
-          if (!msgAction?.templates?.[0] && !doFollow && !doLike) continue
+          const storiesAct = actions.find((a: any) => a.type === 'VIEW_STORIES' && isOn(a))
+          const viewS = Boolean(storiesAct)
+          const storyLike = Boolean(storiesAct?.like)
+          if (!msgAction?.templates?.[0] && !doFollow && !doLike && !viewS) continue
 
           const template: string = msgAction?.templates?.[0] ?? ''
           const delayMin: number = msgAction?.delayMin ?? 45
@@ -200,7 +204,8 @@ export async function POST(req: NextRequest) {
               sessionData: account.sessionData, accountId: account.id,
               triggerId: trigger.id, triggerName: trigger.name,
               followerPk: follower.pk, followerUsername: follower.username,
-              text: text.trim(), image, doFollow, doLike, proxy: account.proxy,
+              text: text.trim(), image, doFollow, doLike,
+              viewStories: viewS, storyLike, proxy: account.proxy,
             }
 
             if (dmQueue && !isManual) {
@@ -236,42 +241,74 @@ export async function POST(req: NextRequest) {
           for (const trigger of commentTriggers) {
             const actions = (trigger.actions ?? []) as any[]
             const isOn = (a: any) => a && a.enabled !== false
+            // «Сигнал» — общее условие на весь триггер (хранится в conditions)
+            const match = (trigger.conditions ?? {}) as any
+            if (!matchPhrase(c.text, match)) continue
+
             const dm = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
             const reply = actions.find((a: any) => a.type === 'REPLY_COMMENT' && isOn(a))
+            const gate = actions.find((a: any) => a.type === 'COMMENT_GATE' && isOn(a))
             const likeCmt = actions.some((a: any) => a.type === 'LIKE_COMMENT' && isOn(a))
+            const doFollow = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
+            const storiesAct = actions.find((a: any) => a.type === 'VIEW_STORIES' && isOn(a))
 
             let fired = false
+            let gatedStop = false
             const errors: string[] = []
 
-            // Лайк комментария — на все новые комментарии (без фильтра по фразе)
-            if (likeCmt) {
-              try { await likeComment(session, c.pk, proxy); fired = true }
-              catch (e: any) { errors.push(`лайк коммента: ${e.message}`) }
-            }
-
-            // DM автору комментария — по фильтру фраз
-            if (dm?.templates?.[0] && matchPhrase(c.text, dm.match)) {
-              let text = (dm.templates[0] as string).replace(/\{\{username\}\}/gi, c.username)
-              if (dm.link?.enabled && dm.link.url) text += `\n\n${dm.link.text ? dm.link.text + ': ' : ''}${dm.link.url}`
+            // Проверка подписки: если автор НЕ подписан — только коммент-приглашение, стоп
+            if (gate) {
+              let isFollower = false
               try {
-                await sendDM(session, c.user_pk, text.trim(), proxy); fired = true
-                if (dm.image?.enabled && dm.image.url) await sendDMPhoto(session, c.user_pk, dm.image.url, proxy)
-              } catch (e: any) { errors.push(`DM: ${e.message}`) }
+                const fs = await getFriendship(session, c.user_pk, proxy)
+                isFollower = Boolean(fs.followed_by)
+              } catch (e: any) { errors.push(`проверка подписки: ${e.message}`) }
+
+              if (!isFollower) {
+                const gateText = String(gate.text ?? '').replace(/\{\{username\}\}/gi, c.username)
+                if (gateText) {
+                  try { await replyComment(session, c.media_id, gateText, c.pk, proxy); fired = true }
+                  catch (e: any) { errors.push(`коммент-приглашение: ${e.message}`) }
+                }
+                gatedStop = true
+              }
             }
 
-            // Ответ в комментариях — по фильтру фраз, случайный вариант из списка
-            if (reply && matchPhrase(c.text, reply.match)) {
-              const variants: string[] = (reply.replies ?? []).filter(Boolean)
-              if (variants.length) {
-                const pick = variants[Math.floor(Math.random() * variants.length)].replace(/\{\{username\}\}/gi, c.username)
-                try { await replyComment(session, c.media_id, pick, c.pk, proxy); fired = true }
-                catch (e: any) { errors.push(`ответ: ${e.message}`) }
+            // Подписан (или проверки нет): сначала коммент, потом подписка, потом DM, потом сторис
+            if (!gatedStop) {
+              if (reply) {
+                const variants: string[] = (reply.replies ?? []).filter(Boolean)
+                if (variants.length) {
+                  const pick = variants[Math.floor(Math.random() * variants.length)].replace(/\{\{username\}\}/gi, c.username)
+                  try { await replyComment(session, c.media_id, pick, c.pk, proxy); fired = true }
+                  catch (e: any) { errors.push(`ответ: ${e.message}`) }
+                }
+              }
+              if (likeCmt) {
+                try { await likeComment(session, c.pk, proxy); fired = true }
+                catch (e: any) { errors.push(`лайк коммента: ${e.message}`) }
+              }
+              if (doFollow) {
+                try { await followUser(session, c.user_pk, proxy); fired = true }
+                catch (e: any) { errors.push(`подписка: ${e.message}`) }
+              }
+              if (dm?.templates?.[0]) {
+                let text = String(dm.templates[0]).replace(/\{\{username\}\}/gi, c.username)
+                if (dm.link?.enabled && dm.link.url) text += `\n\n${dm.link.text ? dm.link.text + ': ' : ''}${dm.link.url}`
+                try {
+                  await sendDM(session, c.user_pk, text.trim(), proxy); fired = true
+                  if (dm.image?.enabled && dm.image.url) await sendDMPhoto(session, c.user_pk, dm.image.url, proxy)
+                } catch (e: any) { errors.push(`DM: ${e.message}`) }
+              }
+              if (storiesAct) {
+                try { await viewStories(session, c.user_pk, Boolean(storiesAct.like), proxy); fired = true }
+                catch (e: any) { errors.push(`сторис: ${e.message}`) }
               }
             }
 
             if (fired) {
               await Promise.all([
-                prisma.log.create({ data: { accountId: account.id, level: errors.length ? 'WARN' : 'SUCCESS', message: `Коммент @${c.username} → «${trigger.name}»${errors.length ? ` (частично: ${errors.join('; ')})` : ''}` } }),
+                prisma.log.create({ data: { accountId: account.id, level: errors.length ? 'WARN' : 'SUCCESS', message: `Коммент @${c.username} → «${trigger.name}»${gatedStop ? ' (не подписан → приглашение)' : ''}${errors.length ? ` (частично: ${errors.join('; ')})` : ''}` } }),
                 prisma.triggerRule.update({ where: { id: trigger.id }, data: { fireCount: { increment: 1 } } }),
               ])
               s.commentActions++

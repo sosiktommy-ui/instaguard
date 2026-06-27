@@ -375,3 +375,40 @@ def like_comment(session_data: dict, comment_id: str, proxy: str | None = None) 
     cl = build_client(session_data, proxy)
     ok = cl.comment_like(int(comment_id))
     return {"status": "liked" if ok else "noop"}
+
+
+def get_friendship(session_data: dict, user_id: str, proxy: str | None = None) -> dict:
+    """Статус отношений: following — мы подписаны на него; followed_by — он подписан на нас."""
+    cl = build_client(session_data, proxy)
+    fs = cl.user_friendship_v1(int(user_id))
+    return {
+        "following": bool(getattr(fs, "following", False)),
+        "followed_by": bool(getattr(fs, "followed_by", False)),
+    }
+
+
+def view_stories(session_data: dict, user_id: str, like: bool = False, proxy: str | None = None) -> dict:
+    """Просмотреть (отметить как увиденные) сторис пользователя, опционально пролайкать."""
+    cl = build_client(session_data, proxy)
+    stories = cl.user_stories(int(user_id))
+    if not stories:
+        return {"status": "no_stories", "viewed": 0, "liked": 0}
+
+    viewed = 0
+    try:
+        pks = [int(s.pk) for s in stories]
+        cl.story_seen(pks)
+        viewed = len(pks)
+    except Exception as e:
+        logger.warning("story_seen failed: %s", e)
+
+    liked = 0
+    if like:
+        for s in stories:
+            try:
+                cl.story_like(s.id)
+                liked += 1
+            except Exception as e:
+                logger.warning("story_like failed for %s: %s", getattr(s, "id", "?"), e)
+
+    return {"status": "ok", "viewed": viewed, "liked": liked}

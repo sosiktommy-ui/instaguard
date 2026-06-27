@@ -37,7 +37,8 @@ export async function register() {
       async (job) => {
         const {
           sessionData, accountId, triggerId, triggerName,
-          followerPk, followerUsername, text, image, doFollow, doLike, proxy,
+          followerPk, followerUsername, text, image, doFollow, doLike,
+          viewStories, storyLike, proxy,
         } = job.data
 
         const workerUrl = process.env.PYTHON_WORKER_URL ?? 'http://localhost:8001'
@@ -64,6 +65,7 @@ export async function register() {
         if (image)    { try { await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy }); success = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
         if (doFollow) { try { await call('/follow-user', { sessionData, userId: followerPk, proxy }); success = true } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
         if (doLike)   { try { await call('/like-latest-media', { sessionData, userId: followerPk, proxy }); success = true } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
+        if (viewStories) { try { await call('/user-stories', { sessionData, userId: followerPk, like: storyLike, proxy }); success = true } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
 
         if (success) {
           await Promise.all([
