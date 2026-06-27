@@ -217,8 +217,11 @@ export async function POST(req: NextRequest) {
       if (commentTriggers.length) {
         const { comments } = await getComments(session, account.username, proxy, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA)
         const snapComments = account.snapshots.find((sn) => sn.type === 'COMMENTS')
+        const hadBaseline = Boolean(snapComments)
         const knownC = extractKnownPks(snapComments?.data)
-        const newComments = comments.filter((c) => !knownC.has(String(c.pk)))
+        // Первая проверка (нет снапшота) — только фиксируем базу, НЕ реагируем на старые комменты,
+        // иначе бот разом ответит на все существующие. Реагируем только на появившиеся после базы.
+        const newComments = hadBaseline ? comments.filter((c) => !knownC.has(String(c.pk))) : []
         comments.forEach((c) => knownC.add(String(c.pk)))
 
         await prisma.$transaction([
