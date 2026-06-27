@@ -116,6 +116,18 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-06-28 (ночь)
+
+#### feat: неоновая 3D-иконка приложения + живой 3D-фон Vanta NET
+
+- `components/common/AppLogo.tsx` (новый) — неоновый SVG-логотип (тёмная плитка + IG-кольцо градиентом + молния, свечение). `compact` — для шапки/favicon; `detailed` — со связанными узлами-аккаунтами и «схемными» линиями (для крупного показа).
+- `app/icon.svg` (новый) — favicon (Next.js App Router подхватывает автоматически).
+- `components/common/VantaBackground.tsx` (новый) — фон Vanta **NET** (сеть связанных точек, цвет индиго `#5e5ce6` на фоне canvas), монтируется только на клиенте (dynamic import `three`+`vanta`), отключается при `prefers-reduced-motion`, мягкая вуаль сверху для читаемости. Заменил `.aurora` в `(dashboard)/layout.tsx`.
+- `TopNav` и `login` — старый «Zap в синем квадрате» заменён на `AppLogo` (в логине — `detailed` версия).
+- `globals.css` — `.card`/`.card-flat` стали стеклянными (полупрозрачные + `backdrop-blur`), чтобы фон-сеть мягко просвечивал → единый стиль.
+- `next.config.ts` — `serverExternalPackages: ['bullmq','ioredis','bcryptjs']` (не бандлить, ускоряет сборку).
+- Зависимости: `three`, `vanta`; типы — `vanta.d.ts`.
+
 ### 2026-06-28 (вечер)
 
 #### feat: игровой 3D-дизайн + тултипы-подсказки везде

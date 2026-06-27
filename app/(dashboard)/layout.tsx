@@ -1,10 +1,11 @@
 import TopNav from '@/components/common/TopNav'
 import SimulationProvider from '@/components/common/SimulationProvider'
+import VantaBackground from '@/components/common/VantaBackground'
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="relative min-h-screen bg-canvas">
-      <div className="aurora" aria-hidden />
+      <VantaBackground />
       <SimulationProvider />
       <div className="relative z-10">
         <TopNav />

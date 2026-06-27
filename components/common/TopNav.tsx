@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { Zap, LogOut, Menu, X, List, Users, Layers, BarChart3 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { AppLogo } from '@/components/common/AppLogo'
 
 const TRIGGER_SUBTABS = [
   { href: '/triggers', label: 'Триггеры', icon: List },
@@ -53,9 +54,7 @@ export default function TopNav() {
           </button>
 
           <div className="flex items-center gap-2.5 pr-1">
-            <div className="w-9 h-9 rounded-2xl bg-gradient-to-br from-brand to-[#42a5ff] flex items-center justify-center shadow-sm">
-              <Zap className="w-[18px] h-[18px] text-white" fill="white" />
-            </div>
+            <AppLogo size={38} className="drop-shadow-sm" />
             <span className="font-semibold text-[16px] tracking-tighter hidden md:block">InstaGuard</span>
           </div>
 
@@ -95,9 +94,7 @@ export default function TopNav() {
             style={{ animation: 'slide-in 0.3s cubic-bezier(0.16,1,0.3,1)' }}>
             <div className="flex items-center justify-between px-5 h-16 border-b border-black/[0.06]">
               <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-2xl bg-gradient-to-br from-brand to-[#42a5ff] flex items-center justify-center">
-                  <Zap className="w-[18px] h-[18px] text-white" fill="white" />
-                </div>
+                <AppLogo size={38} />
                 <span className="font-semibold text-[16px] tracking-tighter">InstaGuard</span>
               </div>
               <button onClick={() => setOpen(false)} className="text-subt hover:text-ink p-1"><X size={22} /></button>

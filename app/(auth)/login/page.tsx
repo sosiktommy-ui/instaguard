@@ -2,8 +2,8 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { AppLogo } from '@/components/common/AppLogo'
 
 const DEMO_EMAIL = 'demo@instaguard.com'
 const DEMO_PASSWORD = 'demo1234'
@@ -55,9 +55,7 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center p-4 bg-canvas">
       <div className="w-full max-w-[400px] animate-scale-in">
         <div className="flex flex-col items-center mb-8">
-          <div className="w-16 h-16 rounded-[20px] bg-gradient-to-br from-brand to-[#42a5ff] flex items-center justify-center shadow-lg shadow-brand/20 mb-5">
-            <Zap className="w-8 h-8 text-white" fill="white" />
-          </div>
+          <AppLogo size={96} detailed className="mb-5 float-y drop-shadow-2xl" />
           <h1 className="text-[28px] font-semibold tracking-tight">Вход в InstaGuard</h1>
           <p className="text-subt mt-1.5 text-[15px]">Automation Suite</p>
         </div>
