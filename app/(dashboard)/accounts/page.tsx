@@ -164,7 +164,6 @@ function AddModal({ onClose, onAdded }: { onClose: () => void; onAdded: (usernam
 
 function Accounts() {
   const accounts               = useStore((s) => s.accounts)
-  const triggers               = useStore((s) => s.triggers)
   const removeAccount          = useStore((s) => s.removeAccount)
   const toggleStatus           = useStore((s) => s.toggleAccountStatus)
   const updateAccountFollowers = useStore((s) => s.updateAccountFollowers)
@@ -177,21 +176,26 @@ function Accounts() {
   const [editProxyId, setEditProxyId]   = useState<string | null>(null)
   const [editProxyVal, setEditProxyVal] = useState('')
 
+  const [dbTriggers, setDbTriggers] = useState<any[]>([])
+
   const loadRealAccounts = useCallback(async () => {
     try {
-      const res = await fetch('/api/accounts')
-      if (res.ok) setReal(await res.json())
+      const [accRes, trRes] = await Promise.all([fetch('/api/accounts'), fetch('/api/triggers')])
+      if (accRes.ok) setReal(await accRes.json())
+      if (trRes.ok) setDbTriggers(await trRes.json())
     } catch {}
   }, [])
 
   useEffect(() => { loadRealAccounts() }, [loadRealAccounts])
 
+  // Статистика берётся из БД-триггеров (как на странице «Триггеры»), а не из Zustand —
+  // иначе цифры не сходятся.
   const statsFor = (id: string) => {
-    const pairs = triggers.flatMap((t) => t.accounts.filter((a) => a.accountId === id).map((a) => ({ a, t })))
+    const ts = dbTriggers.filter((t) => t.responder?.id === id)
     return {
-      triggerCount: new Set(pairs.map((p) => p.t.id)).size,
-      activeCount:  pairs.filter((p) => p.a.active).length,
-      runs:         pairs.reduce((s, p) => s + p.a.runs, 0),
+      triggerCount: ts.length,
+      activeCount:  ts.filter((t) => t.isActive).length,
+      runs:         ts.reduce((s, t) => s + (t.fireCount ?? 0), 0),
     }
   }
 
