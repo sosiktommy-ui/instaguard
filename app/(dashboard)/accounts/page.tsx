@@ -15,6 +15,7 @@ interface RealAccount {
   lastChecked: string | null
   errorCount: number
   proxy: string | null
+  followerCount: number
 }
 
 type AuthMode = 'password' | 'cookies'
@@ -200,10 +201,8 @@ function Accounts() {
         const totalDms = data.summary?.reduce((s: number, r: any) => s + (r.dmsQueued ?? r.dmsSent ?? 0), 0) ?? 0
         const totalFollowers = data.summary?.reduce((s: number, r: any) => s + (r.totalFollowers ?? 0), 0) ?? 0
         const newFollowers = data.summary?.reduce((s: number, r: any) => s + (r.newFollowers ?? 0), 0) ?? 0
-        data.summary?.forEach((r: any) => {
-          if (r.totalFollowers != null) updateAccountFollowers(r.accountId, r.totalFollowers)
-        })
-        setPollMsg(`Подписчиков: ${totalFollowers} | Новых: ${newFollowers} | DM в очереди: ${totalDms}`)
+        const triggersFound = data.summary?.reduce((s: number, r: any) => s + (r.triggersFound ?? 0), 0) ?? 0
+        setPollMsg(`Подписчиков: ${totalFollowers} | Новых: ${newFollowers} | Триггеров: ${triggersFound} | DM в очереди: ${totalDms}`)
         loadRealAccounts()
       } else {
         setPollMsg(data.error ?? 'Ошибка')
@@ -320,7 +319,7 @@ function Accounts() {
                   <div className="grid grid-cols-3 gap-2 mt-5 relative">
                     <div className="rounded-2xl bg-canvas p-3 text-center">
                       <div className="flex items-center justify-center gap-1 text-[15px] font-semibold">
-                        <Users className="w-3.5 h-3.5 text-subt" />{formatFollowers(acc.followers)}
+                        <Users className="w-3.5 h-3.5 text-subt" />{formatFollowers(ra?.followerCount ?? acc.followers)}
                       </div>
                       <div className="text-[11px] text-subt mt-0.5">подписчики</div>
                     </div>

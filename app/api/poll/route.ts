@@ -45,6 +45,7 @@ export async function POST(req: NextRequest) {
     totalFollowers: number
     newFollowers: number
     dmsQueued: number
+    triggersFound: number
     skipped?: string
   }[] = []
 
@@ -57,7 +58,7 @@ export async function POST(req: NextRequest) {
     if (!isManual && account.lastChecked) {
       const elapsed = Date.now() - account.lastChecked.getTime()
       if (elapsed < POLL_COOLDOWN_MS) {
-        summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, skipped: 'cooldown' })
+        summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, triggersFound: 0, skipped: 'cooldown' })
         continue
       }
     }
@@ -89,63 +90,50 @@ export async function POST(req: NextRequest) {
       ])
 
       let dmsQueued = 0
+      const triggersFound = account.triggersAsResponder.length
 
-      if (newFollowers.length > 0 && account.triggersAsResponder.length > 0) {
-        for (const trigger of account.triggersAsResponder) {
-          const actions = (trigger.actions ?? []) as any[]
-          const msgAction = actions.find((a: any) => a.type === 'SEND_MESSAGE')
-          if (!msgAction?.templates?.[0]) continue
+      for (const trigger of account.triggersAsResponder) {
+        const actions = (trigger.actions ?? []) as any[]
+        const msgAction = actions.find((a: any) => a.type === 'SEND_MESSAGE')
+        if (!msgAction?.templates?.[0]) continue
 
-          const template: string = msgAction.templates[0]
-          const delayMin: number = msgAction.delayMin ?? 45
-          const delayMax: number = msgAction.delayMax ?? 180
+        const template: string = msgAction.templates[0]
+        const delayMin: number = msgAction.delayMin ?? 45
+        const delayMax: number = msgAction.delayMax ?? 180
 
-          for (const follower of newFollowers) {
-            // Защита от дубликатов: проверяем лог
-            const alreadySent = await prisma.log.findFirst({
-              where: {
+        for (const follower of newFollowers) {
+          const text = template.replace(/\{\{username\}\}/gi, follower.username)
+          const delayMs = Math.round((delayMin + Math.random() * (delayMax - delayMin)) * 1000)
+
+          if (dmQueue) {
+            await dmQueue.add(
+              'send',
+              {
+                sessionData: account.sessionData,
                 accountId: account.id,
-                level: 'SUCCESS',
-                message: { startsWith: `DM @${follower.username}` },
+                triggerId: trigger.id,
+                triggerName: trigger.name,
+                followerPk: follower.pk,
+                followerUsername: follower.username,
+                text,
+                proxy: account.proxy,
               },
-            })
-            if (alreadySent) continue
-
-            const text = template.replace(/\{\{username\}\}/gi, follower.username)
-            const delayMs = Math.round((delayMin + Math.random() * (delayMax - delayMin)) * 1000)
-
-            if (dmQueue) {
-              // Ставим в очередь с задержкой (BullMQ обработает асинхронно)
-              await dmQueue.add(
-                'send',
-                {
-                  sessionData: account.sessionData,
-                  accountId: account.id,
-                  triggerId: trigger.id,
-                  triggerName: trigger.name,
-                  followerPk: follower.pk,
-                  followerUsername: follower.username,
-                  text,
-                  proxy: account.proxy,
-                },
-                { delay: delayMs, attempts: 2, backoff: { type: 'fixed', delay: 30_000 } }
-              )
-            } else {
-              // Fallback без Redis: отправляем напрямую (без задержки)
-              const { sendDM } = await import('@/lib/instagram/client')
-              try {
-                await sendDM(account.sessionData as object, follower.pk, text, account.proxy ?? undefined)
-                await Promise.all([
-                  prisma.log.create({ data: { accountId: account.id, level: 'SUCCESS', message: `DM @${follower.username} (${trigger.name})` } }),
-                  prisma.triggerRule.update({ where: { id: trigger.id }, data: { fireCount: { increment: 1 } } }),
-                ])
-              } catch (e: any) {
-                await prisma.log.create({ data: { accountId: account.id, level: 'ERROR', message: `Ошибка DM @${follower.username}: ${e.message}` } })
-              }
+              { delay: delayMs, attempts: 2, backoff: { type: 'fixed', delay: 30_000 } }
+            )
+          } else {
+            const { sendDM } = await import('@/lib/instagram/client')
+            try {
+              await sendDM(account.sessionData as object, follower.pk, text, account.proxy ?? undefined)
+              await Promise.all([
+                prisma.log.create({ data: { accountId: account.id, level: 'SUCCESS', message: `DM @${follower.username} (${trigger.name})` } }),
+                prisma.triggerRule.update({ where: { id: trigger.id }, data: { fireCount: { increment: 1 } } }),
+              ])
+            } catch (e: any) {
+              await prisma.log.create({ data: { accountId: account.id, level: 'ERROR', message: `Ошибка DM @${follower.username}: ${e.message}` } })
             }
-
-            dmsQueued++
           }
+
+          dmsQueued++
         }
       }
 
@@ -154,7 +142,7 @@ export async function POST(req: NextRequest) {
         data: { lastChecked: new Date(), errorCount: 0 },
       })
 
-      summary.push({ accountId: account.id, totalFollowers: followers.length, newFollowers: newFollowers.length, dmsQueued })
+      summary.push({ accountId: account.id, totalFollowers: followers.length, newFollowers: newFollowers.length, dmsQueued, triggersFound })
     } catch (e: any) {
       await prisma.instagramAccount.update({
         where: { id: account.id },
@@ -163,7 +151,7 @@ export async function POST(req: NextRequest) {
       await prisma.log.create({
         data: { accountId: account.id, level: 'ERROR', message: `Ошибка проверки: ${e.message}` },
       })
-      summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0 })
+      summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, triggersFound: 0 })
     }
   }
 
