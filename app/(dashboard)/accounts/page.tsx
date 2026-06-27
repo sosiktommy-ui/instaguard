@@ -196,8 +196,10 @@ function Accounts() {
       const res = await fetch('/api/poll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       const data = await res.json()
       if (data.ok) {
-        const total = data.summary?.reduce((s: number, r: any) => s + r.dmsSent, 0) ?? 0
-        setPollMsg(`Проверка завершена. DM отправлено: ${total}`)
+        const totalDms = data.summary?.reduce((s: number, r: any) => s + r.dmsSent, 0) ?? 0
+        const totalFollowers = data.summary?.reduce((s: number, r: any) => s + (r.totalFollowers ?? 0), 0) ?? 0
+        const newFollowers = data.summary?.reduce((s: number, r: any) => s + (r.newFollowers ?? 0), 0) ?? 0
+        setPollMsg(`Подписчиков в Instagram: ${totalFollowers} | Новых: ${newFollowers} | DM отправлено: ${totalDms}`)
         loadRealAccounts()
       } else {
         setPollMsg(data.error ?? 'Ошибка')

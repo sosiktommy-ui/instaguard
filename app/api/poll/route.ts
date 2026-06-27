@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
         data: { lastChecked: new Date() },
       })
 
-      summary.push({ accountId: account.id, newFollowers: newFollowers.length, dmsSent })
+      summary.push({ accountId: account.id, totalFollowers: followers.length, newFollowers: newFollowers.length, dmsSent })
     } catch (e: any) {
       await prisma.instagramAccount.update({
         where: { id: account.id },
