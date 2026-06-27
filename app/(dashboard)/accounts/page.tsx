@@ -114,8 +114,9 @@ function AddModal({ onClose, onAdded }: { onClose: () => void; onAdded: (usernam
               <div className="relative">
                 <Globe className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
                 <input value={proxy} onChange={(e) => setProxy(e.target.value)}
-                  className="field pl-10 font-mono text-[13px]" placeholder="host:port:user:pass" />
+                  className="field pl-10 font-mono text-[13px]" placeholder="user:pass@host:port" />
               </div>
+              <p className="text-[11px] text-subt mt-1.5 pl-1">Форматы: <code className="font-mono">user:pass@host:port</code> или <code className="font-mono">http://user:pass@host:port</code></p>
             </div>
             {error && <p className="text-bad text-[13px] text-center">{error}</p>}
             <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed">
@@ -142,8 +143,9 @@ function AddModal({ onClose, onAdded }: { onClose: () => void; onAdded: (usernam
               <div className="relative">
                 <Globe className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
                 <input value={proxy} onChange={(e) => setProxy(e.target.value)}
-                  className="field pl-10 font-mono text-[13px]" placeholder="host:port:user:pass" />
+                  className="field pl-10 font-mono text-[13px]" placeholder="user:pass@host:port" />
               </div>
+              <p className="text-[11px] text-subt mt-1.5 pl-1">Форматы: <code className="font-mono">user:pass@host:port</code> или <code className="font-mono">http://user:pass@host:port</code></p>
             </div>
             {error && <p className="text-bad text-[13px] text-center">{error}</p>}
             <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed">
@@ -197,14 +199,21 @@ function Accounts() {
     setPolling(true)
     setPollMsg('')
     try {
-      const res = await fetch('/api/poll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      // manual: true — отправлять сразу (синхронно), а не ставить в очередь с задержкой
+      const res = await fetch('/api/poll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manual: true }) })
       const data = await res.json()
       if (data.ok) {
+        const sum = (k: string) => data.summary?.reduce((s: number, r: any) => s + (r[k] ?? 0), 0) ?? 0
         const totalDms = data.summary?.reduce((s: number, r: any) => s + (r.dmsQueued ?? r.dmsSent ?? 0), 0) ?? 0
-        const totalFollowers = data.summary?.reduce((s: number, r: any) => s + (r.totalFollowers ?? 0), 0) ?? 0
-        const newFollowers = data.summary?.reduce((s: number, r: any) => s + (r.newFollowers ?? 0), 0) ?? 0
-        const triggersFound = data.summary?.reduce((s: number, r: any) => s + (r.triggersFound ?? 0), 0) ?? 0
-        setPollMsg(`Подписчиков: ${totalFollowers} | Новых: ${newFollowers} | Триггеров: ${triggersFound} | DM в очереди: ${totalDms}`)
+        const parts = [
+          `Подписчиков: ${sum('totalFollowers')}`,
+          `новых: ${sum('newFollowers')}`,
+          `DM: ${totalDms}`,
+        ]
+        if (sum('totalComments') > 0 || sum('newComments') > 0) {
+          parts.push(`комментов: ${sum('totalComments')}`, `новых: ${sum('newComments')}`, `действий: ${sum('commentActions')}`)
+        }
+        setPollMsg(parts.join(' | '))
         loadRealAccounts()
       } else {
         setPollMsg(data.error ?? 'Ошибка')
