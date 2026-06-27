@@ -108,6 +108,78 @@
   }
 }
 
+/* ════════════════════════════════════════════════════════════════════
+   Игровой 3D-дизайн: тултипы, свечение, глянец, объёмные карточки
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Тултип */
+@keyframes tip-in {
+  from { opacity: 0; transform: translate(-50%, var(--tip-shift, 0)) scale(0.92); }
+  to   { opacity: 1; }
+}
+.animate-tip { animation: tip-in 0.14s cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* Пульсация свечения активных иконок */
+@keyframes pulse-glow {
+  0%, 100% { filter: brightness(1) saturate(1); }
+  50%      { filter: brightness(1.12) saturate(1.18); }
+}
+.pulse-glow { animation: pulse-glow 2.6s ease-in-out infinite; }
+
+/* Блик, бегущий по кнопке (как в играх) */
+@keyframes sheen {
+  0%   { transform: translateX(-130%) skewX(-18deg); }
+  60%, 100% { transform: translateX(260%) skewX(-18deg); }
+}
+.sheen { position: relative; overflow: hidden; }
+.sheen::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: 45%;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,0.55), transparent);
+  transform: translateX(-130%) skewX(-18deg);
+  pointer-events: none;
+}
+.sheen:hover::after { animation: sheen 0.9s ease; }
+
+/* Лёгкое всплывание */
+@keyframes float-y {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-5px); }
+}
+.float-y { animation: float-y 5s ease-in-out infinite; }
+
+/* Объёмная карточка с приподнятием и цветным свечением при наведении */
+.card-3d {
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
+}
+.card-3d:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05), 0 18px 44px rgba(0,0,0,0.12);
+}
+
+/* Глянцевый верхний блик на «стеклянных» поверхностях */
+.gloss { position: relative; }
+.gloss::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255,255,255,0.55), rgba(255,255,255,0) 42%);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Вращающаяся неоновая рамка (для выбранных карточек) */
+@keyframes spin-border { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-glow, .float-y, .sheen::after { animation: none !important; }
+}
+
 /* Slim, unobtrusive scrollbars */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }

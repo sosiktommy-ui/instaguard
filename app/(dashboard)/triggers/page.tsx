@@ -6,12 +6,23 @@ import {
   Heart, MessageCircle, UserPlus, Clapperboard, RefreshCw,
   Plus, ChevronDown, ChevronUp, ToggleLeft, ToggleRight,
   Link2, Bookmark, FileText, X, UserCheck, Eye,
-  Image as ImageIcon, Sparkles,
+  Image as ImageIcon, Sparkles, HelpCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Tooltip } from '@/components/ui/Tooltip'
+import { Tilt } from '@/components/ui/Tilt'
 import { TriggerType } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { cn } from '@/lib/utils'
+
+// Маленькая «?»-подсказка
+function Hint({ text }: { text: string }) {
+  return (
+    <Tooltip content={text}>
+      <HelpCircle className="w-3.5 h-3.5 text-subt/60 hover:text-brand transition-colors cursor-help" />
+    </Tooltip>
+  )
+}
 
 // ── Метаданные типов триггеров (цвет, иконка, подпись) ────────────────────────
 const TRIG_META = [
@@ -39,32 +50,56 @@ function darken(hex: string, f = 0.8) {
 }
 
 // ── 3D-иконка триггера (горит цветом, если активна; серая, если нет) ──────────
-function TrigBadge({ meta, active, size = 30, title }: {
-  meta: typeof TRIG_META[number]; active: boolean; size?: number; title?: string
+function TrigBadge({ meta, active, size = 30, title, tip = true }: {
+  meta: typeof TRIG_META[number]; active: boolean; size?: number; title?: string; tip?: boolean
 }) {
   const Icon = meta.Icon
-  return (
+  const node = (
     <span
-      title={title ?? `${meta.label}: ${active ? 'вкл' : 'выкл'}`}
-      className="rounded-xl flex items-center justify-center transition-all shrink-0"
+      className={cn('rounded-xl flex items-center justify-center transition-transform duration-200 shrink-0 hover:scale-110 hover:-rotate-3', active && 'pulse-glow')}
       style={
         active
           ? {
               width: size, height: size,
               background: `linear-gradient(145deg, ${meta.color} 0%, ${darken(meta.color)} 100%)`,
-              boxShadow: `0 3px 9px ${hexA(meta.color, 0.5)}, 0 1px 2px ${hexA(meta.color, 0.45)}, inset 0 1px 1.5px rgba(255,255,255,0.45)`,
+              boxShadow: `0 4px 12px ${hexA(meta.color, 0.55)}, 0 1px 2px ${hexA(meta.color, 0.5)}, inset 0 1.5px 1.5px rgba(255,255,255,0.55), inset 0 -2px 4px ${hexA(darken(meta.color, 0.6), 0.5)}`,
               color: '#fff',
             }
           : {
               width: size, height: size,
-              background: 'rgba(0,0,0,0.05)',
-              boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.05)',
+              background: 'linear-gradient(145deg, rgba(0,0,0,0.045), rgba(0,0,0,0.075))',
+              boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.06), inset 0 -1px 1px rgba(255,255,255,0.5)',
               color: '#b0b0b5',
             }
       }
     >
       <Icon style={{ width: size * 0.52, height: size * 0.52 }} />
     </span>
+  )
+  if (!tip) return node
+  return (
+    <Tooltip content={title ?? `${meta.label} — ${active ? 'включён для этого аккаунта' : 'выключен'}`}>
+      {node}
+    </Tooltip>
+  )
+}
+
+// Объёмная карточка статистики
+function StatCard({ icon: Icon, color, value, label, tip }: {
+  icon: any; color: string; value: React.ReactNode; label: string; tip: string
+}) {
+  return (
+    <div className="card card-3d gloss px-5 py-4 flex items-center gap-3 relative overflow-hidden">
+      <div className="absolute right-3 top-3 z-10"><Hint text={tip} /></div>
+      <div className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 float-y"
+        style={{ background: `linear-gradient(145deg, ${color}, ${darken(color)})`, boxShadow: `0 5px 16px ${hexA(color, 0.5)}, inset 0 1.5px 1px rgba(255,255,255,0.5), inset 0 -2px 4px ${hexA(darken(color, 0.6), 0.5)}` }}>
+        <Icon className="w-5 h-5 text-white" />
+      </div>
+      <div>
+        <div className="text-[24px] font-semibold tracking-tighter leading-none">{value}</div>
+        <div className="text-[12px] text-subt mt-1">{label}</div>
+      </div>
+    </div>
   )
 }
 
@@ -102,6 +137,12 @@ const PLATE_STYLE: Record<PlateState, string> = {
 }
 const PLATE_DOT: Record<PlateState, string> = { green: 'bg-ok', blue: 'bg-brand', red: 'bg-bad', yellow: 'bg-warn' }
 const PLATE_LABEL: Record<PlateState, string> = { green: 'Активно', blue: 'Готов', red: 'Проблема', yellow: 'Ошибки' }
+const PLATE_TIP: Record<PlateState, string> = {
+  green: 'Аккаунт активен, на нём есть включённые триггеры — работает',
+  blue: 'Аккаунт готов, но включённых триггеров пока нет',
+  red: 'Проблема: бан, ограничение или нужен повторный вход в аккаунт',
+  yellow: 'Были ошибки при выполнении действий — загляните в «Логи»',
+}
 
 // ── Черновик триггера (используется и для шаблонов) ───────────────────────────
 type MatchMode = 'all' | 'specific'
@@ -200,14 +241,17 @@ function TriggerCard({ trigger, onToggle, onDelete }: {
   const delayMin: number = msg?.delayMin ?? 45
   const delayMax: number = msg?.delayMax ?? 180
 
-  const badge = (color: string, Icon: any, label: string) => (
-    <span className="text-[10.5px] px-2 py-0.5 rounded-full font-medium flex items-center gap-1" style={{ background: hexA(color, 0.12), color }}>
-      <Icon className="w-3 h-3" /> {label}
-    </span>
-  )
+  const badge = (color: string, Icon: any, label: string, tip?: string) => {
+    const el = (
+      <span className="text-[10.5px] px-2 py-0.5 rounded-full font-medium flex items-center gap-1" style={{ background: hexA(color, 0.12), color }}>
+        <Icon className="w-3 h-3" /> {label}
+      </span>
+    )
+    return tip ? <Tooltip content={tip}>{el}</Tooltip> : el
+  }
 
   return (
-    <div className={cn('card p-4 flex flex-col gap-3 transition-all', !trigger.isActive && 'opacity-55')}>
+    <div className={cn('card card-3d p-4 flex flex-col gap-3 transition-all', !trigger.isActive && 'opacity-55')}>
       <div className="flex items-start gap-3">
         {meta
           ? <TrigBadge meta={meta} active={trigger.isActive} size={40} />
@@ -230,16 +274,16 @@ function TriggerCard({ trigger, onToggle, onDelete }: {
       </div>
 
       <div className="flex items-center gap-1.5 flex-wrap">
-        {sigSpecific && badge('#34c759', Filter, 'фразы')}
-        {hasGate && badge('#0071e3', UserCheck, 'проверка подписки')}
-        {msg && badge('#0071e3', Send, 'DM')}
-        {msg?.link?.enabled && badge('#0071e3', Link2, 'ссылка')}
-        {msg?.image?.enabled && badge('#0071e3', ImageIcon, 'фото')}
-        {reply && badge('#34c759', MessageCircle, `коммент ×${(reply.replies ?? []).filter(Boolean).length}`)}
-        {hasLikeComment && badge('#ff2d92', Heart, 'лайк коммента')}
-        {hasLike && badge('#ff2d92', Heart, isComment ? 'лайк постов' : 'лайк')}
-        {hasFollow && badge('#34c759', UserCheck, 'подписка')}
-        {storiesAct && badge('#ff9f0a', Clapperboard, storiesAct.like ? 'сторис + лайк' : 'сторис')}
+        {sigSpecific && badge('#34c759', Filter, 'фразы', 'Реагирует только на конкретные фразы (Сигнал)')}
+        {hasGate && badge('#0071e3', UserCheck, 'проверка подписки', 'Если автор не подписан — бот пишет приглашение в комментарии и не шлёт DM')}
+        {msg && badge('#0071e3', Send, 'DM', 'Отправляет личное сообщение в директ')}
+        {msg?.link?.enabled && badge('#0071e3', Link2, 'ссылка', 'В конец сообщения добавляется кликабельная ссылка')}
+        {msg?.image?.enabled && badge('#0071e3', ImageIcon, 'фото', 'К сообщению прикрепляется картинка')}
+        {reply && badge('#34c759', MessageCircle, `коммент ×${(reply.replies ?? []).filter(Boolean).length}`, 'Отвечает в комментариях случайным из вариантов')}
+        {hasLikeComment && badge('#ff2d92', Heart, 'лайк коммента', 'Лайкает сам комментарий')}
+        {hasLike && badge('#ff2d92', Heart, isComment ? 'лайк постов' : 'лайк', isComment ? 'Заходит к автору и лайкает его посты' : 'Лайкает последний пост подписчика')}
+        {hasFollow && badge('#34c759', UserCheck, 'подписка', 'Подписывается на пользователя в ответ')}
+        {storiesAct && badge('#ff9f0a', Clapperboard, storiesAct.like ? 'сторис + лайк' : 'сторис', storiesAct.like ? 'Просматривает и лайкает сторис пользователя' : 'Просматривает сторис пользователя')}
       </div>
 
       <div className="grid grid-cols-2 gap-2">
@@ -554,16 +598,16 @@ function CreateForm({
   // Чипы действий зависят от события
   const chips = isComment
     ? [
-        { k: 'actDM' as const,          icon: Send,      label: 'Директ',   color: '#0071e3' },
-        { k: 'actLikeComment' as const, icon: Heart,     label: 'Лайк',     color: '#ff2d92' },
-        { k: 'actFollow' as const,      icon: UserCheck, label: 'Подписка', color: '#34c759' },
-        { k: 'actStories' as const,     icon: Clapperboard, label: 'Сторис', color: '#ff9f0a' },
+        { k: 'actDM' as const,          icon: Send,         label: 'Директ',   color: '#0071e3', tip: 'Личное сообщение автору комментария + ответ в комментариях (настраивается ниже)' },
+        { k: 'actLikeComment' as const, icon: Heart,        label: 'Лайк',     color: '#ff2d92', tip: 'Зайти на профиль автора комментария и пролайкать его последние посты' },
+        { k: 'actFollow' as const,      icon: UserCheck,    label: 'Подписка', color: '#34c759', tip: 'Подписаться на автора комментария' },
+        { k: 'actStories' as const,     icon: Clapperboard, label: 'Сторис',   color: '#ff9f0a', tip: 'Просмотреть и (по желанию) пролайкать сторис автора комментария' },
       ]
     : [
-        { k: 'actDM' as const,      icon: Send,         label: 'Директ',   color: '#0071e3' },
-        { k: 'actLike' as const,    icon: Heart,        label: 'Лайк',     color: '#ff2d92' },
-        { k: 'actFollow' as const,  icon: UserCheck,    label: 'Подписка', color: '#34c759' },
-        { k: 'actStories' as const, icon: Clapperboard, label: 'Сторис',   color: '#ff9f0a' },
+        { k: 'actDM' as const,      icon: Send,         label: 'Директ',   color: '#0071e3', tip: 'Отправить личное сообщение новому подписчику' },
+        { k: 'actLike' as const,    icon: Heart,        label: 'Лайк',     color: '#ff2d92', tip: 'Лайкнуть последний пост нового подписчика' },
+        { k: 'actFollow' as const,  icon: UserCheck,    label: 'Подписка', color: '#34c759', tip: 'Подписаться в ответ на нового подписчика' },
+        { k: 'actStories' as const, icon: Clapperboard, label: 'Сторис',   color: '#ff9f0a', tip: 'Просмотреть и (по желанию) пролайкать сторис подписчика' },
       ]
 
   return (
@@ -586,6 +630,7 @@ function CreateForm({
                 <span className="text-[13px] font-semibold flex items-center gap-1.5">
                   <span className="w-5 h-5 rounded-full bg-brand text-white text-[11px] font-bold flex items-center justify-center">1</span>
                   Аккаунты
+                  <Hint text="Цвет плашки = состояние аккаунта (зелёный — работает, синий — готов, жёлтый — ошибки, красный — проблема). 4 иконки показывают, какие триггеры уже включены: горят цветом — вкл, серые — выкл." />
                 </span>
                 <button onClick={toggleAll} className="text-[12px] text-brand hover:underline">{allSelected ? 'Снять' : 'Все'}</button>
               </div>
@@ -616,14 +661,19 @@ function CreateForm({
                           {on && <Check className="w-2.5 h-2.5 text-white" />}
                         </span>
                         <span className="font-medium text-[13px] truncate">@{a.username}</span>
-                        <span className="ml-auto flex items-center gap-1.5 shrink-0">
-                          <span className={cn('w-1.5 h-1.5 rounded-full', PLATE_DOT[ps])} />
-                          <span className="text-[10.5px] text-subt">{PLATE_LABEL[ps]}</span>
+                        <span className="ml-auto shrink-0">
+                          <Tooltip content={PLATE_TIP[ps]}>
+                            <span className="flex items-center gap-1.5 cursor-help">
+                              <span className={cn('w-1.5 h-1.5 rounded-full', PLATE_DOT[ps])} />
+                              <span className="text-[10.5px] text-subt">{PLATE_LABEL[ps]}</span>
+                            </span>
+                          </Tooltip>
                         </span>
                       </div>
-                      <div className="flex items-center gap-1.5 pl-6">
+                      <div className="flex items-center gap-1.5 pl-6" onClick={(e) => e.stopPropagation()}>
                         {TRIG_META.map((m) => (
-                          <TrigBadge key={m.key} meta={m} active={activeTypes.has(m.db)} size={26} />
+                          <TrigBadge key={m.key} meta={m} active={activeTypes.has(m.db)} size={26}
+                            title={`${m.label} — ${activeTypes.has(m.db) ? 'включён на этом аккаунте' : 'выключен'}`} />
                         ))}
                       </div>
                     </button>
@@ -642,16 +692,18 @@ function CreateForm({
                 {TRIG_META.map((m) => {
                   const on = d.type === m.key
                   return (
-                    <button key={m.key} onClick={() => set('type', m.key)}
-                      className={cn('w-full flex items-center gap-3 p-3 rounded-2xl border text-left transition-all',
-                        on ? 'bg-white shadow-sm' : 'border-line/60 hover:border-line')}
-                      style={on ? { borderColor: m.color, boxShadow: `0 0 0 3px ${hexA(m.color, 0.12)}` } : undefined}>
-                      <TrigBadge meta={m} active={on} size={38} />
-                      <span className="min-w-0">
-                        <span className="block font-medium text-[13px]">{m.label}</span>
-                        <span className="block text-[11px] text-subt">{m.desc}</span>
-                      </span>
-                    </button>
+                    <Tilt key={m.key} max={6}>
+                      <button onClick={() => set('type', m.key)}
+                        className={cn('w-full flex items-center gap-3 p-3 rounded-2xl border text-left transition-all duration-200',
+                          on ? 'bg-white' : 'border-line/60 hover:border-line hover:bg-white/60')}
+                        style={on ? { borderColor: m.color, boxShadow: `0 10px 26px ${hexA(m.color, 0.28)}, 0 0 0 3px ${hexA(m.color, 0.14)}, inset 0 1px 0 rgba(255,255,255,0.7)` } : undefined}>
+                        <TrigBadge meta={m} active={on} size={38} tip={false} />
+                        <span className="min-w-0">
+                          <span className="block font-medium text-[13px]">{m.label}</span>
+                          <span className="block text-[11px] text-subt">{m.desc}</span>
+                        </span>
+                      </button>
+                    </Tilt>
                   )
                 })}
               </div>
@@ -666,18 +718,22 @@ function CreateForm({
 
               {/* Действия (чипы) */}
               <div>
-                <div className="text-[11px] font-medium text-subt mb-1.5">Действие</div>
+                <div className="text-[11px] font-medium text-subt mb-1.5 flex items-center gap-1.5">Действие <Hint text="Можно выбрать несколько действий сразу. Наведи на иконку, чтобы узнать, что делает каждое." /></div>
                 <div className="grid grid-cols-4 gap-2">
-                  {chips.map(({ k, icon: Icon, label, color }) => {
+                  {chips.map(({ k, icon: Icon, label, color, tip }) => {
                     const on = d[k]
                     return (
-                      <button key={k} onClick={() => set(k, !on)}
-                        className={cn('flex flex-col items-center gap-1.5 py-2.5 rounded-2xl border transition-all',
-                          on ? 'bg-white' : 'border-line/60 text-subt hover:border-line')}
-                        style={on ? { borderColor: color, boxShadow: `0 0 0 3px ${hexA(color, 0.12)}` } : undefined}>
-                        <Icon className="w-4 h-4" style={on ? { color } : undefined} />
-                        <span className="text-[11px] font-medium" style={on ? { color } : undefined}>{label}</span>
-                      </button>
+                      <Tooltip key={k} content={tip} className="flex">
+                        <button onClick={() => set(k, !on)}
+                          className={cn('w-full flex flex-col items-center gap-1.5 py-2.5 rounded-2xl border transition-all duration-200 active:scale-95',
+                            on ? 'bg-white -translate-y-0.5' : 'border-line/60 text-subt hover:border-line hover:-translate-y-0.5')}
+                          style={on ? { borderColor: color, boxShadow: `0 6px 16px ${hexA(color, 0.3)}, 0 0 0 3px ${hexA(color, 0.12)}, inset 0 1px 0 rgba(255,255,255,0.7)` } : undefined}>
+                          <span className="rounded-xl flex items-center justify-center transition-transform" style={on ? { width: 30, height: 30, background: `linear-gradient(145deg, ${color}, ${darken(color)})`, boxShadow: `0 3px 9px ${hexA(color, 0.5)}, inset 0 1px 1px rgba(255,255,255,0.5)`, color: '#fff' } : { width: 30, height: 30 }}>
+                            <Icon className="w-4 h-4" style={on ? undefined : { color: '#9ca3af' }} />
+                          </span>
+                          <span className="text-[11px] font-medium" style={on ? { color } : undefined}>{label}</span>
+                        </button>
+                      </Tooltip>
                     )
                   })}
                 </div>
@@ -788,7 +844,7 @@ function CreateForm({
                 </button>
               )}
 
-              <Button className="w-full mt-1" onClick={save} disabled={!canSave || saving}>
+              <Button className="w-full mt-1 sheen" onClick={save} disabled={!canSave || saving}>
                 <Zap className="w-3.5 h-3.5" fill="white" />
                 {saving ? 'Сохранение…'
                   : selected.length === 0 ? 'Выберите аккаунты'
@@ -912,27 +968,9 @@ function TriggersScreen() {
   return (
     <div className="space-y-5 pb-24">
       <div className="grid grid-cols-3 gap-3">
-        <div className="card px-5 py-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-brand/10 flex items-center justify-center shrink-0"><Zap className="w-5 h-5 text-brand" /></div>
-          <div>
-            <div className="text-[22px] font-semibold tracking-tighter leading-none">{activeTriggers.length}</div>
-            <div className="text-[12px] text-subt mt-1">Активных</div>
-          </div>
-        </div>
-        <div className="card px-5 py-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-ok/10 flex items-center justify-center shrink-0"><Send className="w-5 h-5 text-ok" /></div>
-          <div>
-            <div className="text-[22px] font-semibold tracking-tighter leading-none">{totalFires.toLocaleString('ru')}</div>
-            <div className="text-[12px] text-subt mt-1">Срабатываний</div>
-          </div>
-        </div>
-        <div className="card px-5 py-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-[#5e5ce6]/10 flex items-center justify-center shrink-0"><Users className="w-5 h-5 text-[#5e5ce6]" /></div>
-          <div>
-            <div className="text-[22px] font-semibold tracking-tighter leading-none">{dbAccounts.filter((a) => a.status === 'ACTIVE').length}</div>
-            <div className="text-[12px] text-subt mt-1">Аккаунтов</div>
-          </div>
-        </div>
+        <StatCard icon={Zap} color="#0071e3" value={activeTriggers.length} label="Активных" tip="Сколько триггеров сейчас включено и работает" />
+        <StatCard icon={Send} color="#34c759" value={totalFires.toLocaleString('ru')} label="Срабатываний" tip="Суммарно отправлено сообщений / выполнено действий по всем триггерам" />
+        <StatCard icon={Users} color="#5e5ce6" value={dbAccounts.filter((a) => a.status === 'ACTIVE').length} label="Аккаунтов" tip="Активные Instagram-аккаунты, готовые к работе" />
       </div>
 
       <div className="card overflow-hidden">
