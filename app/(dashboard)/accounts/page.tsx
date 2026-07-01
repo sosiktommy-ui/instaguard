@@ -230,17 +230,29 @@ function Accounts() {
     }
   }
 
-  const handleDelete = async (id: string, username: string) => {
+  const handleDelete = async (id: string, _username: string) => {
     setLoadingIds((s) => new Set(s).add(id))
-    await fetch(`/api/accounts/${id}`, { method: 'DELETE' }).catch(() => null)
-    removeAccount(id)
-    setReal((prev) => prev.filter((a) => a.id !== id))
-    setLoadingIds((s) => { const n = new Set(s); n.delete(id); return n })
+    try {
+      const res = await fetch(`/api/accounts/${id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setPollMsg(data.error ?? 'Не удалось удалить аккаунт')
+        return
+      }
+      removeAccount(id)
+      setReal((prev) => prev.filter((a) => a.id !== id))
+    } catch {
+      setPollMsg('Ошибка сети при удалении')
+    } finally {
+      setLoadingIds((s) => { const n = new Set(s); n.delete(id); return n })
+    }
   }
 
   const handleResetSnapshot = async (id: string) => {
-    await fetch(`/api/accounts/${id}/reset-snapshot`, { method: 'DELETE' }).catch(() => null)
-    setPollMsg('Снапшот сброшен — при следующей проверке все подписчики будут считаться новыми')
+    const res = await fetch(`/api/accounts/${id}/reset-snapshot`, { method: 'DELETE' }).catch(() => null)
+    setPollMsg(res && res.ok
+      ? 'Снапшот сброшен — при следующей проверке все подписчики будут считаться новыми'
+      : 'Не удалось сбросить снапшот')
   }
 
   const handleSaveProxy = async (id: string) => {

@@ -235,7 +235,13 @@ export async function POST(req: NextRequest) {
             // Всегда через очередь с разнесёнными задержками (безопасно + без таймаута запроса).
             // Инлайн — только если нет Redis.
             if (dmQueue) {
-              await dmQueue.add('send', job, { delay: Math.round(cursor), attempts: 2, backoff: { type: 'fixed', delay: 60_000 } })
+              // jobId — идемпотентность: один и тот же (аккаунт+триггер+подписчик) не задвоится;
+              // attempts:1 — без авто-ретрая, чтобы упавший воркер не отправил DM повторно.
+              await dmQueue.add('send', job, {
+                jobId: `dm:${account.id}:${trigger.id}:${follower.pk}`,
+                delay: Math.round(cursor), attempts: 1,
+                removeOnComplete: true, removeOnFail: 100,
+              })
               cursor += nextGap()
             } else {
               await runFollowerActionsInline(job)
