@@ -44,12 +44,14 @@ export async function getCurrentUser() {
  * (см. /api/accounts и /api/accounts/auth), поэтому без валидного куки
  * не должно падать с Unauthorized.
  */
+/**
+ * Приложение однопользовательское: все данные принадлежат первому (владельцу) аккаунту.
+ * Доступ к страницам/API закрывает middleware по сессии; здесь возвращаем владельца данных,
+ * чтобы вход под демо-аккаунтом всё равно показывал те же триггеры/аккаунты.
+ */
 export async function getUserOrFirst() {
-  const session = await getCurrentUser()
-  if (session) return session
-  const first = await prisma.user.findFirst({ select: { id: true, email: true } })
-  if (!first) return null
-  return { id: first.id, email: first.email }
+  const first = await prisma.user.findFirst({ orderBy: { createdAt: 'asc' }, select: { id: true, email: true } })
+  return first ? { id: first.id, email: first.email } : null
 }
 
 export async function logout() {

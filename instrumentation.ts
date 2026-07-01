@@ -6,16 +6,16 @@ export async function register() {
     const { PrismaClient } = await import(/* webpackIgnore: true */ '@prisma/client')
     const { hashSync } = await import(/* webpackIgnore: true */ 'bcryptjs')
     const prisma = new PrismaClient()
-    const existing = await prisma.user.findFirst()
-    if (!existing) {
-      // Единый дефолтный пользователь — совпадает со страницей входа
-      const email = process.env.DEFAULT_USER_EMAIL ?? 'demo@instaguard.com'
-      const password = process.env.DEFAULT_USER_PASSWORD ?? 'demo1234'
-      await prisma.user.create({
-        data: { email, name: 'Demo', password: hashSync(password, 10) },
-      })
-      console.log(`[seed] Created default user: ${email}`)
-    }
+    // Гарантируем, что демо-пользователь (со страницы входа) существует — иначе после
+    // включения auth-гейта можно остаться заблокированным на старой БД без этого юзера.
+    const email = process.env.DEFAULT_USER_EMAIL ?? 'demo@instaguard.com'
+    const password = process.env.DEFAULT_USER_PASSWORD ?? 'demo1234'
+    await prisma.user.upsert({
+      where: { email },
+      update: {},
+      create: { email, name: 'Demo', password: hashSync(password, 10) },
+    })
+    console.log(`[seed] Ensured login user exists: ${email}`)
     if (!process.env.JWT_SECRET) {
       console.warn('[auth] JWT_SECRET is NOT set — using insecure fallback. Set JWT_SECRET in Railway!')
     }
