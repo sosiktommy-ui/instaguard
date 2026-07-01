@@ -26,10 +26,10 @@ function Hint({ text }: { text: string }) {
 
 // ── Метаданные типов триггеров (цвет, иконка, подпись) ────────────────────────
 const TRIG_META = [
-  { key: 'FOLLOW',      db: 'NEW_FOLLOWER',  label: 'Новая подписка',  desc: 'Основной триггер — ответ новым подписчикам', Icon: UserPlus,      color: '#0071e3' },
-  { key: 'COMMENT',     db: 'NEW_COMMENT',   label: 'Комментарий',     desc: 'Реакция на комментарии под постами',         Icon: MessageCircle, color: '#34c759' },
-  { key: 'LIKE',        db: 'NEW_LIKE',      label: 'Лайк',            desc: 'Когда кто-то ставит лайк',                   Icon: Heart,         color: '#ff2d92' },
-  { key: 'STORY_REPLY', db: 'STORY_MENTION', label: 'Ответ на сторис', desc: 'Когда отвечают на вашу историю',             Icon: Clapperboard,  color: '#ff9f0a' },
+  { key: 'FOLLOW',      db: 'NEW_FOLLOWER',  label: 'Новая подписка',  desc: 'Основной триггер — ответ новым подписчикам', Icon: UserPlus,      color: '#0071e3', soon: false },
+  { key: 'COMMENT',     db: 'NEW_COMMENT',   label: 'Комментарий',     desc: 'Реакция на комментарии под постами',         Icon: MessageCircle, color: '#34c759', soon: false },
+  { key: 'LIKE',        db: 'NEW_LIKE',      label: 'Лайк',            desc: 'Скоро — реакция на лайки',                   Icon: Heart,         color: '#ff2d92', soon: true },
+  { key: 'STORY_REPLY', db: 'STORY_MENTION', label: 'Ответ на сторис', desc: 'Скоро — ответы на ваши истории',             Icon: Clapperboard,  color: '#ff9f0a', soon: true },
 ] as const
 
 type MetaKey = typeof TRIG_META[number]['key']
@@ -710,6 +710,19 @@ function CreateForm({
               <div className="space-y-2">
                 {TRIG_META.map((m) => {
                   const on = d.type === m.key
+                  if (m.soon) {
+                    return (
+                      <div key={m.key} title="Скоро" className="w-full flex items-center gap-3 p-3 rounded-2xl border border-line/50 text-left opacity-55 cursor-not-allowed select-none">
+                        <TrigBadge meta={m} active={false} size={38} tip={false} />
+                        <span className="min-w-0">
+                          <span className="block font-medium text-[13px] flex items-center gap-1.5">{m.label}
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-warn/15 text-warn">СКОРО</span>
+                          </span>
+                          <span className="block text-[11px] text-subt">{m.desc}</span>
+                        </span>
+                      </div>
+                    )
+                  }
                   return (
                     <Tilt key={m.key} max={6}>
                       <button onClick={() => set('type', m.key)}

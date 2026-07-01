@@ -20,17 +20,11 @@ export default function LoginPage() {
     setLoading(true)
     setError('')
 
-    // Documented demo credentials always work (independent of DB state).
-    if (email.trim().toLowerCase() === DEMO_EMAIL && password === DEMO_PASSWORD) {
-      router.push('/')
-      return
-    }
-
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -38,9 +32,11 @@ export default function LoginPage() {
         setLoading(false)
         return
       }
+      // Кука выставлена сервером — обновляем, чтобы middleware увидел сессию
       router.push('/')
+      router.refresh()
     } catch {
-      setError('Ошибка сети. Попробуйте демо-доступ ниже.')
+      setError('Ошибка сети. Попробуйте ещё раз.')
       setLoading(false)
     }
   }

@@ -203,7 +203,7 @@ function Accounts() {
     setPolling(true)
     setPollMsg('')
     try {
-      // manual: true — отправлять сразу (синхронно), а не ставить в очередь с задержкой
+      // manual: true — ставим действия в очередь с разнесёнными задержками (безопасно от бана)
       const res = await fetch('/api/poll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manual: true }) })
       const data = await res.json()
       if (data.ok) {
@@ -212,12 +212,13 @@ function Accounts() {
         const parts = [
           `Подписчиков: ${sum('totalFollowers')}`,
           `новых: ${sum('newFollowers')}`,
-          `DM: ${totalDms}`,
+          `запланировано: ${totalDms}`,
         ]
         if (sum('totalComments') > 0 || sum('newComments') > 0) {
           parts.push(`комментов: ${sum('totalComments')}`, `новых: ${sum('newComments')}`, `действий: ${sum('commentActions')}`)
         }
-        setPollMsg(parts.join(' | '))
+        if (sum('limited') > 0) parts.push(`лимит дня: ${sum('limited')}`)
+        setPollMsg(parts.join(' | ') + ' — отправка с задержками')
         loadRealAccounts()
       } else {
         setPollMsg(data.error ?? 'Ошибка')

@@ -3,15 +3,21 @@ export async function register() {
 
   // ── Авто-сид пользователя ──────────────────────────────────────────────────
   try {
-    const { PrismaClient } = await import('@prisma/client')
-    const { hashSync } = await import('bcryptjs')
+    const { PrismaClient } = await import(/* webpackIgnore: true */ '@prisma/client')
+    const { hashSync } = await import(/* webpackIgnore: true */ 'bcryptjs')
     const prisma = new PrismaClient()
     const existing = await prisma.user.findFirst()
     if (!existing) {
+      // Единый дефолтный пользователь — совпадает со страницей входа
+      const email = process.env.DEFAULT_USER_EMAIL ?? 'demo@instaguard.com'
+      const password = process.env.DEFAULT_USER_PASSWORD ?? 'demo1234'
       await prisma.user.create({
-        data: { email: 'admin@instaguard.com', name: 'Admin', password: hashSync('admin1234', 10) },
+        data: { email, name: 'Demo', password: hashSync(password, 10) },
       })
-      console.log('[seed] Created default user: admin@instaguard.com / admin1234')
+      console.log(`[seed] Created default user: ${email}`)
+    }
+    if (!process.env.JWT_SECRET) {
+      console.warn('[auth] JWT_SECRET is NOT set — using insecure fallback. Set JWT_SECRET in Railway!')
     }
     await prisma.$disconnect()
   } catch (e) {
@@ -26,8 +32,8 @@ export async function register() {
   }
 
   try {
-    const { Worker, Queue } = await import('bullmq')
-    const { PrismaClient } = await import('@prisma/client')
+    const { Worker, Queue } = await import(/* webpackIgnore: true */ 'bullmq')
+    const { PrismaClient } = await import(/* webpackIgnore: true */ '@prisma/client')
     const prisma = new PrismaClient()
     const connection = { url: redisUrl }
 
@@ -111,7 +117,11 @@ export async function register() {
         try {
           const res = await fetch(`${baseUrl}/api/poll`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              // Секрет для прохождения middleware (внутренний вызов без куки)
+              'x-internal-secret': process.env.INTERNAL_SECRET ?? 'instaguard-internal-cron',
+            },
             body: '{}',
           })
           const data = await res.json()

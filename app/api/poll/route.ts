@@ -5,6 +5,7 @@ import {
   getFriendship, viewStories, followUser, likeLatestMedia, likeUserMedias,
 } from '@/lib/instagram/client'
 import { Queue } from 'bullmq'
+import { loadCounters, consume, MAX_NEW_PER_POLL, type Counters } from '@/lib/limits'
 
 // Сколько последних постов автора комментария лайкать (действие «Лайк» в триггере «Комментарий»)
 const COMMENT_LIKE_POSTS = 3
@@ -122,6 +123,7 @@ interface PollSummary {
   totalComments: number
   newComments: number
   commentActions: number
+  limited?: number      // пропущено из-за дневного лимита
   skipped?: string
 }
 
@@ -166,16 +168,25 @@ export async function POST(req: NextRequest) {
     const proxy = account.proxy ?? undefined
     const s: PollSummary = {
       accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0,
-      triggersFound: triggers.length, totalComments: 0, newComments: 0, commentActions: 0,
+      triggersFound: triggers.length, totalComments: 0, newComments: 0, commentActions: 0, limited: 0,
     }
+
+    // Дневные счётчики действий (защита от бана)
+    const counters: Counters = loadCounters(account.limits)
+    // Разнесённые задержки: первое действие скоро, дальше с интервалом ~45–115с
+    let cursor = (isManual ? 8 + Math.random() * 14 : 45 + Math.random() * 75) * 1000
+    const nextGap = () => (45 + Math.random() * 70) * 1000
 
     try {
       // ── Поток подписчиков ────────────────────────────────────────────────
       if (followerTriggers.length) {
         const { followers } = await getFollowers(session, account.username, proxy, FOLLOWERS_FETCH_LIMIT)
         const snapFollowers = account.snapshots.find((sn) => sn.type === 'FOLLOWERS')
+        const hadBaseline = Boolean(snapFollowers)
         const knownPks = extractKnownPks(snapFollowers?.data)
-        const newFollowers = followers.filter((f) => !knownPks.has(String(f.pk)))
+        // Первая проверка (нет снапшота) — только фиксируем базу, НЕ обрабатываем существующих
+        // подписчиков (иначе на новом аккаунте будет массовая рассылка → бан).
+        let newFollowers = hadBaseline ? followers.filter((f) => !knownPks.has(String(f.pk))) : []
         followers.forEach((f) => knownPks.add(String(f.pk)))
 
         await prisma.$transaction([
@@ -185,41 +196,50 @@ export async function POST(req: NextRequest) {
 
         s.totalFollowers = followers.length
         s.newFollowers = newFollowers.length
+        // Не обрабатываем больше N новых за одну проверку (защита от всплеска)
+        if (newFollowers.length > MAX_NEW_PER_POLL) newFollowers = newFollowers.slice(0, MAX_NEW_PER_POLL)
 
         for (const trigger of followerTriggers) {
           const actions = (trigger.actions ?? []) as any[]
           const isOn = (a: any) => a && a.enabled !== false
           const msgAction = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
-          const doFollow = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
-          const doLike = actions.some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
+          const doFollowT = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
+          const doLikeT = actions.some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
           const storiesAct = actions.find((a: any) => a.type === 'VIEW_STORIES' && isOn(a))
-          const viewS = Boolean(storiesAct)
-          const storyLike = Boolean(storiesAct?.like)
-          if (!msgAction?.templates?.[0] && !doFollow && !doLike && !viewS) continue
+          if (!msgAction?.templates?.[0] && !doFollowT && !doLikeT && !storiesAct) continue
 
           const template: string = msgAction?.templates?.[0] ?? ''
-          const delayMin: number = msgAction?.delayMin ?? 45
-          const delayMax: number = msgAction?.delayMax ?? 180
           const link = msgAction?.link
           const image: string | undefined = msgAction?.image?.enabled ? msgAction.image.url : undefined
 
           for (const follower of newFollowers) {
-            let text = template.replace(/\{\{username\}\}/gi, follower.username)
-            if (link?.enabled && link.url) text += `\n\n${link.text ? link.text + ': ' : ''}${link.url}`
-            const delayMs = Math.round((delayMin + Math.random() * (delayMax - delayMin)) * 1000)
+            // Резервируем дневной бюджет по каждому действию — что не влезло, пропускаем
+            const willDM = Boolean(msgAction?.templates?.[0]) && consume(counters, 'dm')
+            const willFollow = doFollowT && consume(counters, 'follow')
+            const willLike = doLikeT && consume(counters, 'like')
+            const willStory = Boolean(storiesAct) && consume(counters, 'story')
+            if (!willDM && !willFollow && !willLike && !willStory) { s.limited = (s.limited ?? 0) + 1; continue }
+
+            let text = willDM ? template.replace(/\{\{username\}\}/gi, follower.username) : ''
+            if (willDM && link?.enabled && link.url) text += `\n\n${link.text ? link.text + ': ' : ''}${link.url}`
 
             const job = {
               sessionData: account.sessionData, accountId: account.id,
               triggerId: trigger.id, triggerName: trigger.name,
               followerPk: follower.pk, followerUsername: follower.username,
-              text: text.trim(), image, doFollow, doLike,
-              viewStories: viewS, storyLike, proxy: account.proxy,
+              text: text.trim(), image: willDM ? image : undefined,
+              doFollow: willFollow, doLike: willLike,
+              viewStories: willStory, storyLike: Boolean(storiesAct?.like), proxy: account.proxy,
             }
 
-            if (dmQueue && !isManual) {
-              await dmQueue.add('send', job, { delay: delayMs, attempts: 2, backoff: { type: 'fixed', delay: 30_000 } })
+            // Всегда через очередь с разнесёнными задержками (безопасно + без таймаута запроса).
+            // Инлайн — только если нет Redis.
+            if (dmQueue) {
+              await dmQueue.add('send', job, { delay: Math.round(cursor), attempts: 2, backoff: { type: 'fixed', delay: 60_000 } })
+              cursor += nextGap()
             } else {
               await runFollowerActionsInline(job)
+              await randDelay(40, 90)
             }
             s.dmsQueued++
           }
@@ -247,8 +267,9 @@ export async function POST(req: NextRequest) {
 
         s.totalComments = comments.length
         s.newComments = newComments.length
+        const toProcess = newComments.slice(0, MAX_NEW_PER_POLL)
 
-        for (const c of newComments) {
+        for (const c of toProcess) {
           for (const trigger of commentTriggers) {
             const actions = (trigger.actions ?? []) as any[]
             const isOn = (a: any) => a && a.enabled !== false
@@ -279,40 +300,40 @@ export async function POST(req: NextRequest) {
 
               if (!isFollower) {
                 const gateText = String(gate.text ?? '').replace(/\{\{username\}\}/gi, c.username)
-                if (gateText) {
+                if (gateText && consume(counters, 'comment')) {
                   try { await replyComment(session, c.media_id, gateText, c.pk, proxy); fired = true }
                   catch (e: any) { errors.push(`коммент-приглашение: ${e.message}`) }
-                }
+                } else if (gateText) { s.limited = (s.limited ?? 0) + 1 }
                 gatedStop = true
               }
             }
 
-            // Подписан (или проверки нет): действия с паузами между ними
+            // Подписан (или проверки нет): действия с паузами между ними + дневной лимит
             if (!gatedStop) {
               if (reply) {
                 const variants: string[] = (reply.replies ?? []).filter(Boolean)
-                if (variants.length) {
+                if (variants.length && consume(counters, 'comment')) {
                   const pick = variants[Math.floor(Math.random() * variants.length)].replace(/\{\{username\}\}/gi, c.username)
                   try { await replyComment(session, c.media_id, pick, c.pk, proxy); fired = true }
                   catch (e: any) { errors.push(`ответ: ${e.message}`) }
                 }
               }
-              if (doLikePosts) {
+              if (doLikePosts && consume(counters, 'like')) {
                 await randDelay(2, 5)
                 try { await likeUserMedias(session, c.user_pk, COMMENT_LIKE_POSTS, proxy); fired = true }
                 catch (e: any) { errors.push(`лайк постов: ${e.message}`) }
               }
-              if (likeCmt) {
+              if (likeCmt && consume(counters, 'like')) {
                 await randDelay(1, 3)
                 try { await likeComment(session, c.pk, proxy); fired = true }
                 catch (e: any) { errors.push(`лайк коммента: ${e.message}`) }
               }
-              if (doFollow) {
+              if (doFollow && consume(counters, 'follow')) {
                 await randDelay(2, 5)
                 try { await followUser(session, c.user_pk, proxy); fired = true }
                 catch (e: any) { errors.push(`подписка: ${e.message}`) }
               }
-              if (dm?.templates?.[0]) {
+              if (dm?.templates?.[0] && consume(counters, 'dm')) {
                 await randDelay(3, 8)
                 let text = String(dm.templates[0]).replace(/\{\{username\}\}/gi, c.username)
                 if (dm.link?.enabled && dm.link.url) text += `\n\n${dm.link.text ? dm.link.text + ': ' : ''}${dm.link.url}`
@@ -324,7 +345,7 @@ export async function POST(req: NextRequest) {
                   }
                 } catch (e: any) { errors.push(`DM: ${e.message}`) }
               }
-              if (storiesAct) {
+              if (storiesAct && consume(counters, 'story')) {
                 await randDelay(3, 7)
                 try { await viewStories(session, c.user_pk, Boolean(storiesAct.like), proxy); fired = true }
                 catch (e: any) { errors.push(`сторис: ${e.message}`) }
@@ -346,13 +367,14 @@ export async function POST(req: NextRequest) {
 
       await prisma.instagramAccount.update({
         where: { id: account.id },
-        data: { lastChecked: new Date(), errorCount: 0 },
+        data: { lastChecked: new Date(), errorCount: 0, limits: counters as any },
       })
       summary.push(s)
     } catch (e: any) {
+      // Даже при ошибке сохраняем зарезервированный бюджет (действия могли частично уйти)
       await prisma.instagramAccount.update({
         where: { id: account.id },
-        data: { errorCount: { increment: 1 } },
+        data: { errorCount: { increment: 1 }, limits: counters as any },
       })
       await prisma.log.create({
         data: { accountId: account.id, level: 'ERROR', message: `Ошибка проверки: ${e.message}` },
