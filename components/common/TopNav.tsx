@@ -55,7 +55,7 @@ export default function TopNav() {
 
           <div className="flex items-center gap-2.5 pr-1">
             <AppLogo size={38} className="drop-shadow-sm" />
-            <span className="font-semibold text-[16px] tracking-tighter hidden md:block">InstaGuard</span>
+            <span className="font-semibold text-[16px] tracking-tighter hidden md:block">ShadowGram</span>
           </div>
 
           <div className="segment ml-1">
@@ -96,7 +96,7 @@ export default function TopNav() {
             <div className="flex items-center justify-between px-5 h-16 border-b border-black/[0.06]">
               <div className="flex items-center gap-2.5">
                 <AppLogo size={38} />
-                <span className="font-semibold text-[16px] tracking-tighter">InstaGuard</span>
+                <span className="font-semibold text-[16px] tracking-tighter">ShadowGram</span>
               </div>
               <button onClick={() => setOpen(false)} className="text-subt hover:text-ink p-1"><X size={22} /></button>
             </div>

@@ -5,9 +5,6 @@ import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { AppLogo } from '@/components/common/AppLogo'
 
-const DEMO_EMAIL = 'demo@instaguard.com'
-const DEMO_PASSWORD = 'demo1234'
-
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -41,18 +38,12 @@ export default function LoginPage() {
     }
   }
 
-  const fillDemo = () => {
-    setEmail(DEMO_EMAIL)
-    setPassword(DEMO_PASSWORD)
-    setError('')
-  }
-
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-canvas">
       <div className="w-full max-w-[400px] animate-scale-in">
         <div className="flex flex-col items-center mb-8">
           <AppLogo size={96} detailed className="mb-5 float-y drop-shadow-2xl" />
-          <h1 className="text-[28px] font-semibold tracking-tight">Вход в InstaGuard</h1>
+          <h1 className="text-[28px] font-semibold tracking-tight">Вход в ShadowGram</h1>
           <p className="text-subt mt-1.5 text-[15px]">Automation Suite</p>
         </div>
 
@@ -73,10 +64,6 @@ export default function LoginPage() {
           </Button>
         </div>
 
-        <button onClick={fillDemo}
-          className="mt-5 w-full text-center text-[13px] text-subt hover:text-brand transition-colors">
-          Войти как демо · {DEMO_EMAIL} / {DEMO_PASSWORD}
-        </button>
       </div>
     </div>
   )

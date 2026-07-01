@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>InstaGuard — Command Map</title>
+<title>ShadowGram — Command Map</title>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -186,14 +186,14 @@ html,body{background:var(--bg);overflow:hidden;font-family:'JetBrains Mono',mono
 <body>
 
 <div id="boot">
-  <h1>⚡ INSTAGUARD</h1>
+  <h1>⚡ SHADOWGRAM</h1>
   <div id="boot-sub">TRIGGER MAP · COMMAND CENTER</div>
   <div id="boot-bar-wrap"><div id="boot-bar"></div></div>
   <div id="boot-status">ИНИЦИАЛИЗАЦИЯ...</div>
 </div>
 
 <div id="topbar">
-  <div id="logo"><span>⚡</span>INSTAGUARD</div>
+  <div id="logo"><span>⚡</span>SHADOWGRAM</div>
   <div id="stats">
     <div class="sp">👤 <strong id="sa">0</strong>&nbsp;аккаунтов</div>
     <div class="sp">🗡 <strong id="sd">0</strong>&nbsp;черновых</div>
@@ -384,12 +384,14 @@ async function loadAll(){
   startLoop();
 }
 
-setInterval(async()=>{
+// Перечитать данные с сервера (без пересчёта камеры) — авторитетный источник
+async function refreshData(){
   const [a,t]=await Promise.all([api('/api/accounts'),api('/api/triggers')]);
   if(a) S.accounts=arr(a);
   if(t){ S.triggers=arr(t); S.totalDMs=S.triggers.reduce((s,x)=>s+(x.fireCount||0),0); }
   buildLayout(); updStats();
-},60000);
+}
+setInterval(refreshData, 60000);
 
 function updStats(){
   const main=S.accounts.filter(a=>a.role!=='HELPER');
@@ -778,8 +780,14 @@ function burst(wx,wy,col,n=18){
 //  MAIN LOOP
 // ══════════════════════════════════════════════
 let looping=false, lastTS=0;
-function startLoop(){ if(looping) return; looping=true; requestAnimationFrame(loop); }
+function startLoop(){ if(looping) return; looping=true; lastTS=performance.now(); requestAnimationFrame(loop); }
+// Пауза отрисовки, когда вкладка/iframe скрыты — экономит CPU/батарею
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){ looping=false; }
+  else if(!looping){ startLoop(); }
+});
 function loop(ts){
+  if(document.hidden){ looping=false; return; }
   const dt=Math.min((ts-lastTS)/1000,.05); lastTS=ts; S.t+=dt;
   // Particles
   for(let i=S.parts.length-1;i>=0;i--){
@@ -909,11 +917,10 @@ function onNodeClick(nd,e){
 // ══════════════════════════════════════════════
 //  RADIAL MENU
 // ══════════════════════════════════════════════
+// Пока исполняются только эти два типа (лайк/сторис — «скоро»)
 const RDEFS=[
   {id:'NEW_FOLLOWER', icon:'💜',label:'Новый подписчик',  col:'#8b5cf6',ang:-90},
-  {id:'NEW_COMMENT',  icon:'💚',label:'Новый комментарий',col:'#10b981',ang:0},
-  {id:'NEW_LIKE',     icon:'🩷',label:'Новый лайк',       col:'#e1306c',ang:90},
-  {id:'STORY_MENTION',icon:'🧡',label:'Ответ на сторис',  col:'#f77737',ang:180}
+  {id:'NEW_COMMENT',  icon:'💚',label:'Новый комментарий',col:'#10b981',ang:90}
 ];
 
 function showRM(nd,e){
@@ -1036,7 +1043,13 @@ window.togTrig=async function(id,val){
   t.isActive=val;
   const nd=S.nodes.find(n=>n.id==='t-'+id); if(nd){nd.trig=t;burst(nd.x,nd.y,nd.col,8);}
   const conn=S.connections.find(c=>c.to==='t-'+id); if(conn) conn.active=val;
-  await api(`/api/triggers/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({isActive:val})});
+  const r=await api(`/api/triggers/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({isActive:val})});
+  if(!r || r.error){
+    // откат UI при ошибке
+    t.isActive=!val; if(nd) nd.trig=t; if(conn) conn.active=!val;
+    const cb=document.getElementById('tt-'+id); if(cb) cb.checked=!val;
+    toast('⚠️ Не удалось изменить триггер','e'); return;
+  }
   toast(val?'✅ Триггер активирован':'⏸ Триггер на паузе','s');
 };
 
@@ -1066,9 +1079,10 @@ function showTrigPanel(nd){
 
 window.delTrig=async function(id){
   if(!confirm('Удалить триггер?')) return;
-  await api(`/api/triggers/${id}`,{method:'DELETE'});
-  S.triggers=S.triggers.filter(t=>t.id!==id&&t.id!=id);
-  buildLayout(); updStats(); closeRP();
+  const r=await api(`/api/triggers/${id}`,{method:'DELETE'});
+  if(!r || r.error){ toast('⚠️ Не удалось удалить','e'); return; }
+  closeRP();
+  await refreshData();
   toast('🗑 Триггер удалён','i');
 };
 
@@ -1091,9 +1105,7 @@ function renderWiz(){
     <div class="steps">${dots}</div>
     <div class="tcards">${[
       {id:'NEW_FOLLOWER', cls:'tc-f',icon:'💜',name:'Новый подписчик',desc:'Когда кто-то подписывается'},
-      {id:'NEW_COMMENT',  cls:'tc-c',icon:'💚',name:'Новый комментарий',desc:'Когда оставляют комментарий'},
-      {id:'NEW_LIKE',     cls:'tc-l',icon:'🩷',name:'Новый лайк',desc:'Когда ставят лайк'},
-      {id:'STORY_MENTION',cls:'tc-s',icon:'🧡',name:'Ответ на сторис',desc:'Когда упоминают в сторис'}
+      {id:'NEW_COMMENT',  cls:'tc-c',icon:'💚',name:'Новый комментарий',desc:'Когда оставляют комментарий'}
     ].map(t=>`<div class="tc ${t.cls} ${w.type===t.id?'sel':''}" onclick="pickType('${t.id}')">
       <div class="ti2">${t.icon}</div><div class="tn">${t.name}</div><div class="td">${t.desc}</div>
     </div>`).join('')}</div>
@@ -1154,16 +1166,15 @@ window.wizDone=async function(){
   const w=S.wiz;
   const payload={name:w.name||TL[w.type],type:T2A[w.type],accountIds:[w.accId],message:w.msg,delayMin:w.dmin,delayMax:w.dmax};
   const result=await api('/api/triggers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  const acc=S.accounts.find(a=>String(a.id)===String(w.accId));
-  const newId=result?result.id:'local-'+Date.now();
-  S.triggers.push({
-    id:newId,name:payload.name,triggerType:w.type,isActive:true,
-    fireCount:0,responderId:w.accId,responder:{username:acc?acc.username:''}
-  });
-  S.totalDMs=S.triggers.reduce((s,t)=>s+(t.fireCount||0),0);
-  buildLayout(); updStats(); closeMod();
-  const newNd=S.nodes.find(n=>n.type==='TRIGGER'&&n.trig&&n.trig.id===newId);
-  if(newNd) burst(newNd.x,newNd.y,TC[w.type]||'#8b5cf6',28);
+  // Ошибка сервера (например неподдерживаемый тип) — не делаем вид, что создали
+  if(!result || result.error || result.ok===false){
+    toast('⚠️ '+((result&&result.error)||'Не удалось создать триггер'),'e');
+    return;
+  }
+  closeMod();
+  await refreshData();           // авторитетные данные с сервера
+  const nd=S.nodes.find(n=>n.type==='TRIGGER'&&n.trig&&n.trig.responderId===w.accId&&n.trig.triggerType===w.type);
+  if(nd) burst(nd.x,nd.y,TC[w.type]||'#8b5cf6',28);
   toast('✅ Триггер создан!','s');
 };
 

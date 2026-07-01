@@ -5,12 +5,12 @@ const prisma = new PrismaClient()
 
 async function main() {
   const user = await prisma.user.upsert({
-    where: { email: 'demo@instaguard.com' },
+    where: { email: 'sosiktommy@gmail.com' },
     update: {},
     create: {
-      email: 'demo@instaguard.com',
-      name: 'Demo User',
-      password: hashSync('demo1234', 10),
+      email: 'sosiktommy@gmail.com',
+      name: 'Owner',
+      password: hashSync('Qwerty123!@#', 10),
     },
   })
 
@@ -38,7 +38,7 @@ async function main() {
     ],
   })
 
-  console.log('✅ Seed data created — demo@instaguard.com / demo1234')
+  console.log('✅ Seed data created — sosiktommy@gmail.com')
 }
 
 main()

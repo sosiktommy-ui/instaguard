@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'InstaGuard',
-  description: 'Instagram automation & protection platform',
+  title: 'ShadowGram',
+  description: 'Instagram automation platform',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

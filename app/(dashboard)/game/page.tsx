@@ -8,7 +8,7 @@ export default function GamePage() {
         src="/game/index.html"
         className="w-full h-full border-0"
         allow="fullscreen"
-        title="InstaGuard Command Center"
+        title="ShadowGram Command Center"
       />
     </div>
   )
