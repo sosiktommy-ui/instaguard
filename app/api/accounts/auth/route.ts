@@ -49,7 +49,8 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const user = await prisma.user.findFirst()
+    // Владелец = первый пользователь по createdAt (как в getUserOrFirst) — единый для всех данных
+    const user = await prisma.user.findFirst({ orderBy: { createdAt: 'asc' } })
     if (!user) {
       return NextResponse.json({ error: 'Нет пользователя в БД. Запустите seed.' }, { status: 500 })
     }
