@@ -71,6 +71,7 @@ enum SnapshotType {
   FOLLOWERS
   LIKES
   COMMENTS
+  STORY
 }
 
 model Event {

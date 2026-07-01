@@ -34,8 +34,9 @@ export async function POST(req: NextRequest) {
 
   const triggerType = TYPE_MAP[type]
   if (!triggerType) return NextResponse.json({ error: 'Неизвестный тип события' }, { status: 400 })
-  // Пока исполняются только «Новая подписка» и «Комментарий» — не даём создавать «мёртвые» триггеры
-  if (triggerType !== 'NEW_FOLLOWER' && triggerType !== 'NEW_COMMENT') {
+  // Исполняемые типы: подписка, комментарий, лайк, ответ/упоминание в сторис
+  const SUPPORTED = ['NEW_FOLLOWER', 'NEW_COMMENT', 'NEW_LIKE', 'STORY_MENTION']
+  if (!SUPPORTED.includes(triggerType)) {
     return NextResponse.json({ error: 'Этот тип триггера пока не поддерживается (скоро)' }, { status: 400 })
   }
 

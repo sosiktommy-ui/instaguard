@@ -389,6 +389,88 @@ def get_recent_comments(session_data: dict, username: str, proxy: str | None = N
     return out
 
 
+def get_recent_likers(session_data: dict, username: str, proxy: str | None = None,
+                      media_count: int = 3, per_media: int = 50) -> list[dict]:
+    """Собрать пользователей, лайкнувших последние посты аккаунта.
+    Возвращает [{pk, username, media_id}], исключая собственные лайки и дубли."""
+    cl = build_client(session_data, proxy)
+    own_id = str(cl.user_id)
+    user_id = cl.user_id_from_username(username)
+    medias = cl.user_medias(user_id, amount=media_count)
+    out: list[dict] = []
+    seen: set[str] = set()
+    for m in medias:
+        try:
+            likers = cl.media_likers(m.id)
+        except Exception as e:
+            logger.warning("media_likers failed for %s: %s", m.id, e)
+            continue
+        for u in likers[:per_media]:
+            uid = str(u.pk)
+            if uid == own_id or uid in seen:
+                continue
+            seen.add(uid)
+            out.append({"pk": uid, "username": u.username, "media_id": str(m.id)})
+    logger.info("get_recent_likers: @%s → %d likers", username, len(out))
+    return out
+
+
+def get_story_events(session_data: dict, proxy: str | None = None, amount: int = 10) -> list[dict]:
+    """Собрать входящие story-события из директа: ответы на наши сторис (reply) и
+    упоминания нас в чужих сторис (mention). Возвращает [{pk, user_pk, username, text, kind}].
+    Разбор дефенсивный — при неожиданной структуре пропускаем элемент."""
+    cl = build_client(session_data, proxy)
+    own_id = str(cl.user_id)
+    out: list[dict] = []
+
+    threads = []
+    try:
+        threads = list(cl.direct_threads(amount=amount))
+    except Exception as e:
+        logger.warning("direct_threads failed: %s", e)
+    try:
+        threads += list(cl.direct_pending_inbox(amount=amount))
+    except Exception as e:
+        logger.warning("direct_pending_inbox failed: %s", e)
+
+    def _get(obj, key):
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    for t in threads:
+        users = _get(t, "users") or []
+        uname_by_pk = {str(_get(u, "pk")): (_get(u, "username") or "") for u in users}
+        for it in (_get(t, "messages") or []):
+            try:
+                itype = (_get(it, "item_type") or "")
+                uid = str(_get(it, "user_id") or "")
+                if not uid or uid == own_id:
+                    continue
+                kind = None
+                text = ""
+                if itype == "reel_share":
+                    rs = _get(it, "reel_share")
+                    rtype = (_get(rs, "type") or "") if rs is not None else ""
+                    text = (_get(rs, "text") or "") if rs is not None else ""
+                    kind = "mention" if rtype == "mention" else "reply"
+                elif itype == "story_share":
+                    kind = "mention"
+                if not kind:
+                    continue
+                out.append({
+                    "pk": str(_get(it, "id") or _get(it, "item_id") or ""),
+                    "user_pk": uid,
+                    "username": uname_by_pk.get(uid, ""),
+                    "text": text,
+                    "kind": kind,
+                })
+            except Exception as e:
+                logger.warning("story event parse failed: %s", e)
+    logger.info("get_story_events: %d events", len(out))
+    return out
+
+
 def reply_to_comment(session_data: dict, media_id: str, text: str,
                      comment_id: str | None = None, proxy: str | None = None) -> dict:
     """Ответить комментарием под постом (опционально — реплаем на конкретный комментарий)."""

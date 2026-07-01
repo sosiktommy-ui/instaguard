@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import {
   getFollowers, getComments, sendDM, sendDMPhoto, replyComment, likeComment,
   getFriendship, viewStories, followUser, likeLatestMedia, likeUserMedias,
+  getLikers, getStoryEvents,
 } from '@/lib/instagram/client'
 import { Queue } from 'bullmq'
 import { loadCounters, consume, MAX_NEW_PER_POLL, type Counters } from '@/lib/limits'
@@ -13,6 +14,14 @@ const COMMENT_LIKE_POSTS = 3
 const POLL_COOLDOWN_MS = 20 * 60 * 1000
 // Комментарии проверяем реже — раз в 60 минут (они меняются медленнее)
 const COMMENT_COOLDOWN_MS = 60 * 60 * 1000
+// Лайки и стори-события — тоже реже подписчиков
+const LIKE_COOLDOWN_MS = 30 * 60 * 1000
+const STORY_COOLDOWN_MS = 60 * 60 * 1000
+// Сколько последних постов сканировать на лайкнувших и сколько лайков с поста брать
+const LIKERS_MEDIA_COUNT = 3
+const LIKERS_PER_MEDIA = 50
+// Сколько тредов директа читать на предмет ответов/упоминаний в сторис
+const STORY_EVENTS_AMOUNT = 15
 // Сколько последних подписчиков запрашивать у Instagram (лимит безопасности)
 const FOLLOWERS_FETCH_LIMIT = 50
 // Сколько последних постов и комментариев под каждым сканировать
@@ -34,6 +43,12 @@ function statusFromError(msg: string): 'CHALLENGE' | 'PAUSED' | null {
   if (/challenge|checkpoint|verify|подтвержд/.test(m)) return 'CHALLENGE'
   if (/feedback_required|feedbackrequired|spam|blocked|action.?block|429|login_required|loginrequired|please wait|few minutes/.test(m)) return 'PAUSED'
   return null
+}
+
+// Гейт подписки перед DM: followed_by — он подписан на нас; mutual — взаимная подписка
+type GateMode = 'followed_by' | 'mutual'
+function passesGate(mode: GateMode, fs: { following: boolean; followed_by: boolean }): boolean {
+  return mode === 'mutual' ? (fs.following && fs.followed_by) : fs.followed_by
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -141,7 +156,15 @@ async function runFollowerActionsInline(job: any) {
   let success = false
   const errors: string[] = []
 
-  if (job.text)   { try { await sendDM(session, job.followerPk, job.text, proxy); success = true } catch (e: any) { errors.push(`DM: ${e.message}`) } }
+  if (job.text) {
+    try { await sendDM(session, job.followerPk, job.text, proxy); success = true }
+    catch (e: any) {
+      if (statusFromError(e.message)) throw e  // бан/челлендж/лимит → пусть внешний catch остановит основной
+      errors.push(`директ закрыт: ${e.message}`)  // личка закрыта → мягкий контакт черновым
+      try { await followUser(draftSession, job.followerPk, draftProxy); success = true } catch {}
+      try { await randDelay(2, 5); await likeLatestMedia(draftSession, job.followerPk, draftProxy); success = true } catch {}
+    }
+  }
   if (job.image)  { await randDelay(2, 5); try { await sendDMPhoto(session, job.followerPk, job.image, proxy); success = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
   if (job.doFollow) { await randDelay(3, 7); try { await followUser(draftSession, job.followerPk, draftProxy); success = true } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
   if (job.doLike)   { await randDelay(3, 8); try { await likeLatestMedia(draftSession, job.followerPk, draftProxy); success = true } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
@@ -166,6 +189,8 @@ interface PollSummary {
   totalComments: number
   newComments: number
   commentActions: number
+  newLikers?: number
+  newStoryEvents?: number
   limited?: number      // пропущено из-за дневного лимита
   skipped?: string
 }
@@ -243,6 +268,8 @@ export async function POST(req: NextRequest) {
     const triggers = account.triggersAsResponder
     const followerTriggers = triggers.filter((t) => t.triggerType === 'NEW_FOLLOWER')
     const commentTriggers = triggers.filter((t) => t.triggerType === 'NEW_COMMENT')
+    const likeTriggers = triggers.filter((t) => t.triggerType === 'NEW_LIKE')
+    const storyTriggers = triggers.filter((t) => t.triggerType === 'STORY_MENTION')
 
     const session = account.sessionData as object
     const proxy = account.proxy ?? undefined
@@ -256,8 +283,8 @@ export async function POST(req: NextRequest) {
     // Разнесённые задержки: первое действие скоро, дальше с интервалом ~45–115с
     let cursor = (isManual ? 8 + Math.random() * 14 : 45 + Math.random() * 75) * 1000
     const nextGap = () => (45 + Math.random() * 70) * 1000
-    // Кэш «подписан ли на нас» в рамках одной проверки (без повторных запросов к IG)
-    const friendshipCache = new Map<string, boolean>()
+    // Кэш дружбы (following/followed_by) — проверяется сессией основного, один раз на юзера
+    const friendshipCache = new Map<string, { following: boolean; followed_by: boolean }>()
 
     // Черновой-парсер для этого основного (round-robin). Пул тут гарантированно непуст.
     const draft = nextDraft()
@@ -266,6 +293,85 @@ export async function POST(req: NextRequest) {
     const dc = getDraftCounters(draft)          // дневные лимиты чернового
     const parseSession = draft.sessionData as object   // сессия чернового: парсинг + лайк/подписка/сторис
     const parseProxy = draft.proxy ?? undefined
+
+    // Проверка дружбы сессией ОСНОВНОГО (кто подписан именно на него), с кэшем
+    const getFsCached = async (pk: string) => {
+      if (friendshipCache.has(pk)) return friendshipCache.get(pk)!
+      const fs = await getFriendship(session, pk, proxy)
+      const v = { following: Boolean(fs.following), followed_by: Boolean(fs.followed_by) }
+      friendshipCache.set(pk, v)
+      return v
+    }
+
+    // Общий обработчик «целей» (подписчики/лайкнувшие/ответившие на сторис):
+    // DM ставит основной (в очередь), лайк/подписка/сторис — черновой (в job).
+    // withGate=true → перед DM проверяем подписку; не проходит → DM пропускаем.
+    const handleTargets = async (
+      targets: { pk: string; username: string }[],
+      triggersForStream: typeof triggers,
+      withGate: boolean,
+    ) => {
+      for (const trigger of triggersForStream) {
+        const actions = (trigger.actions ?? []) as any[]
+        const isOn = (a: any) => a && a.enabled !== false
+        const msgAction = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
+        const doFollowT = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
+        const doLikeT = actions.some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
+        const storiesAct = actions.find((a: any) => a.type === 'VIEW_STORIES' && isOn(a))
+        if (!msgAction?.templates?.[0] && !doFollowT && !doLikeT && !storiesAct) continue
+
+        const template: string = msgAction?.templates?.[0] ?? ''
+        const link = msgAction?.link
+        const image: string | undefined = msgAction?.image?.enabled ? msgAction.image.url : undefined
+        const gateMode: GateMode | null = withGate && msgAction?.gate ? (msgAction.gate.mode ?? 'followed_by') : null
+
+        for (const target of targets) {
+          // Гейт подписки: если задан и не проходит — DM не шлём (лайк/подписка/сторис остаются)
+          let dmAllowed = Boolean(msgAction?.templates?.[0])
+          if (dmAllowed && gateMode) {
+            try {
+              const fs = await getFsCached(target.pk)
+              if (!passesGate(gateMode, fs)) dmAllowed = false
+            } catch { dmAllowed = false } // не смогли проверить → безопаснее не слать
+          }
+
+          const willDM = dmAllowed && consume(counters, 'dm')
+          const willFollow = doFollowT && consume(dc, 'follow')
+          const willLike = doLikeT && consume(dc, 'like')
+          const willStory = Boolean(storiesAct) && consume(dc, 'story')
+          if (!willDM && !willFollow && !willLike && !willStory) { s.limited = (s.limited ?? 0) + 1; continue }
+
+          let text = willDM ? template.replace(/\{\{username\}\}/gi, target.username) : ''
+          if (willDM && link?.enabled && link.url) {
+            const lt = String(link.text ?? '').replace(/\{\{username\}\}/gi, target.username)
+            text += `\n\n${lt ? lt + ': ' : ''}${link.url}`
+          }
+
+          const job = {
+            sessionData: account.sessionData, accountId: account.id,
+            triggerId: trigger.id, triggerName: trigger.name,
+            followerPk: target.pk, followerUsername: target.username,
+            text: text.trim(), image: willDM ? image : undefined,
+            doFollow: willFollow, doLike: willLike,
+            viewStories: willStory, storyLike: Boolean(storiesAct?.like), proxy: account.proxy,
+            draftSessionData: draft.sessionData, draftProxy: draft.proxy,
+          }
+
+          if (dmQueue) {
+            await dmQueue.add('send', job, {
+              jobId: `dm:${account.id}:${trigger.id}:${target.pk}`,
+              delay: Math.round(cursor), attempts: 1,
+              removeOnComplete: true, removeOnFail: 100,
+            })
+            cursor += nextGap()
+          } else {
+            await runFollowerActionsInline(job)
+            await randDelay(40, 90)
+          }
+          s.dmsQueued++
+        }
+      }
+    }
 
     try {
       // ── Поток подписчиков ────────────────────────────────────────────────
@@ -289,63 +395,59 @@ export async function POST(req: NextRequest) {
         // Не обрабатываем больше N новых за одну проверку (защита от всплеска)
         if (newFollowers.length > MAX_NEW_PER_POLL) newFollowers = newFollowers.slice(0, MAX_NEW_PER_POLL)
 
-        for (const trigger of followerTriggers) {
-          const actions = (trigger.actions ?? []) as any[]
-          const isOn = (a: any) => a && a.enabled !== false
-          const msgAction = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
-          const doFollowT = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
-          const doLikeT = actions.some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
-          const storiesAct = actions.find((a: any) => a.type === 'VIEW_STORIES' && isOn(a))
-          if (!msgAction?.templates?.[0] && !doFollowT && !doLikeT && !storiesAct) continue
+        // Подписчик уже подписан на нас — гейт не нужен
+        await handleTargets(
+          newFollowers.map((f) => ({ pk: String(f.pk), username: f.username })),
+          followerTriggers, false,
+        )
+      }
 
-          const template: string = msgAction?.templates?.[0] ?? ''
-          const link = msgAction?.link
-          const image: string | undefined = msgAction?.image?.enabled ? msgAction.image.url : undefined
+      // ── Поток лайков (отдельный кулдаун) ─────────────────────────────────
+      const snapLikesMeta = account.snapshots.find((sn) => sn.type === 'LIKES')
+      const likeElapsed = snapLikesMeta ? Date.now() - new Date(snapLikesMeta.createdAt).getTime() : Infinity
+      if (likeTriggers.length && (isManual || likeElapsed >= LIKE_COOLDOWN_MS)) {
+        const { likers } = await getLikers(parseSession, account.username, parseProxy, LIKERS_MEDIA_COUNT, LIKERS_PER_MEDIA)
+        const hadBaseline = Boolean(snapLikesMeta)
+        const knownL = extractKnownPks(snapLikesMeta?.data)
+        let newLikers = hadBaseline ? likers.filter((l) => !knownL.has(String(l.pk))) : []
+        likers.forEach((l) => knownL.add(String(l.pk)))
 
-          for (const follower of newFollowers) {
-            // Резервируем дневной бюджет по каждому действию — что не влезло, пропускаем
-            // DM — лимит основного; лайк/подписка/сторис — лимит чернового (их делает он)
-            const willDM = Boolean(msgAction?.templates?.[0]) && consume(counters, 'dm')
-            const willFollow = doFollowT && consume(dc, 'follow')
-            const willLike = doLikeT && consume(dc, 'like')
-            const willStory = Boolean(storiesAct) && consume(dc, 'story')
-            if (!willDM && !willFollow && !willLike && !willStory) { s.limited = (s.limited ?? 0) + 1; continue }
+        await prisma.$transaction([
+          prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'LIKES' } }),
+          prisma.snapshot.create({ data: { accountId: account.id, type: 'LIKES', data: capPks(knownL, SNAPSHOT_MAX) } }),
+        ])
 
-            let text = willDM ? template.replace(/\{\{username\}\}/gi, follower.username) : ''
-            if (willDM && link?.enabled && link.url) {
-              const lt = String(link.text ?? '').replace(/\{\{username\}\}/gi, follower.username)
-              text += `\n\n${lt ? lt + ': ' : ''}${link.url}`
-            }
+        s.newLikers = newLikers.length
+        if (newLikers.length > MAX_NEW_PER_POLL) newLikers = newLikers.slice(0, MAX_NEW_PER_POLL)
+        // Гейт: лайкнувший может быть не подписан → DM пропускается (лайк/подписка/сторис остаются)
+        await handleTargets(
+          newLikers.map((l) => ({ pk: String(l.pk), username: l.username })),
+          likeTriggers, true,
+        )
+      }
 
-            const job = {
-              sessionData: account.sessionData, accountId: account.id,
-              triggerId: trigger.id, triggerName: trigger.name,
-              followerPk: follower.pk, followerUsername: follower.username,
-              text: text.trim(), image: willDM ? image : undefined,
-              doFollow: willFollow, doLike: willLike,
-              viewStories: willStory, storyLike: Boolean(storiesAct?.like), proxy: account.proxy,
-              // Сессия чернового: подписку/лайк/сторис исполняет он, не основной
-              draftSessionData: draft.sessionData, draftProxy: draft.proxy,
-            }
+      // ── Поток стори-событий: ответы на мои сторис + упоминания (сессией основного) ──
+      const snapStoryMeta = account.snapshots.find((sn) => sn.type === 'STORY')
+      const storyElapsed = snapStoryMeta ? Date.now() - new Date(snapStoryMeta.createdAt).getTime() : Infinity
+      if (storyTriggers.length && (isManual || storyElapsed >= STORY_COOLDOWN_MS)) {
+        // Входящие story-события видит только основной аккаунт (это его личка)
+        const { events } = await getStoryEvents(session, proxy, STORY_EVENTS_AMOUNT)
+        const hadBaseline = Boolean(snapStoryMeta)
+        const knownS = extractKnownPks(snapStoryMeta?.data)
+        let newEvents = hadBaseline ? events.filter((e) => e.pk && !knownS.has(String(e.pk))) : []
+        events.forEach((e) => { if (e.pk) knownS.add(String(e.pk)) })
 
-            // Всегда через очередь с разнесёнными задержками (безопасно + без таймаута запроса).
-            // Инлайн — только если нет Redis.
-            if (dmQueue) {
-              // jobId — идемпотентность: один и тот же (аккаунт+триггер+подписчик) не задвоится;
-              // attempts:1 — без авто-ретрая, чтобы упавший воркер не отправил DM повторно.
-              await dmQueue.add('send', job, {
-                jobId: `dm:${account.id}:${trigger.id}:${follower.pk}`,
-                delay: Math.round(cursor), attempts: 1,
-                removeOnComplete: true, removeOnFail: 100,
-              })
-              cursor += nextGap()
-            } else {
-              await runFollowerActionsInline(job)
-              await randDelay(40, 90)
-            }
-            s.dmsQueued++
-          }
-        }
+        await prisma.$transaction([
+          prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'STORY' } }),
+          prisma.snapshot.create({ data: { accountId: account.id, type: 'STORY', data: capPks(knownS, SNAPSHOT_MAX) } }),
+        ])
+
+        s.newStoryEvents = newEvents.length
+        if (newEvents.length > MAX_NEW_PER_POLL) newEvents = newEvents.slice(0, MAX_NEW_PER_POLL)
+        await handleTargets(
+          newEvents.map((e) => ({ pk: String(e.user_pk), username: e.username })),
+          storyTriggers, true,
+        )
       }
 
       // ── Поток комментариев (отдельный кулдаун — реже чем подписчики) ────
@@ -381,7 +483,12 @@ export async function POST(req: NextRequest) {
 
             const dm = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
             const reply = actions.find((a: any) => a.type === 'REPLY_COMMENT' && isOn(a))
-            const gate = actions.find((a: any) => a.type === 'COMMENT_GATE' && isOn(a))
+            const legacyGate = actions.find((a: any) => a.type === 'COMMENT_GATE' && isOn(a))
+            // Гейт подписки: новый формат — dm.gate {mode, inviteText}; старый — экшен COMMENT_GATE {text}
+            const gateCfg: { mode: GateMode; inviteText: string } | null =
+              dm?.gate ? { mode: (dm.gate.mode ?? 'followed_by'), inviteText: String(dm.gate.inviteText ?? '') }
+              : legacyGate ? { mode: 'followed_by' as GateMode, inviteText: String(legacyGate.text ?? '') }
+              : null
             // «Лайк» в триггере комментарий = лайкнуть посты автора (LIKE_MEDIA); LIKE_COMMENT — легаси (лайк коммента)
             const doLikePosts = actions.some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
             const likeCmt = actions.some((a: any) => a.type === 'LIKE_COMMENT' && isOn(a))
@@ -392,21 +499,14 @@ export async function POST(req: NextRequest) {
             let gatedStop = false
             const errors: string[] = []
 
-            // Проверка подписки: если автор НЕ подписан — только коммент-приглашение, стоп
-            if (gate) {
-              let isFollower = false
-              if (friendshipCache.has(c.user_pk)) {
-                isFollower = friendshipCache.get(c.user_pk)!
-              } else {
-                try {
-                  const fs = await getFriendship(session, c.user_pk, proxy)
-                  isFollower = Boolean(fs.followed_by)
-                  friendshipCache.set(c.user_pk, isFollower)
-                } catch (e: any) { errors.push(`проверка подписки: ${e.message}`) }
-              }
+            // Проверка подписки: если автор НЕ проходит гейт — только коммент-приглашение, стоп
+            if (gateCfg) {
+              let ok = false
+              try { ok = passesGate(gateCfg.mode, await getFsCached(c.user_pk)) }
+              catch (e: any) { errors.push(`проверка подписки: ${e.message}`) }
 
-              if (!isFollower) {
-                const gateText = String(gate.text ?? '').replace(/\{\{username\}\}/gi, c.username)
+              if (!ok) {
+                const gateText = gateCfg.inviteText.replace(/\{\{username\}\}/gi, c.username)
                 if (gateText && consume(counters, 'comment')) {
                   try { await replyComment(session, c.media_id, gateText, c.pk, proxy); fired = true }
                   catch (e: any) { errors.push(`коммент-приглашение: ${e.message}`) }
@@ -453,7 +553,13 @@ export async function POST(req: NextRequest) {
                     await randDelay(2, 4)
                     await sendDMPhoto(session, c.user_pk, dm.image.url, proxy)
                   }
-                } catch (e: any) { errors.push(`DM: ${e.message}`) }
+                } catch (e: any) {
+                  if (statusFromError(e.message)) throw e  // бан/челлендж/лимит → основной на паузу
+                  // Личка закрыта / не доставлено → мягкий контакт черновым (follow + лайк)
+                  errors.push(`директ закрыт: ${e.message}`)
+                  if (consume(dc, 'follow')) { try { await followUser(parseSession, c.user_pk, parseProxy); fired = true } catch {} }
+                  if (consume(dc, 'like'))   { await randDelay(2, 5); try { await likeLatestMedia(parseSession, c.user_pk, parseProxy); fired = true } catch {} }
+                }
               }
               if (storiesAct && consume(dc, 'story')) {
                 await randDelay(3, 7)

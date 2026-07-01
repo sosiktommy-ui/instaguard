@@ -85,6 +85,18 @@ export async function getFollowers(session: object, username: string, proxy?: st
   )
 }
 
+export interface IgLiker { pk: string; username: string; media_id: string }
+
+export async function getLikers(session: object, username: string, proxy?: string, mediaCount = 3, perMedia = 50) {
+  return workerFetch<{ likers: IgLiker[] }>('/media-likers', { sessionData: session, username, proxy, mediaCount, perMedia })
+}
+
+export interface IgStoryEvent { pk: string; user_pk: string; username: string; text: string; kind: 'reply' | 'mention' }
+
+export async function getStoryEvents(session: object, proxy?: string, amount = 10) {
+  return workerFetch<{ events: IgStoryEvent[] }>('/story-events', { sessionData: session, proxy, amount })
+}
+
 export async function testSession(session: object, proxy?: string): Promise<boolean> {
   try {
     const data = await workerFetch<{ ok: boolean }>('/test-session', { sessionData: session, proxy })

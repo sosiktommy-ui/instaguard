@@ -81,7 +81,18 @@ export async function register() {
         const rd = (a: number, b: number) => new Promise<void>((r) => setTimeout(r, Math.round((a + Math.random() * (b - a)) * 1000)))
         let success = false
         const errors: string[] = []
-        if (text)     { try { await call('/send-dm', { sessionData, toUserId: followerPk, text, proxy }); success = true } catch (e: any) { errors.push(`DM: ${e.message}`) } }
+        if (text) {
+          try { await call('/send-dm', { sessionData, toUserId: followerPk, text, proxy }); success = true }
+          catch (e: any) {
+            const m = (e.message || '').toLowerCase()
+            // бан/челлендж/лимит → пробрасываем (обработчик failed остановит основной)
+            if (/challenge|checkpoint|verify|feedback_required|spam|blocked|action.?block|429|login_required|please wait|few minutes/.test(m)) throw e
+            // личка закрыта / не доставлено → мягкий контакт черновым (follow + лайк)
+            errors.push(`директ закрыт: ${e.message}`)
+            try { await call('/follow-user', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true } catch {}
+            try { await rd(2, 5); await call('/like-latest-media', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true } catch {}
+          }
+        }
         if (image)    { await rd(2, 5); try { await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy }); success = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
         if (doFollow) { await rd(3, 8); try { await call('/follow-user', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
         if (doLike)   { await rd(4, 10); try { await call('/like-latest-media', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true } catch (e: any) { errors.push(`лайк: ${e.message}`) } }

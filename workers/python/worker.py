@@ -109,6 +109,20 @@ class ChallengeCodePayload(BaseModel):
     code: str
 
 
+class LikersPayload(BaseModel):
+    sessionData: dict
+    username: str
+    proxy: str | None = None
+    mediaCount: int = 3
+    perMedia: int = 50
+
+
+class StoryEventsPayload(BaseModel):
+    sessionData: dict
+    proxy: str | None = None
+    amount: int = 10
+
+
 @app.post("/login-cookies")
 def login_cookies(payload: CookiePayload, x_worker_secret: str = Header(...)):
     _check_secret(x_worker_secret)
@@ -293,6 +307,28 @@ def user_stories(payload: StoriesPayload, x_worker_secret: str = Header(...)):
         return ig.view_stories_natural(payload.sessionData, payload.userId, payload.like, payload.proxy)
     except Exception as e:
         logging.error("user_stories error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/media-likers")
+def media_likers(payload: LikersPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        result = ig.get_recent_likers(payload.sessionData, payload.username, payload.proxy, payload.mediaCount, payload.perMedia)
+        return {"likers": result}
+    except Exception as e:
+        logging.error("media_likers error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/story-events")
+def story_events(payload: StoryEventsPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        result = ig.get_story_events(payload.sessionData, payload.proxy, payload.amount)
+        return {"events": result}
+    except Exception as e:
+        logging.error("story_events error: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
 
 

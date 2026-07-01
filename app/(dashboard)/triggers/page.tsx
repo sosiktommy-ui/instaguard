@@ -28,8 +28,8 @@ function Hint({ text }: { text: string }) {
 const TRIG_META = [
   { key: 'FOLLOW',      db: 'NEW_FOLLOWER',  label: 'Новая подписка',  desc: 'Основной триггер — ответ новым подписчикам', Icon: UserPlus,      color: '#0071e3', soon: false },
   { key: 'COMMENT',     db: 'NEW_COMMENT',   label: 'Комментарий',     desc: 'Реакция на комментарии под постами',         Icon: MessageCircle, color: '#34c759', soon: false },
-  { key: 'LIKE',        db: 'NEW_LIKE',      label: 'Лайк',            desc: 'Скоро — реакция на лайки',                   Icon: Heart,         color: '#ff2d92', soon: true },
-  { key: 'STORY_REPLY', db: 'STORY_MENTION', label: 'Ответ на сторис', desc: 'Скоро — ответы на ваши истории',             Icon: Clapperboard,  color: '#ff9f0a', soon: true },
+  { key: 'LIKE',        db: 'NEW_LIKE',      label: 'Лайк',            desc: 'Реакция на лайки ваших постов',              Icon: Heart,         color: '#ff2d92', soon: false },
+  { key: 'STORY_REPLY', db: 'STORY_MENTION', label: 'Ответ на сторис', desc: 'Ответы и упоминания в сторис',               Icon: Clapperboard,  color: '#ff9f0a', soon: false },
 ] as const
 
 type MetaKey = typeof TRIG_META[number]['key']
@@ -165,6 +165,7 @@ const PLATE_TIP: Record<PlateState, string> = {
 
 // ── Черновик триггера (используется и для шаблонов) ───────────────────────────
 type MatchMode = 'all' | 'specific'
+type GateMode = 'followed_by' | 'mutual'
 
 interface Draft {
   type: TriggerType
@@ -174,8 +175,8 @@ interface Draft {
   actLikeComment: boolean; actCommentReply: boolean
   // сторис (общее для всех событий)
   actStories: boolean; storyView: boolean; storyLike: boolean
-  // проверка подписки (комментарий)
-  cmtCheckSub: boolean; cmtGateText: string
+  // проверка подписки перед DM (комментарий/лайк/сторис)
+  dmGate: boolean; dmGateMode: GateMode; cmtGateText: string
   name: string; message: string
   customOn: boolean
   linkOn: boolean; linkText: string; linkUrl: string
@@ -191,7 +192,7 @@ const DEFAULT_DRAFT: Draft = {
   actDM: true, actLike: false, actFollow: false,
   actLikeComment: false, actCommentReply: false,
   actStories: false, storyView: true, storyLike: false,
-  cmtCheckSub: false, cmtGateText: 'Подпишись, чтобы я смог написать тебе в директ 💌',
+  dmGate: false, dmGateMode: 'followed_by', cmtGateText: 'Подпишись, чтобы я смог написать тебе в директ 💌',
   name: '',
   message: 'Привет, @{{username}}! Вижу, ты заинтересован в наших мероприятиях. Скажи, чем могу помочь? 🙌',
   customOn: false,
@@ -216,13 +217,14 @@ function buildActions(d: Draft): any[] {
     delayMin: d.delayMin, delayMax: d.delayMax,
     link: d.customOn && d.linkOn ? { enabled: true, text: d.linkText, url: d.linkUrl } : undefined,
     image: d.image ? { enabled: true, url: d.image } : undefined,
+    // Гейт подписки: для комментария — с текстом-приглашением; для лайка/сторис — просто пропуск DM
+    gate: d.dmGate ? { mode: d.dmGateMode, inviteText: d.type === 'COMMENT' ? d.cmtGateText : undefined } : undefined,
   })
   const stories = () => ({ type: 'VIEW_STORIES', enabled: true, like: d.storyLike })
 
   if (d.type === 'COMMENT') {
     if (d.actDM) actions.push(msg())
     if (d.actCommentReply) actions.push({ type: 'REPLY_COMMENT', enabled: true, replies: d.commentReplies.map((x) => x.trim()).filter(Boolean) })
-    if (d.actDM && d.cmtCheckSub) actions.push({ type: 'COMMENT_GATE', enabled: true, text: d.cmtGateText })
     // «Лайк» в комментарии = зайти к автору и лайкнуть его посты
     if (d.actLikeComment) actions.push({ type: 'LIKE_MEDIA', enabled: true })
     if (d.actFollow) actions.push({ type: 'FOLLOW_BACK', enabled: true })
@@ -252,7 +254,7 @@ function TriggerCard({ trigger, onToggle, onDelete, index = 0 }: {
   const hasLike = actions.some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
   const hasLikeComment = actions.some((a: any) => a.type === 'LIKE_COMMENT' && isOn(a))
   const hasFollow = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
-  const hasGate = actions.some((a: any) => a.type === 'COMMENT_GATE' && isOn(a))
+  const hasGate = Boolean(msg?.gate) || actions.some((a: any) => a.type === 'COMMENT_GATE' && isOn(a))
   const storiesAct = actions.find((a: any) => a.type === 'VIEW_STORIES' && isOn(a))
   const isComment = trigger.triggerType === 'NEW_COMMENT'
   const sigSpecific = isComment && trigger.conditions?.mode === 'specific'
@@ -482,6 +484,45 @@ function MessageBlock({ d, set, fileRef, onPickImage }: {
   )
 }
 
+// Гейт подписки перед DM (комментарий/лайк/сторис). Для комментария — с текстом-приглашением.
+function GateBlock({ d, set }: { d: Draft; set: <K extends keyof Draft>(k: K, v: Draft[K]) => void }) {
+  const isComment = d.type === 'COMMENT'
+  return (
+    <div className={cn('rounded-2xl border-2 p-3 transition-all', d.dmGate ? 'border-brand bg-brand/5' : 'border-line/70')}>
+      <button onClick={() => set('dmGate', !d.dmGate)} className="w-full flex items-center gap-2.5 text-left">
+        <span className={cn('w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0', d.dmGate ? 'bg-brand border-brand' : 'border-line')}>
+          {d.dmGate && <Check className="w-3 h-3 text-white" />}
+        </span>
+        <UserCheck className="w-4 h-4" style={{ color: d.dmGate ? '#0071e3' : '#6e6e73' }} />
+        <span className="text-[13px] font-semibold">Проверять подписку перед DM</span>
+      </button>
+      {d.dmGate && (
+        <div className="mt-2.5 pl-7 space-y-2">
+          <div className="segment w-full">
+            <button onClick={() => set('dmGateMode', 'followed_by')}
+              className={cn('flex-1 py-1.5 rounded-xl text-[12px] font-medium transition-colors', d.dmGateMode === 'followed_by' ? 'bg-white shadow-sm text-ink' : 'text-subt')}>
+              Подписан на нас
+            </button>
+            <button onClick={() => set('dmGateMode', 'mutual')}
+              className={cn('flex-1 py-1.5 rounded-xl text-[12px] font-medium transition-colors', d.dmGateMode === 'mutual' ? 'bg-white shadow-sm text-ink' : 'text-subt')}>
+              Взаимная подписка
+            </button>
+          </div>
+          {isComment ? (
+            <>
+              <div className="text-[10.5px] text-subt leading-snug">Если условие НЕ выполнено — бот пишет приглашение в комментарии и НЕ шлёт DM. Если выполнено — отвечает и шлёт DM.</div>
+              <textarea value={d.cmtGateText} onChange={(e) => set('cmtGateText', e.target.value)}
+                className="field h-14 resize-none py-1.5 text-[12px]" placeholder="Текст для неподписанных (напр. «Подпишись, чтобы получить DM 💌»)" />
+            </>
+          ) : (
+            <div className="text-[10.5px] text-subt leading-snug">Если условие НЕ выполнено — DM просто пропускается. Лайк / подписка / сторис (если включены) всё равно выполнятся.</div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Группа «Сторис»: просмотр + лайк
 function StoriesBlock({ d, set }: { d: Draft; set: <K extends keyof Draft>(k: K, v: Draft[K]) => void }) {
   return (
@@ -555,7 +596,7 @@ function CreateForm({
     : (d.actDM || d.actLike || d.actFollow || d.actStories)
   const dmOk = !d.actDM || d.message.trim() !== ''
   const crOk = !isComment || !d.actCommentReply || repliesFilled >= 5
-  const gateOk = !isComment || !d.cmtCheckSub || d.cmtGateText.trim() !== ''
+  const gateOk = !isComment || !d.dmGate || d.cmtGateText.trim() !== ''
   const sigOk = !isComment || matchOk
   const storiesOk = !d.actStories || d.storyView || d.storyLike
   const canSave = selected.length > 0 && d.name.trim() !== '' && anyAction && dmOk && crOk && gateOk && sigOk && storiesOk
@@ -778,25 +819,8 @@ function CreateForm({
               {/* ════ КОММЕНТАРИЙ ════ */}
               {isComment ? (
                 <>
-                  {/* Крупная галочка «Проверять подписку» — выше сигнала (часть директа) */}
-                  {d.actDM && (
-                    <div className={cn('rounded-2xl border-2 p-3 transition-all', d.cmtCheckSub ? 'border-brand bg-brand/5' : 'border-line/70')}>
-                      <button onClick={() => set('cmtCheckSub', !d.cmtCheckSub)} className="w-full flex items-center gap-2.5 text-left">
-                        <span className={cn('w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0', d.cmtCheckSub ? 'bg-brand border-brand' : 'border-line')}>
-                          {d.cmtCheckSub && <Check className="w-3 h-3 text-white" />}
-                        </span>
-                        <UserCheck className="w-4 h-4" style={{ color: d.cmtCheckSub ? '#0071e3' : '#6e6e73' }} />
-                        <span className="text-[13px] font-semibold">Проверять подписку</span>
-                      </button>
-                      {d.cmtCheckSub && (
-                        <div className="mt-2.5 pl-7 space-y-1.5">
-                          <div className="text-[10.5px] text-subt leading-snug">Если автор НЕ подписан — бот пишет приглашение в комментарии и НЕ шлёт DM. Если подписан — отвечает и шлёт DM.</div>
-                          <textarea value={d.cmtGateText} onChange={(e) => set('cmtGateText', e.target.value)}
-                            className="field h-14 resize-none py-1.5 text-[12px]" placeholder="Текст для неподписанных (напр. «Подпишись, чтобы получить DM 💌»)" />
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  {/* Проверка подписки — выше сигнала (часть директа) */}
+                  {d.actDM && <GateBlock d={d} set={set} />}
 
                   {/* Группа «Сигнал» — на что реагировать (общая для всего триггера) */}
                   <Group title="Сигнал — на что реагировать" icon={Filter} accent="#5e5ce6">
@@ -837,12 +861,14 @@ function CreateForm({
               ) : (
                 /* ════ ПОДПИСКА / ЛАЙК / СТОРИС ════ */
                 <>
+                  {/* Гейт подписки — для Лайка/Сторис (у подписчика он не нужен: он уже подписан) */}
+                  {d.actDM && (d.type === 'LIKE' || d.type === 'STORY_REPLY') && <GateBlock d={d} set={set} />}
                   {d.actDM && (
                     <Group title="Сообщение" icon={Send}>
                       <MessageBlock d={d} set={set} fileRef={fileRef} onPickImage={onPickImage} />
                     </Group>
                   )}
-                  {d.actFollow && <div className="text-[10.5px] text-subt -mt-1">↳ Подписаться в ответ на нового подписчика</div>}
+                  {d.actFollow && d.type === 'FOLLOW' && <div className="text-[10.5px] text-subt -mt-1">↳ Подписаться в ответ на нового подписчика</div>}
                   {d.actStories && <StoriesBlock d={d} set={set} />}
                 </>
               )}
