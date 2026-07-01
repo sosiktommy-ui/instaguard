@@ -6,15 +6,20 @@ export async function register() {
     const { PrismaClient } = await import(/* webpackIgnore: true */ '@prisma/client')
     const { hashSync } = await import(/* webpackIgnore: true */ 'bcryptjs')
     const prisma = new PrismaClient()
-    // Гарантируем, что демо-пользователь (со страницы входа) существует — иначе после
-    // включения auth-гейта можно остаться заблокированным на старой БД без этого юзера.
+    // Гарантируем, что единственный владелец данных существует и логинится теми
+    // email/паролем, что заданы в переменных Railway — переменные всегда источник
+    // правды, при их смене нужно менять и пароль в уже существующей записи БД,
+    // иначе изменение переменной без редеплоя/пересоздания записи не действует.
     const email = process.env.DEFAULT_USER_EMAIL ?? 'demo@instaguard.com'
     const password = process.env.DEFAULT_USER_PASSWORD ?? 'demo1234'
-    await prisma.user.upsert({
-      where: { email },
-      update: {},
-      create: { email, name: 'Demo', password: hashSync(password, 10) },
-    })
+    const passwordHash = hashSync(password, 10)
+    // Единственный владелец = самый ранний пользователь (та же логика, что и getUserOrFirst)
+    const owner = await prisma.user.findFirst({ orderBy: { createdAt: 'asc' } })
+    if (owner) {
+      await prisma.user.update({ where: { id: owner.id }, data: { email, password: passwordHash } })
+    } else {
+      await prisma.user.create({ data: { email, name: 'Demo', password: passwordHash } })
+    }
     console.log(`[seed] Ensured login user exists: ${email}`)
     if (!process.env.JWT_SECRET) {
       console.warn('[auth] JWT_SECRET is NOT set — using insecure fallback. Set JWT_SECRET in Railway!')
