@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { Zap, LogOut, Menu, X, List, Users, Layers, BarChart3 } from 'lucide-react'
+import { Zap, LogOut, Menu, X, List, Users, Layers, BarChart3, Gamepad2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AppLogo } from '@/components/common/AppLogo'
 
@@ -18,12 +18,12 @@ export default function TopNav() {
   const pathname = usePathname()
   const router = useRouter()
   const [open, setOpen] = useState(false)
-  const superTab: 'triggers' | 'mass' = pathname === '/mass' ? 'mass' : 'triggers'
+  const superTab: 'triggers' | 'mass' | 'game' = pathname === '/mass' ? 'mass' : pathname === '/game' ? 'game' : 'triggers'
 
   // Close drawer on route change
   useEffect(() => { setOpen(false) }, [pathname])
 
-  const SuperTab = ({ id, label, href, beta }: { id: 'triggers' | 'mass'; label: string; href: string; beta?: boolean }) => (
+  const SuperTab = ({ id, label, href, beta }: { id: 'triggers' | 'mass' | 'game'; label: string; href: string; beta?: boolean }) => (
     <Link
       href={href}
       className={cn(
@@ -46,7 +46,7 @@ export default function TopNav() {
           {/* Burger — only meaningful inside Triggers super-tab */}
           <button
             onClick={() => setOpen(true)}
-            disabled={superTab === 'mass'}
+            disabled={superTab === 'mass' || superTab === 'game'}
             className="w-10 h-10 rounded-xl flex items-center justify-center text-ink hover:bg-black/[0.05] transition-colors disabled:opacity-30"
             title="Меню разделов"
           >
@@ -61,13 +61,14 @@ export default function TopNav() {
           <div className="segment ml-1">
             <SuperTab id="triggers" label="Триггеры" href="/triggers" />
             <SuperTab id="mass" label="Массовое управление" href="/mass" beta />
+            <SuperTab id="game" label="Command Center" href="/game" />
           </div>
 
           {/* Current section crumb */}
-          {superTab === 'triggers' && (
+          {(superTab === 'triggers' || superTab === 'game') && (
             <div className="hidden lg:flex items-center gap-2 text-[14px] text-subt ml-2">
               <span className="text-line">/</span>
-              <span className="font-medium text-ink">{crumb}</span>
+              <span className="font-medium text-ink">{superTab === 'game' ? 'Command Center' : crumb}</span>
             </div>
           )}
 
