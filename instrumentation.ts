@@ -54,7 +54,11 @@ export async function register() {
           sessionData, accountId, triggerId, triggerName,
           followerPk, followerUsername, text, image, doFollow, doLike,
           viewStories, storyLike, proxy,
+          draftSessionData, draftProxy,
         } = job.data
+        // Основной шлёт DM/фото; черновой (если передан) делает подписку/лайк/сторис
+        const draftSession = draftSessionData ?? sessionData
+        const dProxy = draftProxy ?? proxy
 
         const workerUrl = process.env.PYTHON_WORKER_URL ?? 'http://localhost:8001'
         const workerSecret = process.env.PYTHON_WORKER_SECRET ?? ''
@@ -79,9 +83,9 @@ export async function register() {
         const errors: string[] = []
         if (text)     { try { await call('/send-dm', { sessionData, toUserId: followerPk, text, proxy }); success = true } catch (e: any) { errors.push(`DM: ${e.message}`) } }
         if (image)    { await rd(2, 5); try { await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy }); success = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
-        if (doFollow) { await rd(3, 8); try { await call('/follow-user', { sessionData, userId: followerPk, proxy }); success = true } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
-        if (doLike)   { await rd(4, 10); try { await call('/like-latest-media', { sessionData, userId: followerPk, proxy }); success = true } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
-        if (viewStories) { await rd(5, 12); try { await call('/user-stories', { sessionData, userId: followerPk, like: storyLike, proxy }); success = true } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
+        if (doFollow) { await rd(3, 8); try { await call('/follow-user', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
+        if (doLike)   { await rd(4, 10); try { await call('/like-latest-media', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
+        if (viewStories) { await rd(5, 12); try { await call('/user-stories', { sessionData: draftSession, userId: followerPk, like: storyLike, proxy: dProxy }); success = true } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
 
         if (success) {
           await Promise.all([

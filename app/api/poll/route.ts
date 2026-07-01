@@ -55,6 +55,30 @@ function getDmQueue() {
   return new Queue('dm-send', { connection: { url } })
 }
 
+/**
+ * Тревога владельцу: громкий лог на затронутые аккаунты (виден в /logs) + опциональный
+ * внешний вебхук (ALERT_WEBHOOK_URL) — сюда можно повесить SMS/email-провайдера.
+ * НЕ дублируем алерт чаще раза в 3 часа (по последнему такому логу), чтобы не спамить.
+ */
+const ALERT_COOLDOWN_MS = 3 * 60 * 60 * 1000
+async function notifyOwner(accountIds: string[], message: string) {
+  if (!accountIds.length) return
+  const recent = await prisma.log.findFirst({
+    where: { accountId: { in: accountIds }, level: 'ERROR', message: { startsWith: '🚨' } },
+    orderBy: { createdAt: 'desc' },
+  })
+  const throttled = recent && Date.now() - new Date(recent.createdAt).getTime() < ALERT_COOLDOWN_MS
+  await Promise.all(accountIds.map((accountId) =>
+    prisma.log.create({ data: { accountId, level: 'ERROR', message } }).catch(() => null)
+  ))
+  const hook = process.env.ALERT_WEBHOOK_URL
+  if (hook && !throttled) {
+    try {
+      await fetch(hook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: message }) })
+    } catch {}
+  }
+}
+
 // ── Сопоставление фраз (для триггеров на комментарии) ─────────────────────────
 function norm(s: string): string {
   return (s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim()
@@ -110,16 +134,18 @@ function matchPhrase(text: string, match: any): boolean {
 
 // Выполняет действия триггера-подписки для одного подписчика синхронно
 async function runFollowerActionsInline(job: any) {
-  const session = job.sessionData as object
+  const session = job.sessionData as object          // основной: DM/фото
   const proxy = job.proxy ?? undefined
+  const draftSession = (job.draftSessionData ?? job.sessionData) as object  // черновой: подписка/лайк/сторис
+  const draftProxy = job.draftProxy ?? proxy
   let success = false
   const errors: string[] = []
 
   if (job.text)   { try { await sendDM(session, job.followerPk, job.text, proxy); success = true } catch (e: any) { errors.push(`DM: ${e.message}`) } }
   if (job.image)  { await randDelay(2, 5); try { await sendDMPhoto(session, job.followerPk, job.image, proxy); success = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
-  if (job.doFollow) { await randDelay(3, 7); try { await followUser(session, job.followerPk, proxy); success = true } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
-  if (job.doLike)   { await randDelay(3, 8); try { await likeLatestMedia(session, job.followerPk, proxy); success = true } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
-  if (job.viewStories) { await randDelay(4, 10); try { await viewStories(session, job.followerPk, job.storyLike, proxy); success = true } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
+  if (job.doFollow) { await randDelay(3, 7); try { await followUser(draftSession, job.followerPk, draftProxy); success = true } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
+  if (job.doLike)   { await randDelay(3, 8); try { await likeLatestMedia(draftSession, job.followerPk, draftProxy); success = true } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
+  if (job.viewStories) { await randDelay(4, 10); try { await viewStories(draftSession, job.followerPk, job.storyLike, draftProxy); success = true } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
 
   if (success) {
     await Promise.all([
@@ -150,9 +176,10 @@ export async function POST(req: NextRequest) {
   // Ручная проверка: указан конкретный аккаунт ИЛИ явный флаг manual (кнопка «Проверить»)
   const isManual = Boolean(accountId) || body.manual === true
 
-  const where = accountId
+  // Основные аккаунты (отправители): исключаем черновых (HELPER) — те только парсят.
+  const where: any = accountId
     ? { id: accountId, status: 'ACTIVE' as const }
-    : { status: 'ACTIVE' as const }
+    : { status: 'ACTIVE' as const, role: { in: ['RESPONDER', 'BOTH'] } }
 
   const accounts = await prisma.instagramAccount.findMany({
     where,
@@ -161,6 +188,42 @@ export async function POST(req: NextRequest) {
       snapshots: { orderBy: { createdAt: 'desc' } },
     },
   })
+
+  // Пул черновых (HELPER) аккаунтов-парсеров: активные, с живой сессией. LRU — кто дольше не работал.
+  const draftPool = (await prisma.instagramAccount.findMany({
+    where: { role: 'HELPER', status: 'ACTIVE' },
+    orderBy: { lastChecked: 'asc' },
+  })).filter((d) => d.sessionData)
+
+  // Основные, которым реально есть что делать (есть активные триггеры)
+  const workingMains = accounts.filter((a) => a.sessionData && a.triggersAsResponder.length)
+
+  // ФОЛБЭК: черновых нет / все забанены → НЕ парсим основными (защита от бана) + тревога владельцу.
+  if (workingMains.length && draftPool.length === 0) {
+    await notifyOwner(
+      workingMains.map((a) => a.id),
+      '🚨 Нет доступных черновых аккаунтов (все забанены/на паузе). Парсинг основными остановлен — срочно добавьте черновой аккаунт, иначе основной под угрозой бана.'
+    )
+    return NextResponse.json({
+      ok: true, alert: 'no-drafts',
+      message: 'Нет черновых аккаунтов — парсинг остановлен для защиты основных.',
+      summary: workingMains.map((a) => ({
+        accountId: a.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0,
+        triggersFound: a.triggersAsResponder.length, totalComments: 0, newComments: 0,
+        commentActions: 0, skipped: 'no-draft',
+      })),
+    })
+  }
+
+  // Round-robin по пулу черновых + отдельные дневные счётчики на каждый черновой.
+  let draftCursor = 0
+  const nextDraft = () => (draftPool.length ? draftPool[draftCursor++ % draftPool.length] : null)
+  const draftCounters = new Map<string, Counters>()
+  const getDraftCounters = (d: { id: string; limits: unknown }): Counters => {
+    if (!draftCounters.has(d.id)) draftCounters.set(d.id, loadCounters(d.limits))
+    return draftCounters.get(d.id)!
+  }
+  const usedDraftIds = new Set<string>()
 
   const summary: PollSummary[] = []
   const dmQueue = getDmQueue()
@@ -196,10 +259,18 @@ export async function POST(req: NextRequest) {
     // Кэш «подписан ли на нас» в рамках одной проверки (без повторных запросов к IG)
     const friendshipCache = new Map<string, boolean>()
 
+    // Черновой-парсер для этого основного (round-robin). Пул тут гарантированно непуст.
+    const draft = nextDraft()
+    if (!draft) { s.skipped = 'no-draft'; summary.push(s); continue }
+    usedDraftIds.add(draft.id)
+    const dc = getDraftCounters(draft)          // дневные лимиты чернового
+    const parseSession = draft.sessionData as object   // сессия чернового: парсинг + лайк/подписка/сторис
+    const parseProxy = draft.proxy ?? undefined
+
     try {
       // ── Поток подписчиков ────────────────────────────────────────────────
       if (followerTriggers.length) {
-        const { followers } = await getFollowers(session, account.username, proxy, FOLLOWERS_FETCH_LIMIT)
+        const { followers } = await getFollowers(parseSession, account.username, parseProxy, FOLLOWERS_FETCH_LIMIT)
         const snapFollowers = account.snapshots.find((sn) => sn.type === 'FOLLOWERS')
         const hadBaseline = Boolean(snapFollowers)
         const knownPks = extractKnownPks(snapFollowers?.data)
@@ -233,10 +304,11 @@ export async function POST(req: NextRequest) {
 
           for (const follower of newFollowers) {
             // Резервируем дневной бюджет по каждому действию — что не влезло, пропускаем
+            // DM — лимит основного; лайк/подписка/сторис — лимит чернового (их делает он)
             const willDM = Boolean(msgAction?.templates?.[0]) && consume(counters, 'dm')
-            const willFollow = doFollowT && consume(counters, 'follow')
-            const willLike = doLikeT && consume(counters, 'like')
-            const willStory = Boolean(storiesAct) && consume(counters, 'story')
+            const willFollow = doFollowT && consume(dc, 'follow')
+            const willLike = doLikeT && consume(dc, 'like')
+            const willStory = Boolean(storiesAct) && consume(dc, 'story')
             if (!willDM && !willFollow && !willLike && !willStory) { s.limited = (s.limited ?? 0) + 1; continue }
 
             let text = willDM ? template.replace(/\{\{username\}\}/gi, follower.username) : ''
@@ -252,6 +324,8 @@ export async function POST(req: NextRequest) {
               text: text.trim(), image: willDM ? image : undefined,
               doFollow: willFollow, doLike: willLike,
               viewStories: willStory, storyLike: Boolean(storiesAct?.like), proxy: account.proxy,
+              // Сессия чернового: подписку/лайк/сторис исполняет он, не основной
+              draftSessionData: draft.sessionData, draftProxy: draft.proxy,
             }
 
             // Всегда через очередь с разнесёнными задержками (безопасно + без таймаута запроса).
@@ -280,7 +354,7 @@ export async function POST(req: NextRequest) {
         ? Date.now() - new Date(snapCommentsMeta.createdAt).getTime()
         : Infinity
       if (commentTriggers.length && (isManual || commentElapsed >= COMMENT_COOLDOWN_MS)) {
-        const { comments } = await getComments(session, account.username, proxy, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA)
+        const { comments } = await getComments(parseSession, account.username, parseProxy, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA)
         const hadBaseline = Boolean(snapCommentsMeta)
         const knownC = extractKnownPks(snapCommentsMeta?.data)
         // Первая проверка (нет снапшота) — только фиксируем базу, НЕ реагируем на старые комменты,
@@ -351,19 +425,19 @@ export async function POST(req: NextRequest) {
                   catch (e: any) { errors.push(`ответ: ${e.message}`) }
                 }
               }
-              if (doLikePosts && consume(counters, 'like')) {
+              if (doLikePosts && consume(dc, 'like')) {
                 await randDelay(2, 5)
-                try { await likeUserMedias(session, c.user_pk, COMMENT_LIKE_POSTS, proxy); fired = true }
+                try { await likeUserMedias(parseSession, c.user_pk, COMMENT_LIKE_POSTS, parseProxy); fired = true }
                 catch (e: any) { errors.push(`лайк постов: ${e.message}`) }
               }
-              if (likeCmt && consume(counters, 'like')) {
+              if (likeCmt && consume(dc, 'like')) {
                 await randDelay(1, 3)
-                try { await likeComment(session, c.pk, proxy); fired = true }
+                try { await likeComment(parseSession, c.pk, parseProxy); fired = true }
                 catch (e: any) { errors.push(`лайк коммента: ${e.message}`) }
               }
-              if (doFollow && consume(counters, 'follow')) {
+              if (doFollow && consume(dc, 'follow')) {
                 await randDelay(2, 5)
-                try { await followUser(session, c.user_pk, proxy); fired = true }
+                try { await followUser(parseSession, c.user_pk, parseProxy); fired = true }
                 catch (e: any) { errors.push(`подписка: ${e.message}`) }
               }
               if (dm?.templates?.[0] && consume(counters, 'dm')) {
@@ -381,9 +455,9 @@ export async function POST(req: NextRequest) {
                   }
                 } catch (e: any) { errors.push(`DM: ${e.message}`) }
               }
-              if (storiesAct && consume(counters, 'story')) {
+              if (storiesAct && consume(dc, 'story')) {
                 await randDelay(3, 7)
-                try { await viewStories(session, c.user_pk, Boolean(storiesAct.like), proxy); fired = true }
+                try { await viewStories(parseSession, c.user_pk, Boolean(storiesAct.like), parseProxy); fired = true }
                 catch (e: any) { errors.push(`сторис: ${e.message}`) }
               }
             }
@@ -420,6 +494,14 @@ export async function POST(req: NextRequest) {
       summary.push(s)
     }
   }
+
+  // Сохраняем дневные счётчики черновых и метку использования (для LRU-ротации между запусками)
+  await Promise.all([...usedDraftIds].map((id) =>
+    prisma.instagramAccount.update({
+      where: { id },
+      data: { limits: draftCounters.get(id) as any, lastChecked: new Date() },
+    }).catch(() => null)
+  ))
 
   if (dmQueue) await dmQueue.close()
 

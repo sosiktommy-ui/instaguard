@@ -10,7 +10,7 @@ import { AppLogo } from '@/components/common/AppLogo'
 const TRIGGER_SUBTABS = [
   { href: '/triggers', label: 'Триггеры', icon: List },
   { href: '/accounts', label: 'Аккаунты', icon: Users },
-  { href: '/drafts', label: 'Черновые аккаунты и прокси', icon: Layers, beta: true },
+  { href: '/drafts', label: 'Черновые аккаунты и прокси', icon: Layers },
   { href: '/stats', label: 'Статистика', icon: BarChart3 },
 ]
 
@@ -109,7 +109,6 @@ export default function TopNav() {
                       active ? 'bg-brand text-white shadow-sm' : 'text-ink/80 hover:bg-black/[0.04]')}>
                     <t.icon className={cn('w-[18px] h-[18px]', active ? 'text-white' : 'text-subt')} />
                     <span className="flex-1">{t.label}</span>
-                    {t.beta && <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded-md', active ? 'bg-white/20 text-white' : 'bg-warn/15 text-warn')}>BETA</span>}
                   </Link>
                 )
               })}

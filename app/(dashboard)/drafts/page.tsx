@@ -192,7 +192,6 @@ function Drafts() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-[26px] font-semibold tracking-tighter leading-none">Черновые аккаунты</h1>
-              <span className="text-[11px] font-bold px-2 py-1 rounded-md bg-warn/15 text-warn">BETA</span>
             </div>
             <p className="text-subt mt-1 text-[14px]">Парсят подписчиков — основные только отправляют</p>
           </div>
