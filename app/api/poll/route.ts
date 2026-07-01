@@ -160,9 +160,10 @@ async function runFollowerActionsInline(job: any) {
     try { await sendDM(session, job.followerPk, job.text, proxy); success = true }
     catch (e: any) {
       if (statusFromError(e.message)) throw e  // бан/челлендж/лимит → пусть внешний catch остановит основной
-      errors.push(`директ закрыт: ${e.message}`)  // личка закрыта → мягкий контакт черновым
-      try { await followUser(draftSession, job.followerPk, draftProxy); success = true } catch {}
-      try { await randDelay(2, 5); await likeLatestMedia(draftSession, job.followerPk, draftProxy); success = true } catch {}
+      // Личка закрыта → мягкий контакт черновым (только если бюджет был выделен при постановке в очередь)
+      errors.push(`директ закрыт: ${e.message}`)
+      if (job.fallbackFollow) { try { await followUser(draftSession, job.followerPk, draftProxy); success = true } catch {} }
+      if (job.fallbackLike)   { try { await randDelay(2, 5); await likeLatestMedia(draftSession, job.followerPk, draftProxy); success = true } catch {} }
     }
   }
   if (job.image)  { await randDelay(2, 5); try { await sendDMPhoto(session, job.followerPk, job.image, proxy); success = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
@@ -339,6 +340,9 @@ export async function POST(req: NextRequest) {
           const willFollow = doFollowT && consume(dc, 'follow')
           const willLike = doLikeT && consume(dc, 'like')
           const willStory = Boolean(storiesAct) && consume(dc, 'story')
+          // Резервируем бюджет fallback (follow+like черновым при закрытой личке)
+          const fallbackFollow = willDM && !willFollow && consume(dc, 'follow')
+          const fallbackLike   = willDM && !willLike   && consume(dc, 'like')
           if (!willDM && !willFollow && !willLike && !willStory) { s.limited = (s.limited ?? 0) + 1; continue }
 
           let text = willDM ? template.replace(/\{\{username\}\}/gi, target.username) : ''
@@ -355,6 +359,7 @@ export async function POST(req: NextRequest) {
             doFollow: willFollow, doLike: willLike,
             viewStories: willStory, storyLike: Boolean(storiesAct?.like), proxy: account.proxy,
             draftSessionData: draft.sessionData, draftProxy: draft.proxy,
+            fallbackFollow, fallbackLike,
           }
 
           if (dmQueue) {
@@ -525,7 +530,7 @@ export async function POST(req: NextRequest) {
                   catch (e: any) { errors.push(`ответ: ${e.message}`) }
                 }
               }
-              if (doLikePosts && consume(dc, 'like')) {
+              if (doLikePosts && consume(dc, 'like', COMMENT_LIKE_POSTS)) {
                 await randDelay(2, 5)
                 try { await likeUserMedias(parseSession, c.user_pk, COMMENT_LIKE_POSTS, parseProxy); fired = true }
                 catch (e: any) { errors.push(`лайк постов: ${e.message}`) }

@@ -366,6 +366,7 @@ def get_recent_comments(session_data: dict, username: str, proxy: str | None = N
     cl = build_client(session_data, proxy)
     own_id = str(cl.user_id)
     user_id = cl.user_id_from_username(username)
+    main_id = str(user_id)  # фильтруем и ответы самого MAIN-аккаунта
     medias = cl.user_medias(user_id, amount=media_count)
     out: list[dict] = []
     for m in medias:
@@ -376,7 +377,7 @@ def get_recent_comments(session_data: dict, username: str, proxy: str | None = N
             continue
         for c in comments:
             uid = str(c.user.pk)
-            if uid == own_id:
+            if uid == own_id or uid == main_id:
                 continue
             out.append({
                 "pk": str(c.pk),

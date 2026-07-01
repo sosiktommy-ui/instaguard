@@ -55,6 +55,7 @@ export async function register() {
           followerPk, followerUsername, text, image, doFollow, doLike,
           viewStories, storyLike, proxy,
           draftSessionData, draftProxy,
+          fallbackFollow, fallbackLike,
         } = job.data
         // Основной шлёт DM/фото; черновой (если передан) делает подписку/лайк/сторис
         const draftSession = draftSessionData ?? sessionData
@@ -87,10 +88,10 @@ export async function register() {
             const m = (e.message || '').toLowerCase()
             // бан/челлендж/лимит → пробрасываем (обработчик failed остановит основной)
             if (/challenge|checkpoint|verify|feedback_required|spam|blocked|action.?block|429|login_required|please wait|few minutes/.test(m)) throw e
-            // личка закрыта / не доставлено → мягкий контакт черновым (follow + лайк)
+            // личка закрыта / не доставлено → мягкий контакт черновым (только если бюджет выделен)
             errors.push(`директ закрыт: ${e.message}`)
-            try { await call('/follow-user', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true } catch {}
-            try { await rd(2, 5); await call('/like-latest-media', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true } catch {}
+            if (fallbackFollow) { try { await call('/follow-user', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true } catch {} }
+            if (fallbackLike)   { try { await rd(2, 5); await call('/like-latest-media', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true } catch {} }
           }
         }
         if (image)    { await rd(2, 5); try { await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy }); success = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
@@ -145,7 +146,10 @@ export async function register() {
     new Worker(
       'auto-poll',
       async () => {
-        const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
+        const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL
+          ?? (railwayDomain ? `https://${railwayDomain}` : null)
+          ?? 'http://localhost:3000'
         try {
           const res = await fetch(`${baseUrl}/api/poll`, {
             method: 'POST',
