@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
   const user = await getUserOrFirst()
   if (!user) return NextResponse.json({ error: 'Нет пользователя в БД' }, { status: 401 })
 
-  const { name, draft } = await req.json()
+  const { name, draft } = await req.json().catch(() => ({}))
   if (!name?.trim()) return NextResponse.json({ error: 'Укажите название шаблона' }, { status: 400 })
 
   const tpl = await prisma.template.create({

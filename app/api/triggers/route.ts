@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
   const user = await getUserOrFirst()
   if (!user) return NextResponse.json({ error: 'Нет пользователя в БД' }, { status: 401 })
 
-  const body = await req.json()
+  const body = await req.json().catch(() => ({}))
   const { name, accountIds, type, conditions } = body
   if (!name || !accountIds?.length || !type) {
     return NextResponse.json({ error: 'Заполните название и выберите аккаунты' }, { status: 400 })
@@ -53,20 +53,23 @@ export async function POST(req: NextRequest) {
     }]
   }
 
-  const created = await Promise.all(
-    (accountIds as string[]).map((responderId) =>
-      prisma.triggerRule.create({
-        data: {
-          userId: user.id,
-          responderId,
-          name,
-          triggerType: triggerType as any,
-          conditions: conditions ?? [],
-          actions,
-        },
-      })
+  try {
+    const created = await Promise.all(
+      (accountIds as string[]).map((responderId) =>
+        prisma.triggerRule.create({
+          data: {
+            userId: user.id,
+            responderId,
+            name,
+            triggerType: triggerType as any,
+            conditions: conditions ?? [],
+            actions,
+          },
+        })
+      )
     )
-  )
-
-  return NextResponse.json({ ok: true, count: created.length })
+    return NextResponse.json({ ok: true, count: created.length })
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? 'Не удалось создать триггер' }, { status: 400 })
+  }
 }

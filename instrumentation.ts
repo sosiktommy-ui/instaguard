@@ -94,9 +94,17 @@ export async function register() {
     ).on('failed', async (job, err) => {
       if (!job) return
       const { accountId, followerUsername } = job.data
-      await prisma.log.create({
-        data: { accountId, level: 'ERROR', message: `Ошибка DM @${followerUsername}: ${err.message}` },
-      }).catch(() => null)
+      // Предохранитель: при challenge/бане/ограничении ставим аккаунт на паузу
+      const m = (err.message || '').toLowerCase()
+      const brk = /challenge|checkpoint|verify/.test(m) ? 'CHALLENGE'
+        : /feedback_required|feedbackrequired|spam|blocked|action.?block|429|login_required|please wait|few minutes/.test(m) ? 'PAUSED'
+        : null
+      await Promise.all([
+        prisma.log.create({
+          data: { accountId, level: 'ERROR', message: `Ошибка DM @${followerUsername}: ${err.message}${brk ? ` → аккаунт остановлен (${brk})` : ''}` },
+        }).catch(() => null),
+        brk ? prisma.instagramAccount.update({ where: { id: accountId }, data: { status: brk as any } }).catch(() => null) : Promise.resolve(),
+      ])
       console.error(`[dm-worker] ✗ DM to @${followerUsername} failed:`, err.message)
     })
 

@@ -18,6 +18,23 @@ const FOLLOWERS_FETCH_LIMIT = 50
 // Сколько последних постов и комментариев под каждым сканировать
 const COMMENT_MEDIA_COUNT = 3
 const COMMENT_PER_MEDIA = 15
+// Максимум pk в снапшоте (защита от бесконечного роста JSON в БД)
+const SNAPSHOT_MAX = 6000
+// Порог ошибок подряд, после которого аккаунт ставится на паузу
+const ERROR_PAUSE_THRESHOLD = 5
+
+// Ограничивает множество последними N элементами
+function capPks(set: Set<string>, max: number): string[] {
+  const arr = Array.from(set)
+  return arr.length > max ? arr.slice(arr.length - max) : arr
+}
+// Определяет по тексту ошибки, нужно ли остановить аккаунт (challenge/бан/ограничение)
+function statusFromError(msg: string): 'CHALLENGE' | 'PAUSED' | null {
+  const m = (msg || '').toLowerCase()
+  if (/challenge|checkpoint|verify|подтвержд/.test(m)) return 'CHALLENGE'
+  if (/feedback_required|feedbackrequired|spam|blocked|action.?block|429|login_required|loginrequired|please wait|few minutes/.test(m)) return 'PAUSED'
+  return null
+}
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 const randDelay = (minS: number, maxS: number) =>
@@ -176,6 +193,8 @@ export async function POST(req: NextRequest) {
     // Разнесённые задержки: первое действие скоро, дальше с интервалом ~45–115с
     let cursor = (isManual ? 8 + Math.random() * 14 : 45 + Math.random() * 75) * 1000
     const nextGap = () => (45 + Math.random() * 70) * 1000
+    // Кэш «подписан ли на нас» в рамках одной проверки (без повторных запросов к IG)
+    const friendshipCache = new Map<string, boolean>()
 
     try {
       // ── Поток подписчиков ────────────────────────────────────────────────
@@ -191,7 +210,7 @@ export async function POST(req: NextRequest) {
 
         await prisma.$transaction([
           prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'FOLLOWERS' } }),
-          prisma.snapshot.create({ data: { accountId: account.id, type: 'FOLLOWERS', data: Array.from(knownPks) } }),
+          prisma.snapshot.create({ data: { accountId: account.id, type: 'FOLLOWERS', data: capPks(knownPks, SNAPSHOT_MAX) } }),
         ])
 
         s.totalFollowers = followers.length
@@ -221,7 +240,10 @@ export async function POST(req: NextRequest) {
             if (!willDM && !willFollow && !willLike && !willStory) { s.limited = (s.limited ?? 0) + 1; continue }
 
             let text = willDM ? template.replace(/\{\{username\}\}/gi, follower.username) : ''
-            if (willDM && link?.enabled && link.url) text += `\n\n${link.text ? link.text + ': ' : ''}${link.url}`
+            if (willDM && link?.enabled && link.url) {
+              const lt = String(link.text ?? '').replace(/\{\{username\}\}/gi, follower.username)
+              text += `\n\n${lt ? lt + ': ' : ''}${link.url}`
+            }
 
             const job = {
               sessionData: account.sessionData, accountId: account.id,
@@ -268,7 +290,7 @@ export async function POST(req: NextRequest) {
 
         await prisma.$transaction([
           prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'COMMENTS' } }),
-          prisma.snapshot.create({ data: { accountId: account.id, type: 'COMMENTS', data: Array.from(knownC) } }),
+          prisma.snapshot.create({ data: { accountId: account.id, type: 'COMMENTS', data: capPks(knownC, SNAPSHOT_MAX) } }),
         ])
 
         s.totalComments = comments.length
@@ -299,10 +321,15 @@ export async function POST(req: NextRequest) {
             // Проверка подписки: если автор НЕ подписан — только коммент-приглашение, стоп
             if (gate) {
               let isFollower = false
-              try {
-                const fs = await getFriendship(session, c.user_pk, proxy)
-                isFollower = Boolean(fs.followed_by)
-              } catch (e: any) { errors.push(`проверка подписки: ${e.message}`) }
+              if (friendshipCache.has(c.user_pk)) {
+                isFollower = friendshipCache.get(c.user_pk)!
+              } else {
+                try {
+                  const fs = await getFriendship(session, c.user_pk, proxy)
+                  isFollower = Boolean(fs.followed_by)
+                  friendshipCache.set(c.user_pk, isFollower)
+                } catch (e: any) { errors.push(`проверка подписки: ${e.message}`) }
+              }
 
               if (!isFollower) {
                 const gateText = String(gate.text ?? '').replace(/\{\{username\}\}/gi, c.username)
@@ -342,7 +369,10 @@ export async function POST(req: NextRequest) {
               if (dm?.templates?.[0] && consume(counters, 'dm')) {
                 await randDelay(3, 8)
                 let text = String(dm.templates[0]).replace(/\{\{username\}\}/gi, c.username)
-                if (dm.link?.enabled && dm.link.url) text += `\n\n${dm.link.text ? dm.link.text + ': ' : ''}${dm.link.url}`
+                if (dm.link?.enabled && dm.link.url) {
+                  const lt = String(dm.link.text ?? '').replace(/\{\{username\}\}/gi, c.username)
+                  text += `\n\n${lt ? lt + ': ' : ''}${dm.link.url}`
+                }
                 try {
                   await sendDM(session, c.user_pk, text.trim(), proxy); fired = true
                   if (dm.image?.enabled && dm.image.url) {
@@ -377,13 +407,15 @@ export async function POST(req: NextRequest) {
       })
       summary.push(s)
     } catch (e: any) {
-      // Даже при ошибке сохраняем зарезервированный бюджет (действия могли частично уйти)
-      await prisma.instagramAccount.update({
-        where: { id: account.id },
-        data: { errorCount: { increment: 1 }, limits: counters as any },
-      })
+      // Предохранитель: challenge/бан/ограничение → останавливаем аккаунт, чтобы не долбить его
+      const brk = statusFromError(e.message)
+      const nextErrors = (account.errorCount ?? 0) + 1
+      const data: any = { errorCount: { increment: 1 }, limits: counters as any, lastChecked: new Date() }
+      if (brk) data.status = brk
+      else if (nextErrors >= ERROR_PAUSE_THRESHOLD) data.status = 'PAUSED'
+      await prisma.instagramAccount.update({ where: { id: account.id }, data })
       await prisma.log.create({
-        data: { accountId: account.id, level: 'ERROR', message: `Ошибка проверки: ${e.message}` },
+        data: { accountId: account.id, level: 'ERROR', message: `Ошибка проверки: ${e.message}${data.status ? ` → аккаунт остановлен (${data.status})` : ''}` },
       })
       summary.push(s)
     }

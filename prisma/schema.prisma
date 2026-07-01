@@ -63,6 +63,8 @@ model Snapshot {
   createdAt DateTime     @default(now())
 
   account InstagramAccount @relation(fields: [accountId], references: [id])
+
+  @@index([accountId, type, createdAt])
 }
 
 enum SnapshotType {
@@ -133,6 +135,9 @@ model Log {
 
   account InstagramAccount @relation(fields: [accountId], references: [id])
   event   Event?           @relation(fields: [eventId], references: [id])
+
+  @@index([createdAt])
+  @@index([accountId, createdAt])
 }
 
 enum LogLevel {

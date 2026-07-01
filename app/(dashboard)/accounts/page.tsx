@@ -166,7 +166,6 @@ function Accounts() {
   const accounts               = useStore((s) => s.accounts)
   const removeAccount          = useStore((s) => s.removeAccount)
   const toggleStatus           = useStore((s) => s.toggleAccountStatus)
-  const updateAccountFollowers = useStore((s) => s.updateAccountFollowers)
 
   const [showAdd, setShowAdd]       = useState(false)
   const [realAccounts, setReal]     = useState<RealAccount[]>([])

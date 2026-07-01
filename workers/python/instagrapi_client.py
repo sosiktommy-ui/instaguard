@@ -115,6 +115,8 @@ def build_client(session_data: dict, proxy: str | None = None) -> Client:
     that's only done during login/session-test to avoid suspicious bursts of
     identical requests before each action."""
     cl = Client()
+    # Встроенная пауза instagrapi между запросами — дополнительная защита от бана
+    cl.delay_range = [2, 6]
     if proxy:
         cl.set_proxy(_normalize_proxy(proxy))
     cl.set_settings(session_data)
