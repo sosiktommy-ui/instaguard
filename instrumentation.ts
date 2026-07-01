@@ -16,6 +16,10 @@ export async function register() {
     // Единственный владелец = самый ранний пользователь (та же логика, что и getUserOrFirst)
     const owner = await prisma.user.findFirst({ orderBy: { createdAt: 'asc' } })
     if (owner) {
+      // Если старая версия сида уже успела создать отдельную запись с этим email
+      // (до фикса, апдейтящего владельца), удаляем её — иначе update ниже упадёт
+      // на unique-констрейнте по email и пароль владельца молча не обновится.
+      await prisma.user.deleteMany({ where: { email, NOT: { id: owner.id } } })
       await prisma.user.update({ where: { id: owner.id }, data: { email, password: passwordHash } })
     } else {
       await prisma.user.create({ data: { email, name: 'Demo', password: passwordHash } })
