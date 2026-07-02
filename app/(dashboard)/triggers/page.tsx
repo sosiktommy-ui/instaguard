@@ -161,8 +161,8 @@ const PLATE_STYLE: Record<PlateState, string> = {
 const PLATE_DOT: Record<PlateState, string> = { green: 'bg-ok', blue: 'bg-brand', red: 'bg-bad', yellow: 'bg-warn' }
 const PLATE_LABEL: Record<PlateState, string> = { green: 'Активно', blue: 'Готов', red: 'Проблема', yellow: 'Ошибки' }
 const PLATE_TIP: Record<PlateState, string> = {
-  green: 'Аккаунт активен, на нём есть включённые триггеры — работает',
-  blue: 'Аккаунт готов, но включённых триггеров пока нет',
+  green: 'Аккаунт активен, на нём есть включённые кампании — работает',
+  blue: 'Аккаунт готов, но включённых кампаний пока нет',
   red: 'Проблема: бан, ограничение или нужен повторный вход в аккаунт',
   yellow: 'Были ошибки при выполнении действий — загляните в «Логи»',
 }
@@ -629,7 +629,7 @@ function CreateForm({
       })
       const data = await res.json()
       if (res.ok) {
-        setSaveMsg({ text: `Создано триггеров: ${data.count}`, ok: true })
+        setSaveMsg({ text: `Создано кампаний: ${data.count}`, ok: true })
         setSelected([]); setD({ ...DEFAULT_DRAFT }); onCreated()
       } else {
         setSaveMsg({ text: data.error ?? 'Ошибка', ok: false })
@@ -683,7 +683,7 @@ function CreateForm({
       <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between px-5 py-4 hover:bg-black/[0.02] transition-colors">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-xl bg-brand/10 flex items-center justify-center"><Plus className="w-4 h-4 text-brand" /></div>
-          <span className="font-semibold text-[15px]">Создать триггер</span>
+          <span className="font-semibold text-[15px]">Создать кампанию</span>
         </div>
         {open ? <ChevronUp className="w-4 h-4 text-subt" /> : <ChevronDown className="w-4 h-4 text-subt" />}
       </button>
@@ -699,7 +699,7 @@ function CreateForm({
                 <span className="text-[13px] font-semibold flex items-center gap-1.5">
                   <span className="w-5 h-5 rounded-full bg-brand text-white text-[11px] font-bold flex items-center justify-center">1</span>
                   Аккаунты
-                  <Hint text="Цвет плашки = состояние аккаунта (зелёный — работает, синий — готов, жёлтый — ошибки, красный — проблема). 4 иконки показывают, какие триггеры уже включены: горят цветом — вкл, серые — выкл." />
+                  <Hint text="Цвет плашки = состояние аккаунта (зелёный — работает, синий — готов, жёлтый — ошибки, красный — проблема). 4 иконки показывают, какие кампании уже включены: горят цветом — вкл, серые — выкл." />
                 </span>
                 <button onClick={toggleAll} className="text-[12px] text-brand hover:underline">{allSelected ? 'Снять' : 'Все'}</button>
               </div>
@@ -824,7 +824,7 @@ function CreateForm({
                 {isComment && d.actFollow && <div className="text-[10.5px] text-subt mt-1">↳ Подписаться на автора комментария</div>}
               </div>
 
-              <input value={d.name} onChange={(e) => set('name', e.target.value)} className="field py-2 text-[13px]" placeholder="Название триггера" />
+              <input value={d.name} onChange={(e) => set('name', e.target.value)} className="field py-2 text-[13px]" placeholder="Название кампании" />
 
               {/* ════ КОММЕНТАРИЙ ════ */}
               {isComment ? (
@@ -960,7 +960,7 @@ function TemplatesDrawer({ templates, loading, onClose, onApply, onDelete, onRel
           {loading ? (
             <div className="py-12 text-center text-subt text-[13px]">Загрузка…</div>
           ) : templates.length === 0 ? (
-            <div className="py-12 text-center text-subt text-[13px]">Нет сохранённых шаблонов.<br />Создайте триггер и нажмите «Сохранить как шаблон».</div>
+            <div className="py-12 text-center text-subt text-[13px]">Нет сохранённых шаблонов.<br />Создайте кампанию и нажмите «Сохранить как шаблон».</div>
           ) : templates.map((t) => {
             const meta = t.draft ? META_BY_KEY[t.draft.type] : undefined
             return (
@@ -1270,6 +1270,12 @@ function TriggersScreen() {
 
   useEffect(() => { loadAccounts(); loadTriggers(); loadTemplates() }, [loadAccounts, loadTriggers, loadTemplates])
 
+  // Открыть сразу конкретный аккаунт, если пришли со страницы «Аккаунты» (?account=<id>)
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search).get('account')
+    if (p) setSelId(p)
+  }, [])
+
   const deleteTrigger = async (id: string) => {
     await fetch(`/api/triggers/${id}`, { method: 'DELETE' })
     setDbTriggers((prev) => prev.filter((t) => t.id !== id))
@@ -1358,7 +1364,7 @@ function TriggersScreen() {
           <div className="card py-12 flex flex-col items-center gap-3 text-center px-6">
             <div className="w-14 h-14 rounded-3xl bg-brand/8 flex items-center justify-center"><Zap className="w-7 h-7 text-brand/50" /></div>
             <div className="font-semibold text-[15px] text-ink/70">Кампаний пока нет</div>
-            <div className="text-[13px] text-subt max-w-xs">Нажми «Кампания», чтобы запустить триггер на этом аккаунте</div>
+            <div className="text-[13px] text-subt max-w-xs">Нажми «Кампания», чтобы запустить рекламную кампанию на этом аккаунте</div>
           </div>
         ) : (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -1392,7 +1398,7 @@ function TriggersScreen() {
     <div className="space-y-5 pb-24">
       <div className="grid grid-cols-3 gap-3">
         <StatCard icon={Users} color="#0071e3" value={dbAccounts.length} label="Аккаунтов" tip="Всего подключённых Instagram-аккаунтов" delay={0} />
-        <StatCard icon={Zap} color="#5e5ce6" value={dbTriggers.length} label="Кампаний" tip="Всего триггеров (кампаний) по всем аккаунтам" delay={90} />
+        <StatCard icon={Zap} color="#5e5ce6" value={dbTriggers.length} label="Кампаний" tip="Всего рекламных кампаний по всем аккаунтам" delay={90} />
         <StatCard icon={Send} color="#34c759" value={totalFires} label="Срабатываний" tip="Суммарно выполнено действий по всем кампаниям" delay={180} />
       </div>
 
@@ -1401,7 +1407,7 @@ function TriggersScreen() {
           <Users className="w-4 h-4 text-brand" />
           <span className="font-semibold text-[15px]">Аккаунты</span>
           <span className="text-[12px] text-subt">({dbAccounts.length})</span>
-          <Hint text="Нажми на аккаунт, чтобы провалиться в его кампании (триггеры)" />
+          <Hint text="Нажми на аккаунт, чтобы провалиться в его рекламные кампании" />
         </div>
         <div className="flex items-center gap-2">
           {templatesBtn}

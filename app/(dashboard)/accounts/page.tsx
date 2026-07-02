@@ -289,13 +289,16 @@ function AccountDetailModal({ acc, ra, campaigns, onClose }: {
 
           {/* Рекламные кампании */}
           <div>
-            <div className="flex items-center gap-1.5 text-[12px] font-semibold text-subt mb-2">
-              <Activity className="w-3.5 h-3.5" /> Рекламные кампании ({campaigns.length})
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1.5 text-[12px] font-semibold text-subt">
+                <Activity className="w-3.5 h-3.5" /> Рекламные кампании ({campaigns.length})
+              </div>
+              <a href={`/triggers?account=${ra?.id ?? ''}`} className="text-[12px] font-medium text-brand hover:underline">Открыть в рекламе →</a>
             </div>
             {campaigns.length === 0 ? (
               <div className="rounded-2xl bg-canvas p-6 text-center">
                 <div className="text-[13px] text-subt">На этом аккаунте пока нет кампаний.</div>
-                <a href="/triggers" className="inline-block mt-2 text-[13px] font-medium text-brand hover:underline">Создать триггер →</a>
+                <a href={`/triggers?account=${ra?.id ?? ''}`} className="inline-block mt-2 text-[13px] font-medium text-brand hover:underline">Создать кампанию →</a>
               </div>
             ) : (
               <div className="space-y-2.5">

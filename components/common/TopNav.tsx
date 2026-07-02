@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils'
 import { AppLogo } from '@/components/common/AppLogo'
 
 const TRIGGER_SUBTABS = [
-  { href: '/triggers', label: 'Триггеры', icon: List },
+  { href: '/triggers', label: 'Рекламные кампании', icon: List },
   { href: '/accounts', label: 'Аккаунты', icon: Users },
   { href: '/drafts', label: 'Черновые аккаунты и прокси', icon: Layers },
   { href: '/stats', label: 'Статистика', icon: BarChart3 },
@@ -37,7 +37,7 @@ export default function TopNav() {
   )
 
   const activeSub = TRIGGER_SUBTABS.find((t) => t.href === pathname)
-  const crumb = superTab === 'mass' ? 'Массовое управление' : activeSub?.label ?? 'Триггеры'
+  const crumb = superTab === 'mass' ? 'Массовое управление' : activeSub?.label ?? 'Рекламные кампании'
 
   return (
     <>
@@ -59,7 +59,7 @@ export default function TopNav() {
           </div>
 
           <div className="segment ml-1">
-            <SuperTab id="triggers" label="Триггеры" href="/triggers" />
+            <SuperTab id="triggers" label="Реклама" href="/triggers" />
             <SuperTab id="mass" label="Массовое управление" href="/mass" beta />
             <SuperTab id="game" label="Command Center" href="/game" />
           </div>
@@ -100,7 +100,7 @@ export default function TopNav() {
               </div>
               <button onClick={() => setOpen(false)} className="text-subt hover:text-ink p-1"><X size={22} /></button>
             </div>
-            <div className="px-3 py-2 text-[11px] font-semibold text-subt uppercase tracking-wider mt-2">Триггеры</div>
+            <div className="px-3 py-2 text-[11px] font-semibold text-subt uppercase tracking-wider mt-2">Реклама</div>
             <nav className="px-3 space-y-1">
               {TRIGGER_SUBTABS.map((t) => {
                 const active = pathname === t.href

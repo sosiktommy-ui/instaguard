@@ -7,7 +7,7 @@ export async function GET() {
       orderBy: { id: 'desc' },
       select: {
         id: true, username: true, status: true, role: true,
-        lastChecked: true, errorCount: true, proxy: true, followers: true,
+        lastChecked: true, errorCount: true, proxy: true, followers: true, limits: true,
         snapshots: { orderBy: { createdAt: 'desc' }, take: 1, select: { data: true } },
       },
     })
