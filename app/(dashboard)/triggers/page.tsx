@@ -1037,15 +1037,28 @@ function CampaignCard({ trigger, onToggle, onDelete, index = 0 }: {
         <span className="text-[11px] text-subt">срабатываний</span>
       </div>
 
-      {/* Действия со счётчиками */}
+      {/* Действия со счётчиками — активные (со срабатываниями) заметнее и первыми */}
       <div className="flex flex-wrap items-center gap-1.5">
-        {ACTION_META.filter((a) => keys.has(a.key)).map((a) => (
-          <Tooltip key={a.key} content={`${a.label}: сработало ${Number((stats as any)[a.key]) || 0} раз`}>
-            <span className="text-[10.5px] px-2 py-0.5 rounded-full font-medium flex items-center gap-1" style={{ background: hexA(a.color, 0.12), color: a.color }}>
-              <a.Icon className="w-3 h-3" /> {a.label} ×{Number((stats as any)[a.key]) || 0}
-            </span>
-          </Tooltip>
-        ))}
+        {ACTION_META
+          .filter((a) => keys.has(a.key))
+          .map((a) => ({ ...a, count: Number((stats as any)[a.key]) || 0 }))
+          .sort((x, y) => y.count - x.count)
+          .map((a) => {
+            const active = a.count > 0
+            return (
+              <Tooltip key={a.key} content={active ? `${a.label}: сработало ${a.count} раз` : `${a.label}: настроено, ещё не срабатывало`}>
+                <span
+                  className={cn('text-[11px] px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1.5 transition-all', !active && 'opacity-70')}
+                  style={active
+                    ? { background: `linear-gradient(135deg, ${a.color}, ${darken(a.color)})`, color: '#fff', boxShadow: `0 2px 8px ${hexA(a.color, 0.4)}` }
+                    : { background: hexA(a.color, 0.1), color: a.color }}>
+                  <a.Icon className="w-3.5 h-3.5" strokeWidth={2.4} />
+                  {a.label}
+                  <span className={cn('tabular-nums', active ? 'opacity-90' : 'opacity-60')}>×{a.count}</span>
+                </span>
+              </Tooltip>
+            )
+          })}
       </div>
 
       {showDetails && (
@@ -1310,6 +1323,16 @@ function TriggersScreen() {
           ))}
         </div>
       )}
+
+      {/* Общая форма создания триггера — можно выбрать несколько аккаунтов сразу;
+          созданные триггеры подтягиваются к своим аккаунтам (кампании) */}
+      <CreateForm
+        dbAccounts={dbAccounts}
+        dbTriggers={dbTriggers}
+        loadingAccounts={loadingAccounts}
+        onCreated={() => { loadTriggers(); loadTemplates() }}
+        formRef={formApi}
+      />
 
       {showTemplates && (
         <TemplatesDrawer templates={templates} loading={loadingTemplates}
