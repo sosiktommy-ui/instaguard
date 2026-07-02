@@ -82,29 +82,35 @@ export async function register() {
         const rd = (a: number, b: number) => new Promise<void>((r) => setTimeout(r, Math.round((a + Math.random() * (b - a)) * 1000)))
         let success = false
         const errors: string[] = []
+        const inc: Record<string, number> = {}   // счётчики по действиям
+        let dmDone = false
         if (text) {
-          try { await call('/send-dm', { sessionData, toUserId: followerPk, text, proxy }); success = true }
+          try { await call('/send-dm', { sessionData, toUserId: followerPk, text, proxy }); success = true; dmDone = true }
           catch (e: any) {
             const m = (e.message || '').toLowerCase()
             // бан/челлендж/лимит → пробрасываем (обработчик failed остановит основной)
             if (/challenge|checkpoint|verify|feedback_required|spam|blocked|action.?block|429|login_required|please wait|few minutes/.test(m)) throw e
             // личка закрыта / не доставлено → мягкий контакт черновым (только если бюджет выделен)
             errors.push(`директ закрыт: ${e.message}`)
-            if (fallbackFollow) { try { await call('/follow-user', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true } catch {} }
-            if (fallbackLike)   { try { await rd(2, 5); await call('/like-latest-media', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true } catch {} }
+            if (fallbackFollow) { try { await call('/follow-user', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true; inc.follow = (inc.follow || 0) + 1 } catch {} }
+            if (fallbackLike)   { try { await rd(2, 5); await call('/like-latest-media', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true; inc.like = (inc.like || 0) + 1 } catch {} }
           }
         }
-        if (image)    { await rd(2, 5); try { await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy }); success = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
-        if (doFollow) { await rd(3, 8); try { await call('/follow-user', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
-        if (doLike)   { await rd(4, 10); try { await call('/like-latest-media', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
-        if (viewStories) { await rd(5, 12); try { await call('/user-stories', { sessionData: draftSession, userId: followerPk, like: storyLike, proxy: dProxy }); success = true } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
+        if (image)    { await rd(2, 5); try { await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy }); success = true; dmDone = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
+        if (doFollow) { await rd(3, 8); try { await call('/follow-user', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true; inc.follow = (inc.follow || 0) + 1 } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
+        if (doLike)   { await rd(4, 10); try { await call('/like-latest-media', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true; inc.like = (inc.like || 0) + 1 } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
+        if (viewStories) { await rd(5, 12); try { await call('/user-stories', { sessionData: draftSession, userId: followerPk, like: storyLike, proxy: dProxy }); success = true; inc.story = (inc.story || 0) + 1 } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
+        if (dmDone) inc.dm = (inc.dm || 0) + 1
 
         if (success) {
+          const cur = await prisma.triggerRule.findUnique({ where: { id: triggerId }, select: { stats: true } }).catch(() => null)
+          const st = ((cur?.stats ?? {}) as Record<string, number>)
+          for (const k in inc) st[k] = (Number(st[k]) || 0) + inc[k]
           await Promise.all([
             prisma.log.create({
               data: { accountId, level: errors.length ? 'WARN' : 'SUCCESS', message: `Сработал триггер «${triggerName}» → @${followerUsername}${errors.length ? ` (частично: ${errors.join('; ')})` : ''}` },
             }),
-            prisma.triggerRule.update({ where: { id: triggerId }, data: { fireCount: { increment: 1 } } }),
+            prisma.triggerRule.update({ where: { id: triggerId }, data: { fireCount: { increment: 1 }, stats: st } }),
           ])
           console.log(`[dm-worker] ✓ trigger fired for @${followerUsername}`)
         } else {

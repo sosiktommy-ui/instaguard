@@ -78,6 +78,12 @@ export async function loginByCookies(cookies: object, proxy?: string) {
   return workerFetch<{ sessionData: object; username: string }>('/login-cookies', { cookies, proxy })
 }
 
+export async function getAccountInfo(session: object, proxy?: string) {
+  return workerFetch<{ username: string; follower_count: number; following_count: number; media_count: number }>(
+    '/account-info', { sessionData: session, proxy }
+  )
+}
+
 export async function getFollowers(session: object, username: string, proxy?: string, amount = 50) {
   return workerFetch<{ followers: Array<{ pk: string; username: string; full_name: string }> }>(
     '/followers',

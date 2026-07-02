@@ -142,6 +142,16 @@ def login_cookies(payload: CookiePayload, x_worker_secret: str = Header(...)):
         raise HTTPException(status_code=400, detail=detail)
 
 
+@app.post("/account-info")
+def account_info(payload: SessionPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        return ig.get_account_info(payload.sessionData, payload.proxy)
+    except Exception as e:
+        logging.error("account_info error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/test-session")
 def test_session(payload: SessionPayload, x_worker_secret: str = Header(...)):
     _check_secret(x_worker_secret)

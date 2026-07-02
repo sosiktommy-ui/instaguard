@@ -6,7 +6,7 @@ import {
   Heart, MessageCircle, UserPlus, Clapperboard, RefreshCw,
   Plus, ChevronDown, ChevronUp, ToggleLeft, ToggleRight,
   Link2, Bookmark, FileText, X, UserCheck, Eye,
-  Image as ImageIcon, Sparkles, HelpCircle,
+  Image as ImageIcon, Sparkles, HelpCircle, ChevronRight, ArrowLeft,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/Tooltip'
@@ -127,7 +127,10 @@ interface DbAccount {
   id: string
   username: string
   status: 'ACTIVE' | 'PAUSED' | 'BLOCKED' | 'CHALLENGE'
+  role?: string
   errorCount?: number
+  followers?: number | null      // реальное число подписчиков
+  followerCount?: number         // отслеживается в базе
 }
 interface DbTrigger {
   id: string
@@ -135,6 +138,7 @@ interface DbTrigger {
   triggerType: string
   isActive: boolean
   fireCount: number
+  stats?: Record<string, number> | null   // счётчики по действиям
   actions: any[]
   conditions?: any
   createdAt: string
@@ -536,17 +540,20 @@ function StoriesBlock({ d, set }: { d: Draft; set: <K extends keyof Draft>(k: K,
 // ════════════════════════════════════════════════════════════════════════════
 // Форма создания триггера
 // ════════════════════════════════════════════════════════════════════════════
+interface FormApi { open: () => void; load: (d: Draft) => void; openFor: (id: string) => void }
+
 function CreateForm({
-  dbAccounts, dbTriggers, loadingAccounts, onCreated, formRef,
+  dbAccounts, dbTriggers, loadingAccounts, onCreated, formRef, lockedAccountId,
 }: {
   dbAccounts: DbAccount[]
   dbTriggers: DbTrigger[]
   loadingAccounts: boolean
   onCreated: () => void
-  formRef: React.MutableRefObject<{ open: () => void; load: (d: Draft) => void } | null>
+  formRef: React.MutableRefObject<FormApi | null>
+  lockedAccountId?: string
 }) {
   const [open, setOpen] = useState(false)
-  const [selected, setSelected] = useState<string[]>([])
+  const [selected, setSelected] = useState<string[]>(lockedAccountId ? [lockedAccountId] : [])
   const [search, setSearch] = useState('')
   const [d, setD] = useState<Draft>(DEFAULT_DRAFT)
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((p) => ({ ...p, [k]: v }))
@@ -574,6 +581,7 @@ function CreateForm({
     formRef.current = {
       open: () => setOpen(true),
       load: (draft: Draft) => { setD({ ...DEFAULT_DRAFT, ...draft }); setOpen(true); setSaveMsg(null) },
+      openFor: (id: string) => { setSelected([id]); setD({ ...DEFAULT_DRAFT }); setOpen(true); setSaveMsg(null) },
     }
   }, [formRef])
 
@@ -682,9 +690,10 @@ function CreateForm({
 
       {open && (
         <div className="border-t border-black/[0.05] p-5">
-          <div className="grid lg:grid-cols-3 gap-5">
+          <div className={cn('grid gap-5', lockedAccountId ? 'lg:grid-cols-2' : 'lg:grid-cols-3')}>
 
-            {/* ── Шаг 1 — аккаунты ─────────────────────────────────────────── */}
+            {/* ── Шаг 1 — аккаунты (скрыт, если создаём для конкретного аккаунта) ── */}
+            {!lockedAccountId && (
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <span className="text-[13px] font-semibold flex items-center gap-1.5">
@@ -741,6 +750,7 @@ function CreateForm({
                 })}
               </div>
             </div>
+            )}
 
             {/* ── Шаг 2 — событие ──────────────────────────────────────────── */}
             <div className="flex flex-col gap-2">
@@ -972,6 +982,140 @@ function TemplatesDrawer({ templates, loading, onClose, onApply, onDelete, onRel
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// Действия для счётчиков (какие ключи в stats и как показывать)
+// ════════════════════════════════════════════════════════════════════════════
+const ACTION_META: { key: string; label: string; color: string; Icon: any }[] = [
+  { key: 'dm', label: 'DM', color: '#0071e3', Icon: Send },
+  { key: 'comment', label: 'Коммент', color: '#34c759', Icon: MessageCircle },
+  { key: 'like', label: 'Лайк', color: '#ff2d92', Icon: Heart },
+  { key: 'follow', label: 'Подписка', color: '#34c759', Icon: UserCheck },
+  { key: 'story', label: 'Сторис', color: '#ff9f0a', Icon: Clapperboard },
+]
+
+function triggerActionKeys(trigger: DbTrigger): Set<string> {
+  const on = (a: any) => a && a.enabled !== false
+  const acts = trigger.actions ?? []
+  const s = new Set<string>()
+  if (acts.some((a: any) => a.type === 'SEND_MESSAGE' && on(a))) s.add('dm')
+  if (acts.some((a: any) => (a.type === 'REPLY_COMMENT' || a.type === 'COMMENT_GATE') && on(a))) s.add('comment')
+  if (acts.some((a: any) => (a.type === 'LIKE_MEDIA' || a.type === 'LIKE_COMMENT') && on(a))) s.add('like')
+  if (acts.some((a: any) => a.type === 'FOLLOW_BACK' && on(a))) s.add('follow')
+  if (acts.some((a: any) => a.type === 'VIEW_STORIES' && on(a))) s.add('story')
+  return s
+}
+
+// ── Компактная карточка кампании (триггера) ─────────────────────────────────
+function CampaignCard({ trigger, onToggle, onDelete, index = 0 }: {
+  trigger: DbTrigger; onToggle: () => void; onDelete: () => void; index?: number
+}) {
+  const [showDetails, setShowDetails] = useState(false)
+  const meta = META_BY_DB[trigger.triggerType]
+  const stats = trigger.stats ?? {}
+  const keys = triggerActionKeys(trigger)
+  const msg = (trigger.actions ?? []).find((a: any) => a.type === 'SEND_MESSAGE' && a.enabled !== false)
+  const msgText: string = msg?.templates?.[0] ?? ''
+  const delayMin: number = msg?.delayMin ?? 45
+  const delayMax: number = msg?.delayMax ?? 180
+
+  return (
+    <div className={cn('card card-3d rise p-3.5 flex flex-col gap-2.5', !trigger.isActive && 'opacity-55')} style={{ animationDelay: `${index * 60}ms` }}>
+      <div className="flex items-center gap-2.5">
+        {meta ? <TrigBadge meta={meta} active={trigger.isActive} size={34} tip={false} /> : <div className="w-8 h-8 rounded-xl bg-black/5" />}
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold text-[13.5px] truncate">{trigger.name}</div>
+          <div className="text-[11px] text-subt">{meta?.label ?? trigger.triggerType}</div>
+        </div>
+        <button onClick={onToggle} className={cn('flex items-center gap-1 text-[11.5px] font-medium px-2.5 py-1 rounded-lg shrink-0 transition-colors',
+          trigger.isActive ? 'bg-ok/10 text-ok hover:bg-ok/20' : 'bg-black/[0.05] text-subt hover:bg-black/[0.08]')}>
+          {trigger.isActive ? <><ToggleRight className="w-3.5 h-3.5" /> Вкл</> : <><ToggleLeft className="w-3.5 h-3.5" /> Выкл</>}
+        </button>
+      </div>
+
+      {/* Сработал N раз */}
+      <div className="flex items-baseline gap-1.5">
+        <span className="text-[20px] font-semibold tracking-tighter leading-none text-ok tabular-nums">{(trigger.fireCount ?? 0).toLocaleString('ru')}</span>
+        <span className="text-[11px] text-subt">срабатываний</span>
+      </div>
+
+      {/* Действия со счётчиками */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {ACTION_META.filter((a) => keys.has(a.key)).map((a) => (
+          <Tooltip key={a.key} content={`${a.label}: сработало ${Number((stats as any)[a.key]) || 0} раз`}>
+            <span className="text-[10.5px] px-2 py-0.5 rounded-full font-medium flex items-center gap-1" style={{ background: hexA(a.color, 0.12), color: a.color }}>
+              <a.Icon className="w-3 h-3" /> {a.label} ×{Number((stats as any)[a.key]) || 0}
+            </span>
+          </Tooltip>
+        ))}
+      </div>
+
+      {showDetails && (
+        <div className="text-[11.5px] text-subt bg-canvas rounded-xl px-3 py-2 leading-relaxed space-y-1">
+          {msgText && <div className="line-clamp-3">{msgText}</div>}
+          <div className="text-[10.5px] text-subt/70">Задержка: {delayMin}–{delayMax}с</div>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between pt-1 border-t border-black/[0.04]">
+        <button onClick={() => setShowDetails((v) => !v)} className="text-[11.5px] text-subt hover:text-ink flex items-center gap-1">
+          {showDetails ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />} детали
+        </button>
+        <button onClick={onDelete} className="flex items-center gap-1 text-[11.5px] text-subt hover:text-bad transition-colors">
+          <Trash2 className="w-3.5 h-3.5" /> Удалить
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── Карточка аккаунта (уровень 1) ───────────────────────────────────────────
+function AccountCard({ acc, campaigns, activeTypes, onOpen, index = 0 }: {
+  acc: DbAccount; campaigns: DbTrigger[]; activeTypes: Set<string>; onOpen: () => void; index?: number
+}) {
+  const active = campaigns.filter((t) => t.isActive).length
+  const fires = campaigns.reduce((s, t) => s + (t.fireCount ?? 0), 0)
+  const ps = plateState(acc, active)
+  const followers = acc.followers ?? acc.followerCount ?? 0
+  return (
+    <button onClick={onOpen}
+      className={cn('card card-3d rise text-left p-4 flex flex-col gap-3 w-full border', PLATE_STYLE[ps])}
+      style={{ animationDelay: `${index * 70}ms` }}>
+      <div className="flex items-center gap-2.5">
+        <span className="w-9 h-9 rounded-2xl bg-gradient-to-br from-[#feda75] via-[#d62976] to-[#4f5bd5] flex items-center justify-center text-white font-semibold shrink-0">
+          {(acc.username?.[0] ?? '?').toUpperCase()}
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold text-[14px] truncate">@{acc.username}</div>
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <span className={cn('w-1.5 h-1.5 rounded-full', PLATE_DOT[ps])} />
+            <span className="text-[10.5px] text-subt">{PLATE_LABEL[ps]}</span>
+          </div>
+        </div>
+        <ChevronRight className="w-5 h-5 text-subt shrink-0" />
+      </div>
+
+      <div className="flex items-center gap-1.5">
+        {TRIG_META.map((m) => <TrigBadge key={m.key} meta={m} active={activeTypes.has(m.db)} size={24} tip={false} />)}
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <div className="bg-canvas rounded-xl px-2 py-2 text-center">
+          <div className="text-[16px] font-semibold tracking-tighter leading-none">{campaigns.length}</div>
+          <div className="text-[10px] text-subt mt-1">Кампаний</div>
+        </div>
+        <div className="bg-canvas rounded-xl px-2 py-2 text-center">
+          <div className="text-[16px] font-semibold tracking-tighter leading-none">{followers.toLocaleString('ru')}</div>
+          <div className="text-[10px] text-subt mt-1">Подписчиков</div>
+        </div>
+        <div className="bg-canvas rounded-xl px-2 py-2 text-center">
+          <div className="text-[16px] font-semibold tracking-tighter leading-none text-ok">{fires.toLocaleString('ru')}</div>
+          <div className="text-[10px] text-subt mt-1">Срабатываний</div>
+        </div>
+      </div>
+    </button>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Главный экран
 // ════════════════════════════════════════════════════════════════════════════
 function TriggersScreen() {
@@ -983,7 +1127,8 @@ function TriggersScreen() {
   const [loadingTemplates, setLoadingTemplates] = useState(false)
   const [showTemplates, setShowTemplates] = useState(false)
 
-  const formApi = useRef<{ open: () => void; load: (d: Draft) => void } | null>(null)
+  const formApi = useRef<FormApi | null>(null)
+  const [selId, setSelId] = useState<string | null>(null)
 
   const loadAccounts = useCallback(async () => {
     setLoadingAccounts(true)
@@ -1019,87 +1164,157 @@ function TriggersScreen() {
     setTemplates((prev) => prev.filter((t) => t.id !== id))
   }
 
-  const activeTriggers = dbTriggers.filter((t) => t.isActive)
-  const inactiveTriggers = dbTriggers.filter((t) => !t.isActive)
   const totalFires = dbTriggers.reduce((s, t) => s + (t.fireCount ?? 0), 0)
+  const campaignsFor = (id: string) => dbTriggers.filter((t) => t.responder?.id === id)
+  const activeByAccount = useMemo(() => {
+    const m = new Map<string, Set<string>>()
+    for (const t of dbTriggers) {
+      if (!t.isActive) continue
+      if (!m.has(t.responder.id)) m.set(t.responder.id, new Set())
+      m.get(t.responder.id)!.add(t.triggerType)
+    }
+    return m
+  }, [dbTriggers])
 
-  return (
-    <div className="space-y-5 pb-24">
-      <div className="grid grid-cols-3 gap-3">
-        <StatCard icon={Zap} color="#0071e3" value={activeTriggers.length} label="Активных" tip="Сколько триггеров сейчас включено и работает" delay={0} />
-        <StatCard icon={Send} color="#34c759" value={totalFires} label="Срабатываний" tip="Суммарно отправлено сообщений / выполнено действий по всем триггерам" delay={90} />
-        <StatCard icon={Users} color="#5e5ce6" value={dbAccounts.filter((a) => a.status === 'ACTIVE').length} label="Аккаунтов" tip="Активные Instagram-аккаунты, готовые к работе" delay={180} />
-      </div>
+  const selAcc = selId ? dbAccounts.find((a) => a.id === selId) : null
+  const selCampaigns = selId ? campaignsFor(selId) : []
 
-      <div className="card overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-black/[0.05]">
-          <div className="flex items-center gap-2">
-            <Zap className="w-4 h-4 text-brand" />
-            <span className="font-semibold text-[15px]">Триггеры</span>
-            <span className="text-[12px] text-subt">({dbTriggers.length})</span>
+  const templatesBtn = (
+    <button onClick={() => { setShowTemplates(true); loadTemplates() }}
+      className="flex items-center gap-1.5 text-[12.5px] font-medium px-3 py-1.5 rounded-xl bg-black/[0.05] text-ink hover:bg-black/[0.08] transition-colors">
+      <FileText className="w-3.5 h-3.5" /> Шаблоны
+    </button>
+  )
+
+  // ── Уровень 2: кампании выбранного аккаунта ────────────────────────────────
+  if (selAcc) {
+    const active = selCampaigns.filter((t) => t.isActive).length
+    const fires = selCampaigns.reduce((s, t) => s + (t.fireCount ?? 0), 0)
+    const followers = selAcc.followers ?? selAcc.followerCount ?? 0
+    return (
+      <div className="space-y-5 pb-24">
+        {/* Хлебные крошки */}
+        <div className="flex items-center gap-2 text-[13px]">
+          <button onClick={() => setSelId(null)} className="flex items-center gap-1.5 text-subt hover:text-ink transition-colors">
+            <ArrowLeft className="w-4 h-4" /> Аккаунты
+          </button>
+          <span className="text-line">/</span>
+          <span className="font-medium text-ink">@{selAcc.username}</span>
+        </div>
+
+        {/* Шапка аккаунта */}
+        <div className="card gloss p-5 flex items-center gap-4">
+          <span className="w-14 h-14 rounded-3xl bg-gradient-to-br from-[#feda75] via-[#d62976] to-[#4f5bd5] flex items-center justify-center text-white text-[22px] font-semibold shrink-0">
+            {(selAcc.username?.[0] ?? '?').toUpperCase()}
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-[18px] tracking-tight truncate">@{selAcc.username}</div>
+            <div className="text-[12px] text-subt">{PLATE_LABEL[plateState(selAcc, active)]}</div>
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => { setShowTemplates(true); loadTemplates() }}
-              className="flex items-center gap-1.5 text-[12.5px] font-medium px-3 py-1.5 rounded-xl bg-black/[0.05] text-ink hover:bg-black/[0.08] transition-colors">
-              <FileText className="w-3.5 h-3.5" /> Шаблоны
-            </button>
-            <button onClick={loadTriggers} className="p-1.5 text-subt hover:text-ink transition-colors" title="Обновить">
-              <RefreshCw className={cn('w-4 h-4', loadingTriggers && 'animate-spin')} />
-            </button>
+          <div className="hidden sm:grid grid-cols-3 gap-3">
+            {[['Кампаний', selCampaigns.length], ['Подписчиков', followers], ['Срабатываний', fires]].map(([l, v]) => (
+              <div key={l} className="text-center px-3">
+                <div className="text-[20px] font-semibold tracking-tighter leading-none">{Number(v).toLocaleString('ru')}</div>
+                <div className="text-[11px] text-subt mt-1">{l}</div>
+              </div>
+            ))}
           </div>
         </div>
 
-        {loadingTriggers ? (
-          <div className="py-12 text-center text-subt text-[13px]">Загрузка…</div>
-        ) : dbTriggers.length === 0 ? (
-          <div className="py-14 flex flex-col items-center gap-3 text-center px-6">
+        {/* Кампании */}
+        <div className="flex items-center justify-between">
+          <div className="text-[13px] font-semibold text-subt uppercase tracking-wider">Кампании ({selCampaigns.length})</div>
+          <div className="flex items-center gap-2">
+            {templatesBtn}
+            <Button size="sm" onClick={() => formApi.current?.openFor(selAcc.id)}>
+              <Plus className="w-3.5 h-3.5" /> Кампания
+            </Button>
+          </div>
+        </div>
+
+        {selCampaigns.length === 0 ? (
+          <div className="card py-12 flex flex-col items-center gap-3 text-center px-6">
             <div className="w-14 h-14 rounded-3xl bg-brand/8 flex items-center justify-center"><Zap className="w-7 h-7 text-brand/50" /></div>
-            <div className="font-semibold text-[16px] tracking-tight text-ink/70">Триггеров пока нет</div>
-            <div className="text-[13px] text-subt max-w-xs">Создайте первый триггер ниже — система будет автоматически реагировать на события</div>
+            <div className="font-semibold text-[15px] text-ink/70">Кампаний пока нет</div>
+            <div className="text-[13px] text-subt max-w-xs">Нажми «Кампания», чтобы запустить триггер на этом аккаунте</div>
           </div>
         ) : (
-          <div className="p-4 space-y-3">
-            {activeTriggers.length > 0 && (
-              <>
-                <div className="text-[11px] font-semibold text-subt uppercase tracking-wider px-1">Активные</div>
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {activeTriggers.map((t, i) => (
-                    <TriggerCard key={t.id} trigger={t} index={i} onToggle={() => toggleTrigger(t.id, t.isActive)} onDelete={() => deleteTrigger(t.id)} />
-                  ))}
-                </div>
-              </>
-            )}
-            {inactiveTriggers.length > 0 && (
-              <>
-                <div className="text-[11px] font-semibold text-subt uppercase tracking-wider px-1 mt-2">Выключенные</div>
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {inactiveTriggers.map((t, i) => (
-                    <TriggerCard key={t.id} trigger={t} index={i} onToggle={() => toggleTrigger(t.id, t.isActive)} onDelete={() => deleteTrigger(t.id)} />
-                  ))}
-                </div>
-              </>
-            )}
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {selCampaigns.map((t, i) => (
+              <CampaignCard key={t.id} trigger={t} index={i}
+                onToggle={() => toggleTrigger(t.id, t.isActive)} onDelete={() => deleteTrigger(t.id)} />
+            ))}
           </div>
         )}
+
+        <CreateForm
+          dbAccounts={dbAccounts}
+          dbTriggers={dbTriggers}
+          loadingAccounts={loadingAccounts}
+          onCreated={() => { loadTriggers(); loadTemplates() }}
+          formRef={formApi}
+          lockedAccountId={selAcc.id}
+        />
+
+        {showTemplates && (
+          <TemplatesDrawer templates={templates} loading={loadingTemplates}
+            onClose={() => setShowTemplates(false)} onApply={(d) => formApi.current?.load(d)}
+            onDelete={deleteTemplate} onReload={loadTemplates} />
+        )}
+      </div>
+    )
+  }
+
+  // ── Уровень 1: аккаунты ────────────────────────────────────────────────────
+  return (
+    <div className="space-y-5 pb-24">
+      <div className="grid grid-cols-3 gap-3">
+        <StatCard icon={Users} color="#0071e3" value={dbAccounts.length} label="Аккаунтов" tip="Всего подключённых Instagram-аккаунтов" delay={0} />
+        <StatCard icon={Zap} color="#5e5ce6" value={dbTriggers.length} label="Кампаний" tip="Всего триггеров (кампаний) по всем аккаунтам" delay={90} />
+        <StatCard icon={Send} color="#34c759" value={totalFires} label="Срабатываний" tip="Суммарно выполнено действий по всем кампаниям" delay={180} />
       </div>
 
-      <CreateForm
-        dbAccounts={dbAccounts}
-        dbTriggers={dbTriggers}
-        loadingAccounts={loadingAccounts}
-        onCreated={() => { loadTriggers(); loadTemplates() }}
-        formRef={formApi}
-      />
+      <div className="flex items-center justify-between px-1">
+        <div className="flex items-center gap-2">
+          <Users className="w-4 h-4 text-brand" />
+          <span className="font-semibold text-[15px]">Аккаунты</span>
+          <span className="text-[12px] text-subt">({dbAccounts.length})</span>
+          <Hint text="Нажми на аккаунт, чтобы провалиться в его кампании (триггеры)" />
+        </div>
+        <div className="flex items-center gap-2">
+          {templatesBtn}
+          <a href="/accounts" className="flex items-center gap-1.5 text-[12.5px] font-medium px-3 py-1.5 rounded-xl bg-black/[0.05] text-ink hover:bg-black/[0.08] transition-colors">
+            <Plus className="w-3.5 h-3.5" /> Аккаунт
+          </a>
+          <button onClick={() => { loadAccounts(); loadTriggers() }} className="p-1.5 text-subt hover:text-ink transition-colors" title="Обновить">
+            <RefreshCw className={cn('w-4 h-4', (loadingAccounts || loadingTriggers) && 'animate-spin')} />
+          </button>
+        </div>
+      </div>
+
+      {loadingAccounts ? (
+        <div className="card py-12 text-center text-subt text-[13px]">Загрузка…</div>
+      ) : dbAccounts.length === 0 ? (
+        <div className="card py-14 flex flex-col items-center gap-3 text-center px-6">
+          <div className="w-14 h-14 rounded-3xl bg-brand/8 flex items-center justify-center"><Users className="w-7 h-7 text-brand/50" /></div>
+          <div className="font-semibold text-[16px] tracking-tight text-ink/70">Нет аккаунтов</div>
+          <div className="text-[13px] text-subt max-w-xs"><a href="/accounts" className="text-brand hover:underline">Добавьте аккаунт</a>, чтобы запускать по нему кампании</div>
+        </div>
+      ) : (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {dbAccounts.map((acc, i) => (
+            <AccountCard key={acc.id} acc={acc} index={i}
+              campaigns={campaignsFor(acc.id)}
+              activeTypes={activeByAccount.get(acc.id) ?? new Set<string>()}
+              onOpen={() => setSelId(acc.id)} />
+          ))}
+        </div>
+      )}
 
       {showTemplates && (
-        <TemplatesDrawer
-          templates={templates}
-          loading={loadingTemplates}
-          onClose={() => setShowTemplates(false)}
-          onApply={(d) => formApi.current?.load(d)}
-          onDelete={deleteTemplate}
-          onReload={loadTemplates}
-        />
+        <TemplatesDrawer templates={templates} loading={loadingTemplates}
+          onClose={() => setShowTemplates(false)} onApply={(d) => formApi.current?.load(d)}
+          onDelete={deleteTemplate} onReload={loadTemplates} />
       )}
     </div>
   )

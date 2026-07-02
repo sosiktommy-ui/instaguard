@@ -287,6 +287,18 @@ def login_by_cookies(cookies: dict, proxy: str | None = None) -> tuple[dict, str
     return cl.get_settings(), info.username
 
 
+def get_account_info(session_data: dict, proxy: str | None = None) -> dict:
+    """Инфо о собственном аккаунте: реальное число подписчиков/подписок/постов."""
+    cl = build_client(session_data, proxy)
+    info = cl.account_info()
+    return {
+        "username": getattr(info, "username", ""),
+        "follower_count": int(getattr(info, "follower_count", 0) or 0),
+        "following_count": int(getattr(info, "following_count", 0) or 0),
+        "media_count": int(getattr(info, "media_count", 0) or 0),
+    }
+
+
 def get_followers(session_data: dict, username: str, proxy: str | None = None, amount: int = 50) -> list[dict]:
     cl = build_client(session_data, proxy)
     user_id = cl.user_id_from_username(username)

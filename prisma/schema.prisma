@@ -31,6 +31,7 @@ model InstagramAccount {
   lastChecked DateTime?
   errorCount  Int           @default(0)
   limits      Json?
+  followers   Int?          // реальное число подписчиков (из account_info)
 
   user                User           @relation(fields: [userId], references: [id])
   triggersAsResponder TriggerRule[]  @relation("ResponderRules")
@@ -105,6 +106,7 @@ model TriggerRule {
   actions     Json
   isActive    Boolean   @default(true)
   fireCount   Int       @default(0)
+  stats       Json?     // счётчики по действиям: {dm,like,follow,story,comment}
   priority    Int       @default(0)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt

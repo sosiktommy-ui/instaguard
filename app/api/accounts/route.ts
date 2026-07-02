@@ -7,20 +7,24 @@ export async function GET() {
       orderBy: { id: 'desc' },
       select: {
         id: true, username: true, status: true, role: true,
-        lastChecked: true, errorCount: true, proxy: true,
+        lastChecked: true, errorCount: true, proxy: true, followers: true,
         snapshots: { orderBy: { createdAt: 'desc' }, take: 1, select: { data: true } },
       },
     })
-    return NextResponse.json(accounts.map((a) => ({
-      id: a.id,
-      username: a.username,
-      status: a.status,
-      role: a.role,
-      lastChecked: a.lastChecked,
-      errorCount: a.errorCount,
-      proxy: a.proxy,
-      followerCount: Array.isArray(a.snapshots[0]?.data) ? (a.snapshots[0].data as string[]).length : 0,
-    })))
+    return NextResponse.json(accounts.map((a) => {
+      const tracked = Array.isArray(a.snapshots[0]?.data) ? (a.snapshots[0].data as string[]).length : 0
+      return {
+        id: a.id,
+        username: a.username,
+        status: a.status,
+        role: a.role,
+        lastChecked: a.lastChecked,
+        errorCount: a.errorCount,
+        proxy: a.proxy,
+        followers: a.followers ?? null,   // реальное число (из account_info); null пока не спарсили
+        followerCount: tracked,           // отслеживается в базе
+      }
+    }))
   } catch {
     return NextResponse.json([])
   }
