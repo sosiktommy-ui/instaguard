@@ -1043,18 +1043,65 @@ function describeSignal(trigger: DbTrigger): string | null {
 }
 
 
+// Детали конкретного действия (раскрываются по клику)
+function ActionDetail({ trigger, k }: { trigger: DbTrigger; k: string }) {
+  const on = (a: any) => a && a.enabled !== false
+  const acts = trigger.actions ?? []
+  const isComment = trigger.triggerType === 'NEW_COMMENT'
+  const box = 'text-[11.5px] text-subt bg-canvas rounded-xl px-3 py-2.5 leading-relaxed space-y-1.5 animate-fade-in'
+
+  if (k === 'dm') {
+    const dm = acts.find((a: any) => a.type === 'SEND_MESSAGE' && on(a))
+    const legacyGate = acts.find((a: any) => a.type === 'COMMENT_GATE' && on(a))
+    const gate = dm?.gate ?? (legacyGate ? { mode: 'followed_by', inviteText: legacyGate.text } : null)
+    return (
+      <div className={box}>
+        {dm?.templates?.[0] && <div className="text-ink/80">«{dm.templates[0]}»</div>}
+        {dm?.link?.enabled && <div className="flex items-center gap-1 text-brand"><Link2 className="w-3 h-3 shrink-0" /> {dm.link.text || 'Ссылка'} <span className="text-subt truncate">→ {dm.link.url}</span></div>}
+        {dm?.image?.enabled && dm.image.url && <img src={dm.image.url} alt="" className="w-full max-h-32 object-cover rounded-lg border border-line/60" />}
+        {gate && <div className="flex items-center gap-1"><UserCheck className="w-3 h-3 shrink-0 text-brand" /> Проверка подписки{gate.mode === 'mutual' ? ' (взаимная)' : ''}{gate.inviteText ? ` · неподписанным: «${gate.inviteText}»` : ''}</div>}
+        <div className="text-[10.5px] text-subt/70">Задержка отправки: {dm?.delayMin ?? 45}–{dm?.delayMax ?? 180}с</div>
+      </div>
+    )
+  }
+  if (k === 'comment') {
+    const reply = acts.find((a: any) => a.type === 'REPLY_COMMENT' && on(a))
+    const variants: string[] = (reply?.replies ?? []).filter(Boolean)
+    return (
+      <div className={box}>
+        <div className="font-medium text-ink/70">Варианты ответа — {variants.length} (бот выбирает случайный):</div>
+        <ol className="list-decimal ml-4 space-y-0.5">{variants.map((v, i) => <li key={i}>{v}</li>)}</ol>
+      </div>
+    )
+  }
+  if (k === 'like') {
+    const lm = acts.some((a: any) => a.type === 'LIKE_MEDIA' && on(a))
+    const lc = acts.some((a: any) => a.type === 'LIKE_COMMENT' && on(a))
+    return (
+      <div className={box}>
+        {lm && <div className="flex items-center gap-1"><Heart className="w-3 h-3 shrink-0 text-[#ff2d92]" /> Лайкает {isComment ? 'последние посты автора комментария' : 'последний пост подписчика'}</div>}
+        {lc && <div className="flex items-center gap-1"><Heart className="w-3 h-3 shrink-0 text-[#ff2d92]" /> Лайкает сам комментарий</div>}
+      </div>
+    )
+  }
+  if (k === 'follow') {
+    return <div className={box}><div className="flex items-center gap-1"><UserCheck className="w-3 h-3 shrink-0 text-ok" /> Подписывается на {isComment ? 'автора комментария' : 'нового подписчика'}</div></div>
+  }
+  if (k === 'story') {
+    const st = acts.find((a: any) => a.type === 'VIEW_STORIES' && on(a))
+    return <div className={box}><div className="flex items-center gap-1"><Clapperboard className="w-3 h-3 shrink-0 text-[#ff9f0a]" /> Просматривает сторис{st?.like ? ' и ставит лайк' : ''}</div></div>
+  }
+  return null
+}
+
 // ── Компактная карточка кампании (триггера) ─────────────────────────────────
 function CampaignCard({ trigger, onToggle, onDelete, index = 0 }: {
   trigger: DbTrigger; onToggle: () => void; onDelete: () => void; index?: number
 }) {
-  const [showDetails, setShowDetails] = useState(false)
+  const [openKey, setOpenKey] = useState<string | null>(null)
   const meta = META_BY_DB[trigger.triggerType]
   const rows = describeActions(trigger)
   const signal = describeSignal(trigger)
-  const msg = (trigger.actions ?? []).find((a: any) => a.type === 'SEND_MESSAGE' && a.enabled !== false)
-  const msgText: string = msg?.templates?.[0] ?? ''
-  const delayMin: number = msg?.delayMin ?? 45
-  const delayMax: number = msg?.delayMax ?? 180
 
   return (
     <div className={cn('card card-3d rise p-3.5 flex flex-col gap-2.5', !trigger.isActive && 'opacity-55')} style={{ animationDelay: `${index * 60}ms` }}>
@@ -1076,46 +1123,64 @@ function CampaignCard({ trigger, onToggle, onDelete, index = 0 }: {
         <span className="text-[11px] text-subt">срабатываний</span>
       </div>
 
-      {/* Сигнал (на что реагирует) — для триггера-комментария */}
-      {signal && (
-        <div className="flex items-center gap-1.5 text-[11px] text-subt">
-          <Filter className="w-3.5 h-3.5 text-[#5e5ce6]" /> <span className="font-medium text-ink/70">Сигнал:</span> {signal}
-        </div>
-      )}
+      {/* Сигнал (на что реагирует) — для триггера-комментария, кликабелен */}
+      {signal && (() => {
+        const cond = (trigger.conditions ?? {}) as any
+        const phrases: string[] = (cond.phrases ?? []).filter(Boolean)
+        const expandable = cond.mode === 'specific' && phrases.length > 0
+        const isOpen = openKey === 'signal'
+        return (
+          <div>
+            <button onClick={() => expandable && setOpenKey(isOpen ? null : 'signal')}
+              className={cn('w-full flex items-center gap-1.5 text-[11px] text-subt px-2 py-1.5 rounded-xl text-left', expandable && (isOpen ? 'bg-black/[0.04]' : 'hover:bg-black/[0.03]'))}>
+              <Filter className="w-3.5 h-3.5 text-[#5e5ce6] shrink-0" />
+              <span className="font-medium text-ink/70">Сигнал:</span> <span className="flex-1 truncate">{signal}</span>
+              {expandable && <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', isOpen && 'rotate-180')} />}
+            </button>
+            {isOpen && (
+              <div className="text-[11.5px] text-subt bg-canvas rounded-xl px-3 py-2.5 space-y-0.5 animate-fade-in mt-1">
+                <div className="font-medium text-ink/70">Реагирует на фразы{cond.exact ? ' (точное совпадение)' : ' (с опечатками)'}:</div>
+                <ul className="list-disc ml-4">{phrases.map((p, i) => <li key={i}>{p}</li>)}</ul>
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
-      {/* Действия по категориям + их включённые настройки */}
+      {/* Действия — кликабельные строки, раскрывают детали. Мелкий текст: «нажми, чтобы раскрыть» */}
       <div className="flex flex-col gap-1.5">
+        <div className="text-[10px] text-subt/70 uppercase tracking-wider">Действия — нажми, чтобы раскрыть</div>
         {rows.map((r) => {
           const active = r.count > 0
+          const isOpen = openKey === r.key
           return (
-            <div key={r.key} className="flex items-center gap-2 flex-wrap">
-              <span
-                className={cn('text-[11px] px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1.5 shrink-0', !active && 'opacity-75')}
-                style={active
-                  ? { background: `linear-gradient(135deg, ${r.color}, ${darken(r.color)})`, color: '#fff', boxShadow: `0 2px 8px ${hexA(r.color, 0.4)}` }
-                  : { background: hexA(r.color, 0.1), color: r.color }}>
-                <r.Icon className="w-3.5 h-3.5" strokeWidth={2.4} /> {r.label}
-                <span className={cn('tabular-nums', active ? 'opacity-90' : 'opacity-60')}>×{r.count}</span>
-              </span>
-              {r.settings.map((sset, i) => (
-                <span key={i} className="text-[10px] text-subt bg-black/[0.04] px-1.5 py-0.5 rounded-md">{sset}</span>
-              ))}
+            <div key={r.key}>
+              <button
+                onClick={() => setOpenKey(isOpen ? null : r.key)}
+                className={cn('w-full flex items-center gap-2 px-2 py-1.5 rounded-xl transition-colors text-left',
+                  isOpen ? 'bg-black/[0.04]' : 'hover:bg-black/[0.03]')}>
+                <span
+                  className={cn('text-[11px] px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1.5 shrink-0', !active && 'opacity-75')}
+                  style={active
+                    ? { background: `linear-gradient(135deg, ${r.color}, ${darken(r.color)})`, color: '#fff', boxShadow: `0 2px 8px ${hexA(r.color, 0.4)}` }
+                    : { background: hexA(r.color, 0.1), color: r.color }}>
+                  <r.Icon className="w-3.5 h-3.5" strokeWidth={2.4} /> {r.label}
+                  <span className={cn('tabular-nums', active ? 'opacity-90' : 'opacity-60')}>×{r.count}</span>
+                </span>
+                <span className="flex-1 flex items-center gap-1 flex-wrap">
+                  {r.settings.map((sset, i) => (
+                    <span key={i} className="text-[10px] text-subt bg-black/[0.04] px-1.5 py-0.5 rounded-md">{sset}</span>
+                  ))}
+                </span>
+                <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', isOpen && 'rotate-180')} />
+              </button>
+              {isOpen && <div className="pl-1 pt-1"><ActionDetail trigger={trigger} k={r.key} /></div>}
             </div>
           )
         })}
       </div>
 
-      {showDetails && (
-        <div className="text-[11.5px] text-subt bg-canvas rounded-xl px-3 py-2 leading-relaxed space-y-1">
-          {msgText && <div className="line-clamp-3">{msgText}</div>}
-          <div className="text-[10.5px] text-subt/70">Задержка: {delayMin}–{delayMax}с</div>
-        </div>
-      )}
-
-      <div className="flex items-center justify-between pt-1 border-t border-black/[0.04]">
-        <button onClick={() => setShowDetails((v) => !v)} className="text-[11.5px] text-subt hover:text-ink flex items-center gap-1">
-          {showDetails ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />} детали
-        </button>
+      <div className="flex items-center justify-end pt-1 border-t border-black/[0.04]">
         <button onClick={onDelete} className="flex items-center gap-1 text-[11.5px] text-subt hover:text-bad transition-colors">
           <Trash2 className="w-3.5 h-3.5" /> Удалить
         </button>
