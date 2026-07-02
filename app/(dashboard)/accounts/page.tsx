@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Play, Pause, Trash2, X, AtSign, Lock, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check } from 'lucide-react'
+import { Plus, Play, Pause, Trash2, X, AtSign, Lock, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tilt } from '@/components/ui/Tilt'
 import { useStore, formatFollowers } from '@/lib/store'
@@ -162,6 +162,207 @@ function AddModal({ onClose, onAdded }: { onClose: () => void; onAdded: (usernam
   )
 }
 
+// ── Метаданные типов кампаний (совпадают с вкладкой «Триггеры») ───────────────
+const TYPE_META: Record<string, { label: string; color: string; Icon: any }> = {
+  NEW_FOLLOWER:  { label: 'Новая подписка',  color: '#0071e3', Icon: UserPlus },
+  NEW_COMMENT:   { label: 'Комментарий',     color: '#34c759', Icon: MessageCircle },
+  NEW_LIKE:      { label: 'Лайк',            color: '#ff2d92', Icon: Heart },
+  STORY_MENTION: { label: 'Ответ на сторис', color: '#ff9f0a', Icon: Clapperboard },
+}
+function hexA(hex: string, a: number) {
+  const n = parseInt(hex.slice(1), 16)
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`
+}
+// Разбивка суммарных действий аккаунта (из stats кампаний)
+const ACT_META: Record<string, { label: string; color: string; Icon: any }> = {
+  dm:      { label: 'DM',       color: '#0071e3', Icon: Send },
+  like:    { label: 'Лайки',    color: '#ff2d92', Icon: Heart },
+  follow:  { label: 'Подписки', color: '#34c759', Icon: UserCheck },
+  story:   { label: 'Сторис',   color: '#ff9f0a', Icon: Clapperboard },
+  comment: { label: 'Комменты', color: '#34c759', Icon: MessageCircle },
+}
+// Значки действий кампании из её actions[]
+function campaignBadges(actions: any[]): { label: string; color: string; Icon: any }[] {
+  const isOn = (a: any) => a && a.enabled !== false
+  const out: { label: string; color: string; Icon: any }[] = []
+  const msg = (actions ?? []).find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
+  if (msg) out.push({ label: 'DM', color: '#0071e3', Icon: Send })
+  if (msg?.gate) out.push({ label: msg.gate.mode === 'mutual' ? 'взаимная подписка' : 'проверка подписки', color: '#0071e3', Icon: UserCheck })
+  if ((actions ?? []).some((a: any) => a.type === 'REPLY_COMMENT' && isOn(a))) out.push({ label: 'ответ в комментах', color: '#34c759', Icon: MessageCircle })
+  if ((actions ?? []).some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))) out.push({ label: 'лайк', color: '#ff2d92', Icon: Heart })
+  if ((actions ?? []).some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))) out.push({ label: 'подписка', color: '#34c759', Icon: UserCheck })
+  if ((actions ?? []).some((a: any) => a.type === 'VIEW_STORIES' && isOn(a))) out.push({ label: 'сторис', color: '#ff9f0a', Icon: Clapperboard })
+  return out
+}
+
+// ── Детальное окно аккаунта: статистика + кампании ────────────────────────────
+function AccountDetailModal({ acc, ra, campaigns, onClose }: {
+  acc: { username: string; followers?: number }
+  ra?: RealAccount
+  campaigns: any[]
+  onClose: () => void
+}) {
+  const status = ra?.status ?? 'ACTIVE'
+  const st = status === 'ACTIVE'
+    ? { pill: 'bg-ok/10 text-ok', dot: 'bg-ok', t: 'Активен' }
+    : status === 'BLOCKED'
+      ? { pill: 'bg-bad/10 text-bad', dot: 'bg-bad', t: 'Заблокирован' }
+      : status === 'CHALLENGE'
+        ? { pill: 'bg-bad/10 text-bad', dot: 'bg-bad', t: 'Требует входа' }
+        : { pill: 'bg-warn/10 text-warn', dot: 'bg-warn', t: 'Пауза' }
+
+  const totalFires = campaigns.reduce((s, c) => s + (c.fireCount ?? 0), 0)
+  const activeCount = campaigns.filter((c) => c.isActive).length
+  const agg: Record<string, number> = {}
+  campaigns.forEach((c) => {
+    const s = (c.stats ?? {}) as Record<string, any>
+    for (const k in s) agg[k] = (agg[k] ?? 0) + (Number(s[k]) || 0)
+  })
+  const aggEntries = Object.keys(ACT_META).filter((k) => (agg[k] ?? 0) > 0)
+
+  const tile = (icon: any, val: string | number, label: string, color: string) => {
+    const Icon = icon
+    return (
+      <div className="rounded-2xl bg-canvas p-3.5 text-center">
+        <div className="flex items-center justify-center gap-1.5 text-[18px] font-semibold tabular-nums">
+          <Icon className="w-4 h-4" style={{ color }} />{val}
+        </div>
+        <div className="text-[11px] text-subt mt-0.5">{label}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in" onClick={onClose}>
+      <div className="card w-full max-w-2xl max-h-[86vh] overflow-y-auto animate-scale-in" onClick={(e) => e.stopPropagation()}>
+        {/* Шапка с IG-градиентом */}
+        <div className="relative p-6 pb-5 overflow-hidden border-b border-black/[0.05]">
+          <div className="absolute inset-0 bg-gradient-to-br from-[#feda75]/15 via-[#d62976]/12 to-[#4f5bd5]/15 pointer-events-none" />
+          <button onClick={onClose} className="absolute top-4 right-4 z-10 text-subt hover:text-ink transition-colors"><X size={20} /></button>
+          <div className="relative flex items-center gap-4">
+            <div className="w-16 h-16 rounded-3xl bg-gradient-to-br from-[#feda75] via-[#d62976] to-[#4f5bd5] flex items-center justify-center text-white font-bold text-2xl shadow-lg shrink-0">
+              {acc.username[0].toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <div className="text-[20px] font-semibold tracking-tight truncate">@{acc.username}</div>
+              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                <span className={cn('flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-0.5 rounded-full', st.pill)}>
+                  <span className={cn('w-1.5 h-1.5 rounded-full', st.dot)} /> {st.t}
+                </span>
+                {ra?.lastChecked && (
+                  <span className="flex items-center gap-1 text-[11px] text-subt">
+                    <Calendar className="w-3 h-3" /> {new Date(ra.lastChecked).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                )}
+                {ra?.errorCount ? <span className="text-[11px] text-bad">⚠ {ra.errorCount} ошибок</span> : null}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6 space-y-5">
+          {/* Ключевые цифры */}
+          <div className="grid grid-cols-3 gap-3">
+            {tile(Users, formatFollowers(ra?.followerCount ?? acc.followers ?? 0), 'подписчики', '#8e8e93')}
+            {tile(Zap, `${activeCount}/${campaigns.length}`, 'кампаний активно', '#0071e3')}
+            {tile(Send, totalFires.toLocaleString('ru'), 'срабатываний', '#34c759')}
+          </div>
+
+          {/* Разбивка действий */}
+          {aggEntries.length > 0 && (
+            <div>
+              <div className="flex items-center gap-1.5 text-[12px] font-semibold text-subt mb-2">
+                <TrendingUp className="w-3.5 h-3.5" /> Выполнено действий
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {aggEntries.map((k) => {
+                  const m = ACT_META[k]; const Icon = m.Icon
+                  return (
+                    <span key={k} className="flex items-center gap-1.5 text-[12.5px] font-medium px-3 py-1.5 rounded-xl" style={{ background: hexA(m.color, 0.1), color: m.color }}>
+                      <Icon className="w-3.5 h-3.5" /> {m.label} <span className="tabular-nums font-semibold">×{agg[k].toLocaleString('ru')}</span>
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Рекламные кампании */}
+          <div>
+            <div className="flex items-center gap-1.5 text-[12px] font-semibold text-subt mb-2">
+              <Activity className="w-3.5 h-3.5" /> Рекламные кампании ({campaigns.length})
+            </div>
+            {campaigns.length === 0 ? (
+              <div className="rounded-2xl bg-canvas p-6 text-center">
+                <div className="text-[13px] text-subt">На этом аккаунте пока нет кампаний.</div>
+                <a href="/triggers" className="inline-block mt-2 text-[13px] font-medium text-brand hover:underline">Создать триггер →</a>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {campaigns.map((c) => {
+                  const meta = TYPE_META[c.triggerType] ?? { label: c.triggerType, color: '#8e8e93', Icon: Zap }
+                  const Icon = meta.Icon
+                  const badges = campaignBadges(c.actions ?? [])
+                  const cs = (c.stats ?? {}) as Record<string, any>
+                  const csEntries = Object.keys(ACT_META).filter((k) => (Number(cs[k]) || 0) > 0)
+                  return (
+                    <div key={c.id} className={cn('rounded-2xl border p-3.5 transition-all', c.isActive ? 'border-line/60 bg-white' : 'border-line/40 bg-canvas/50 opacity-70')}>
+                      <div className="flex items-start gap-3">
+                        <span className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: `linear-gradient(145deg, ${meta.color}, ${hexA(meta.color, 0.7)})`, boxShadow: `0 3px 10px ${hexA(meta.color, 0.4)}` }}>
+                          <Icon className="w-4 h-4 text-white" />
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-[14px] truncate">{c.name}</span>
+                            <span className="flex items-center gap-1 text-[11px] shrink-0">
+                              <span className={cn('w-1.5 h-1.5 rounded-full', c.isActive ? 'bg-ok' : 'bg-subt/40')} />
+                              <span className={c.isActive ? 'text-ok' : 'text-subt'}>{c.isActive ? 'вкл' : 'выкл'}</span>
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-[11px] px-2 py-0.5 rounded-full font-medium" style={{ background: hexA(meta.color, 0.12), color: meta.color }}>{meta.label}</span>
+                            <span className="text-[11px] text-subt">сработал <span className="font-semibold text-ink">{(c.fireCount ?? 0).toLocaleString('ru')}</span> раз</span>
+                          </div>
+                          {badges.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {badges.map((b, i) => {
+                                const BI = b.Icon
+                                return (
+                                  <span key={i} className="flex items-center gap-1 text-[10.5px] px-2 py-0.5 rounded-full font-medium" style={{ background: hexA(b.color, 0.1), color: b.color }}>
+                                    <BI className="w-2.5 h-2.5" /> {b.label}
+                                  </span>
+                                )
+                              })}
+                            </div>
+                          )}
+                          {csEntries.length > 0 && (
+                            <div className="text-[11px] text-subt mt-2 flex flex-wrap gap-x-3 gap-y-0.5">
+                              {csEntries.map((k) => (
+                                <span key={k}>{ACT_META[k].label}: <span className="font-medium text-ink tabular-nums">{Number(cs[k]).toLocaleString('ru')}</span></span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Прокси */}
+          {ra?.proxy && (
+            <div className="flex items-center gap-1.5 text-[11px] text-subt font-mono bg-canvas rounded-xl px-3 py-2">
+              <Globe className="w-3 h-3 shrink-0" /> <span className="truncate">{ra.proxy}</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Accounts() {
   const accounts               = useStore((s) => s.accounts)
   const removeAccount          = useStore((s) => s.removeAccount)
@@ -174,6 +375,7 @@ function Accounts() {
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set())
   const [editProxyId, setEditProxyId]   = useState<string | null>(null)
   const [editProxyVal, setEditProxyVal] = useState('')
+  const [detail, setDetail] = useState<{ acc: any; ra?: RealAccount } | null>(null)
 
   const [dbTriggers, setDbTriggers] = useState<any[]>([])
 
@@ -332,6 +534,7 @@ function Accounts() {
               <Tilt key={acc.id}>
                 <div className="card p-5 relative overflow-hidden">
                   <div className="absolute -top-10 -right-10 w-32 h-32 rounded-full bg-gradient-to-br from-brand/10 to-transparent blur-2xl pointer-events-none" />
+                  <div onClick={() => setDetail({ acc, ra })} className="group cursor-pointer rounded-2xl -m-1 p-1 hover:bg-black/[0.015] transition-colors" title="Открыть подробности аккаунта">
                   <div className="flex items-start justify-between relative">
                     <div className="flex items-center gap-3">
                       <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#feda75] via-[#d62976] to-[#4f5bd5] flex items-center justify-center text-white font-semibold text-lg shadow-md">
@@ -374,6 +577,8 @@ function Accounts() {
                       </div>
                       <div className="text-[11px] text-subt mt-0.5">ответов</div>
                     </div>
+                  </div>
+                  <div className="mt-2 text-[11px] text-brand/70 text-center opacity-0 group-hover:opacity-100 transition-opacity">Подробная статистика →</div>
                   </div>
 
                   {ra?.errorCount ? (
@@ -440,6 +645,15 @@ function Accounts() {
       )}
 
       {showAdd && <AddModal onClose={() => setShowAdd(false)} onAdded={() => loadRealAccounts()} />}
+
+      {detail && (
+        <AccountDetailModal
+          acc={detail.acc}
+          ra={detail.ra}
+          campaigns={dbTriggers.filter((t) => t.responder?.id === (detail.ra?.id ?? detail.acc.id))}
+          onClose={() => setDetail(null)}
+        />
+      )}
     </div>
   )
 }
