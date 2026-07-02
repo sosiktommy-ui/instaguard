@@ -171,7 +171,7 @@ html,body{background:var(--bg);overflow:hidden;font-family:'JetBrains Mono',mono
 #rm{position:fixed;z-index:250;display:none;pointer-events:none}
 #rm.vis{display:block;pointer-events:all}
 .rb{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:210px;height:210px;border-radius:50%;background:rgba(6,6,18,.82);border:1px solid rgba(139,92,246,.25);backdrop-filter:blur(14px)}
-.ri{position:absolute;top:50%;left:50%;width:54px;height:54px;border-radius:50%;border:2px solid transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1.5rem;background:rgba(10,10,32,.9);box-shadow:0 4px 20px rgba(0,0,0,.6);transition:all .22s;opacity:0}
+.ri{position:absolute;top:50%;left:50%;width:54px;height:54px;border-radius:50%;border:2px solid transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:800;font-family:'Orbitron',sans-serif;background:rgba(10,10,32,.92);box-shadow:0 4px 20px rgba(0,0,0,.6);transition:all .22s;opacity:0;letter-spacing:.5px}
 .ri:hover{transform:translate(-50%,-50%) scale(1.18) !important}
 .rl{position:absolute;font-size:.52rem;color:rgba(255,255,255,.85);white-space:nowrap;pointer-events:none;text-shadow:0 1px 5px rgba(0,0,0,1);text-align:center;background:rgba(6,6,18,.7);padding:2px 6px;border-radius:4px}
 
@@ -195,16 +195,16 @@ html,body{background:var(--bg);overflow:hidden;font-family:'JetBrains Mono',mono
 <div id="topbar">
   <div id="logo"><span>⚡</span>SHADOWGRAM</div>
   <div id="stats">
-    <div class="sp">👤 <strong id="sa">0</strong>&nbsp;аккаунтов</div>
-    <div class="sp">🗡 <strong id="sd">0</strong>&nbsp;черновых</div>
-    <div class="sp">⚡ <strong id="st">0</strong>&nbsp;триггеров</div>
-    <div class="sp">📨 DM: <strong id="sdm">0</strong></div>
-    <div class="sp">❤️ <div class="hbar"><div class="hfill" id="hf" style="width:80%"></div></div><strong id="sh">80%</strong></div>
+    <div class="sp"><span style="color:#8b5cf6;font-weight:700">AC</span>&nbsp;<strong id="sa">0</strong>&nbsp;аккаунтов</div>
+    <div class="sp"><span style="color:#22d3ee;font-weight:700">DF</span>&nbsp;<strong id="sd">0</strong>&nbsp;черновых</div>
+    <div class="sp"><span style="color:#f77737;font-weight:700">TR</span>&nbsp;<strong id="st">0</strong>&nbsp;триггеров</div>
+    <div class="sp">DM <strong id="sdm">0</strong></div>
+    <div class="sp"><div class="hbar"><div class="hfill" id="hf" style="width:80%"></div></div>&nbsp;<strong id="sh">80%</strong></div>
   </div>
   <div id="tr">
     <div id="clock">--:--:--</div>
-    <button class="tbtn" id="sync-btn">🔄 Синхронизация</button>
-    <button id="poll-btn">🚀 ЗАПУСТИТЬ ПОЛЛИНГ</button>
+    <button class="tbtn" id="sync-btn">Синхронизация</button>
+    <button id="poll-btn">ЗАПУСТИТЬ ПОЛЛИНГ</button>
   </div>
 </div>
 
@@ -218,10 +218,10 @@ html,body{background:var(--bg);overflow:hidden;font-family:'JetBrains Mono',mono
 </div>
 
 <div id="btm">
-  <button class="cbtn" id="btn-leg">📋 Легенда</button>
-  <button class="cbtn" id="btn-add">⊕ Добавить аккаунт</button>
-  <button class="cbtn" id="btn-srch">🔍 Найти</button>
-  <button class="cbtn" id="btn-fit">🏠 По размеру</button>
+  <button class="cbtn" id="btn-leg">Легенда</button>
+  <button class="cbtn" id="btn-add">+ Аккаунт</button>
+  <button class="cbtn" id="btn-srch">Найти</button>
+  <button class="cbtn" id="btn-fit">По размеру</button>
   <div class="zoom-grp">
     <button class="zbtn" id="btn-zi">+</button>
     <div id="zoom-level">100%</div>
@@ -593,45 +593,58 @@ function drawNodes(){
 
 function drawHub(s,n,z,sel){
   const r=n.r*z, t=S.t;
-  // Outer pulsing rings
-  for(let i=2;i>=1;i--){
-    const pulse=1+Math.sin(t*1.2+i)*0.06;
-    cx.globalAlpha=.08+Math.sin(t*1.5+i)*.04;
-    cx.strokeStyle='#8b5cf6'; cx.lineWidth=1.5*z;
-    cx.beginPath(); cx.arc(s.x,s.y,r*(1.5+i*.38)*pulse,0,Math.PI*2); cx.stroke();
+  // Outer pulsing rings (gold)
+  for(let i=3;i>=1;i--){
+    const pulse=1+Math.sin(t*1.1+i*.7)*.04;
+    cx.globalAlpha=.05+Math.sin(t*1.3+i)*.03;
+    cx.strokeStyle='#f59e0b'; cx.lineWidth=1.5*z;
+    cx.beginPath(); cx.arc(s.x,s.y,r*(1.4+i*.28)*pulse,0,Math.PI*2); cx.stroke();
   }
-  // Spinning outer ring
-  cx.save(); cx.translate(s.x,s.y); cx.rotate(t*.4);
-  cx.globalAlpha=.5; cx.strokeStyle='#8b5cf6'; cx.lineWidth=1.5*z;
-  cx.setLineDash([8*z,6*z]);
-  cx.beginPath(); cx.arc(0,0,r*1.28,0,Math.PI*2); cx.stroke();
-  cx.setLineDash([]);
-  cx.restore();
-  // Glow
-  cx.shadowColor='#8b5cf6'; cx.shadowBlur=sel?50:28;
-  // Body gradient
-  const g=cx.createRadialGradient(s.x,s.y,0,s.x,s.y,r);
-  g.addColorStop(0,'#2a1060'); g.addColorStop(.6,'#180840'); g.addColorStop(1,'#0a0520');
-  cx.fillStyle=g; cx.strokeStyle=sel?'#c084fc':'#8b5cf6'; cx.lineWidth=2*z;
-  cx.beginPath(); cx.arc(s.x,s.y,r,0,Math.PI*2); cx.fill(); cx.stroke();
-  // Inner star
-  cx.shadowBlur=20; cx.globalAlpha=1;
-  const pts=6, innerR=r*.38, outerR=r*.7;
-  cx.fillStyle='#c084fc';
+  cx.globalAlpha=1;
+  // Spinning dashed ring
+  cx.save(); cx.translate(s.x,s.y); cx.rotate(t*.32);
+  cx.globalAlpha=.5; cx.strokeStyle='#fbbf24'; cx.lineWidth=1.8*z;
+  cx.setLineDash([7*z,5*z]);
+  cx.beginPath(); cx.arc(0,0,r*1.26,0,Math.PI*2); cx.stroke();
+  cx.setLineDash([]); cx.restore();
+  cx.globalAlpha=1;
+  // 3D Sphere — gold/amber
+  cx.shadowColor='#f59e0b'; cx.shadowBlur=sel?70:38;
+  const g=cx.createRadialGradient(s.x-r*.3,s.y-r*.35,r*.04,s.x,s.y,r);
+  g.addColorStop(0,'#fef3c7'); g.addColorStop(.22,'#fbbf24'); g.addColorStop(.6,'#d97706'); g.addColorStop(1,'#451a03');
+  cx.fillStyle=g;
+  cx.beginPath(); cx.arc(s.x,s.y,r,0,Math.PI*2); cx.fill();
+  // Specular highlight
+  const sg=cx.createRadialGradient(s.x-r*.38,s.y-r*.4,0,s.x-r*.18,s.y-r*.2,r*.52);
+  sg.addColorStop(0,'rgba(255,255,255,.78)'); sg.addColorStop(.5,'rgba(255,255,255,.14)'); sg.addColorStop(1,'rgba(255,255,255,0)');
+  cx.fillStyle=sg;
+  cx.beginPath(); cx.arc(s.x,s.y,r,0,Math.PI*2); cx.fill();
+  // Rim light (bottom-right subtle highlight)
+  const rg=cx.createRadialGradient(s.x+r*.45,s.y+r*.45,0,s.x+r*.3,s.y+r*.3,r*.55);
+  rg.addColorStop(0,'rgba(251,191,36,.22)'); rg.addColorStop(1,'rgba(251,191,36,0)');
+  cx.fillStyle=rg; cx.beginPath(); cx.arc(s.x,s.y,r,0,Math.PI*2); cx.fill();
+  // Border
+  cx.shadowBlur=0; cx.strokeStyle=sel?'rgba(255,255,255,.85)':'rgba(251,191,36,.8)'; cx.lineWidth=2*z;
+  cx.beginPath(); cx.arc(s.x,s.y,r,0,Math.PI*2); cx.stroke();
+  // Lightning bolt (canvas path, no emoji)
+  cx.shadowColor='rgba(255,255,255,.9)'; cx.shadowBlur=20;
+  cx.fillStyle='rgba(255,255,255,.95)';
+  const bw=r*.28, bh=r*.64, bx=s.x, by=s.y;
   cx.beginPath();
-  for(let i=0;i<pts*2;i++){
-    const a=(i/pts/2)*Math.PI*2-Math.PI/2+t*.3;
-    const rr=i%2===0?outerR:innerR;
-    if(i===0) cx.moveTo(s.x+Math.cos(a)*rr,s.y+Math.sin(a)*rr);
-    else cx.lineTo(s.x+Math.cos(a)*rr,s.y+Math.sin(a)*rr);
-  }
-  cx.closePath(); cx.fill();
+  cx.moveTo(bx+bw*.12,by-bh*.5);
+  cx.lineTo(bx-bw*.08,by+bh*.06);
+  cx.lineTo(bx+bw*.14,by+bh*.06);
+  cx.lineTo(bx-bw*.12,by+bh*.5);
+  cx.lineTo(bx+bw*.32,by-bh*.05);
+  cx.lineTo(bx+bw*.06,by-bh*.05);
+  cx.closePath(); cx.fill(); cx.shadowBlur=0;
   // Label
-  cx.globalAlpha=.75; cx.font=`${Math.max(6,9.5*z)}px JetBrains Mono`; cx.fillStyle='#c084fc'; cx.textAlign='center';
-  cx.fillText('⚡ ХАБ', s.x, s.y+r+14*z);
+  cx.globalAlpha=.82; cx.font=`bold ${Math.max(5,8*z)}px Orbitron,sans-serif`; cx.fillStyle='#fbbf24'; cx.textAlign='center'; cx.textBaseline='alphabetic';
+  cx.shadowColor='#f59e0b'; cx.shadowBlur=12;
+  cx.fillText('ShadowGram', s.x, s.y+r+14*z); cx.shadowBlur=0;
   if(S.accounts.filter(a=>a.role==='HELPER').length===0){
     cx.fillStyle='#f77737'; cx.shadowColor='#f77737'; cx.shadowBlur=8;
-    cx.fillText('⚠ Нет черновых!',s.x,s.y+r+26*z);
+    cx.fillText('Нет черновых!',s.x,s.y+r+26*z);
   }
   cx.globalAlpha=1;
 }
@@ -639,44 +652,52 @@ function drawHub(s,n,z,sel){
 function drawAccount(s,n,z,sel){
   const r=n.r*z, acc=n.acc, scol=stCol(acc?acc.status:'ACTIVE');
   const noSess=acc&&!acc.sessionData, blocked=acc&&acc.status==='BLOCKED';
-  // Outer halo ring
-  const pulse=.15+Math.sin(S.t*1.1+n.bob)*.07;
-  cx.globalAlpha=pulse; cx.strokeStyle=scol; cx.lineWidth=3*z;
-  cx.beginPath(); cx.arc(s.x,s.y,r+9*z,0,Math.PI*2); cx.stroke();
-  // Mid ring
-  cx.globalAlpha=.35; cx.lineWidth=1*z;
-  cx.beginPath(); cx.arc(s.x,s.y,r+3*z,0,Math.PI*2); cx.stroke();
+  // Outer halo ring (pulsing)
+  const pulse=.12+Math.sin(S.t*1.1+n.bob)*.06;
+  cx.globalAlpha=pulse; cx.strokeStyle=scol; cx.lineWidth=3.5*z;
+  cx.beginPath(); cx.arc(s.x,s.y,r+10*z,0,Math.PI*2); cx.stroke();
+  cx.globalAlpha=.25; cx.lineWidth=1*z;
+  cx.beginPath(); cx.arc(s.x,s.y,r+4*z,0,Math.PI*2); cx.stroke();
   cx.globalAlpha=1;
-  // Glow
-  cx.shadowColor=scol; cx.shadowBlur=sel?48:22;
-  // Body
-  const g=cx.createRadialGradient(s.x-r*.25,s.y-r*.25,0,s.x,s.y,r);
-  if(blocked){ g.addColorStop(0,'#3a0e1c'); g.addColorStop(1,'#150508'); }
-  else if(noSess){ g.addColorStop(0,'#1a1a2e'); g.addColorStop(1,'#0c0c18'); }
-  else { g.addColorStop(0,'#1e1245'); g.addColorStop(.7,'#120a30'); g.addColorStop(1,'#09061a'); }
-  cx.fillStyle=g; cx.strokeStyle=sel?scol:'rgba('+hexToRgb(scol)+',0.7)'; cx.lineWidth=1.5*z;
-  cx.beginPath(); cx.arc(s.x,s.y,r,0,Math.PI*2); cx.fill(); cx.stroke();
-  // Character emoji
-  let emoji='⚔️';
-  if(acc&&acc.status==='BLOCKED') emoji='👻';
-  else if(acc&&acc.status==='CHALLENGE') emoji='❓';
-  else if(acc&&acc.role==='HELPER') emoji='🧙';
+  // 3D Sphere gradient (offset highlight top-left)
+  cx.shadowColor=scol; cx.shadowBlur=sel?54:26;
+  const g=cx.createRadialGradient(s.x-r*.32,s.y-r*.35,r*.04,s.x,s.y,r);
+  if(blocked){
+    g.addColorStop(0,'#ff8fa3'); g.addColorStop(.3,'#e1306c'); g.addColorStop(.7,'#7f1d3c'); g.addColorStop(1,'#2a0616');
+  } else if(noSess){
+    g.addColorStop(0,'#a0a0c0'); g.addColorStop(.4,'#4a4a6a'); g.addColorStop(1,'#12121e');
+  } else {
+    g.addColorStop(0,'#c4b5fd'); g.addColorStop(.28,'#8b5cf6'); g.addColorStop(.65,'#4c1d95'); g.addColorStop(1,'#1a0a40');
+  }
+  cx.fillStyle=g; cx.beginPath(); cx.arc(s.x,s.y,r,0,Math.PI*2); cx.fill();
+  // Specular highlight (top-left bright spot — key to 3D look)
+  const sg=cx.createRadialGradient(s.x-r*.38,s.y-r*.4,0,s.x-r*.18,s.y-r*.2,r*.55);
+  sg.addColorStop(0,'rgba(255,255,255,.72)'); sg.addColorStop(.45,'rgba(255,255,255,.12)'); sg.addColorStop(1,'rgba(255,255,255,0)');
+  cx.fillStyle=sg; cx.beginPath(); cx.arc(s.x,s.y,r,0,Math.PI*2); cx.fill();
+  // Bottom rim light
+  const rg=cx.createRadialGradient(s.x+r*.4,s.y+r*.42,0,s.x+r*.25,s.y+r*.25,r*.5);
+  rg.addColorStop(0,scol.replace('#','rgba(')+',.18)'.replace('rgba(','rgba(')); // fallback
+  cx.shadowBlur=0; cx.strokeStyle=sel?'rgba(255,255,255,.82)':scol+'bb'; cx.lineWidth=noSess?.8*z:1.8*z;
+  if(noSess) cx.setLineDash([4*z,4*z]);
+  cx.beginPath(); cx.arc(s.x,s.y,r,0,Math.PI*2); cx.stroke(); cx.setLineDash([]);
+  // Account initials (bold, centered)
+  const initials=(acc?acc.username:'SG').replace(/[^a-zA-Z0-9а-яёА-ЯЁ]/g,'').slice(0,2).toUpperCase();
   cx.globalAlpha=noSess?.45:1;
-  cx.font=`${Math.max(9,22*z)}px serif`; cx.textAlign='center'; cx.textBaseline='middle';
-  cx.fillText(emoji,s.x,s.y-2*z);
-  cx.globalAlpha=1;
-  // Status dot
-  cx.fillStyle=scol; cx.shadowColor=scol; cx.shadowBlur=10;
-  cx.beginPath(); cx.arc(s.x+r*.68,s.y-r*.68,5.5*z,0,Math.PI*2); cx.fill();
-  cx.shadowBlur=0;
+  cx.font=`bold ${Math.max(10,r*.52)}px Orbitron,sans-serif`;
+  cx.fillStyle='rgba(255,255,255,.96)'; cx.textAlign='center'; cx.textBaseline='middle';
+  cx.shadowColor='rgba(0,0,0,.6)'; cx.shadowBlur=8;
+  cx.fillText(initials,s.x,s.y); cx.shadowBlur=0; cx.globalAlpha=1;
+  // Status dot (top-right)
+  cx.fillStyle=scol; cx.shadowColor=scol; cx.shadowBlur=12;
+  cx.beginPath(); cx.arc(s.x+r*.7,s.y-r*.7,5*z,0,Math.PI*2); cx.fill(); cx.shadowBlur=0;
   // Label
-  cx.globalAlpha=.9; cx.font=`${Math.max(6,9*z)}px JetBrains Mono`; cx.fillStyle='#e4e4ff'; cx.textBaseline='alphabetic';
-  cx.fillText(n.label,s.x,s.y+r+13*z);
-  // Trigger count
+  cx.globalAlpha=.92; cx.font=`${Math.max(6,9*z)}px JetBrains Mono`; cx.fillStyle='#e4e4ff'; cx.textBaseline='alphabetic';
+  cx.shadowColor=scol; cx.shadowBlur=6;
+  cx.fillText(n.label,s.x,s.y+r+13*z); cx.shadowBlur=0;
+  // Trigger count badge
   const tc=S.triggers.filter(t=>t.responderId==(acc&&acc.id)).length;
-  if(tc>0){ cx.fillStyle='#f77737'; cx.font=`${Math.max(5,7.5*z)}px JetBrains Mono`; cx.fillText(`⚡×${tc}`,s.x,s.y+r+23*z); }
-  // No session warning
-  if(noSess){ cx.fillStyle='#f97316'; cx.font=`${Math.max(5,7*z)}px JetBrains Mono`; cx.fillText('⚠ Нет сессии',s.x,s.y+r+33*z); }
+  if(tc>0){ cx.fillStyle='#fb923c'; cx.font=`bold ${Math.max(5,7.5*z)}px JetBrains Mono`; cx.fillText(`x${tc} тригг.`,s.x,s.y+r+23*z); }
+  if(noSess){ cx.fillStyle='#f97316'; cx.font=`${Math.max(5,7*z)}px JetBrains Mono`; cx.fillText('нет сессии',s.x,s.y+r+33*z); }
   cx.globalAlpha=1;
 }
 
@@ -684,25 +705,36 @@ function drawDraft(s,n,z,sel){
   const r=n.r*z, acc=n.acc, scol=stCol(acc?acc.status:'ACTIVE');
   // Orbiting orbs
   for(let i=0;i<3;i++){
-    const ang=S.t*1.6+(i/3)*Math.PI*2;
-    const ox=s.x+Math.cos(ang)*(r+11*z), oy=s.y+Math.sin(ang)*(r+11*z);
-    cx.save(); cx.globalAlpha=.7; cx.fillStyle='#22d3ee'; cx.shadowColor='#22d3ee'; cx.shadowBlur=12;
-    cx.beginPath(); cx.arc(ox,oy,3.5*z,0,Math.PI*2); cx.fill(); cx.restore();
+    const ang=S.t*1.5+(i/3)*Math.PI*2;
+    const ox=s.x+Math.cos(ang)*(r+12*z), oy=s.y+Math.sin(ang)*(r+12*z);
+    cx.save(); cx.globalAlpha=.72; cx.fillStyle='#22d3ee'; cx.shadowColor='#22d3ee'; cx.shadowBlur=14;
+    cx.beginPath(); cx.arc(ox,oy,3.2*z,0,Math.PI*2); cx.fill(); cx.restore();
   }
-  // Body (diamond-ish — slightly rotated square)
-  cx.save(); cx.translate(s.x,s.y); cx.rotate(Math.PI*.25+S.t*.15);
-  cx.shadowColor='#22d3ee'; cx.shadowBlur=sel?40:18;
-  const g=cx.createRadialGradient(0,0,0,0,0,r);
-  g.addColorStop(0,'#082a3a'); g.addColorStop(1,'#04101a');
-  cx.fillStyle=g; cx.strokeStyle=sel?'#22d3ee':'rgba(34,211,238,.65)'; cx.lineWidth=1.5*z;
-  cx.beginPath(); cx.arc(0,0,r,0,Math.PI*2); cx.fill(); cx.stroke();
-  cx.restore();
-  // Emoji
-  cx.font=`${Math.max(8,18*z)}px serif`; cx.textAlign='center'; cx.textBaseline='middle';
-  cx.fillText('🧙',s.x,s.y-1*z);
+  cx.globalAlpha=1;
+  // 3D Sphere — cyan/teal
+  cx.shadowColor='#22d3ee'; cx.shadowBlur=sel?48:22;
+  const g=cx.createRadialGradient(s.x-r*.32,s.y-r*.35,r*.04,s.x,s.y,r);
+  g.addColorStop(0,'#a5f3fc'); g.addColorStop(.28,'#22d3ee'); g.addColorStop(.65,'#0e7490'); g.addColorStop(1,'#042030');
+  cx.fillStyle=g; cx.beginPath(); cx.arc(s.x,s.y,r,0,Math.PI*2); cx.fill();
+  // Specular highlight
+  const sg=cx.createRadialGradient(s.x-r*.38,s.y-r*.4,0,s.x-r*.18,s.y-r*.2,r*.52);
+  sg.addColorStop(0,'rgba(255,255,255,.68)'); sg.addColorStop(.45,'rgba(255,255,255,.11)'); sg.addColorStop(1,'rgba(255,255,255,0)');
+  cx.fillStyle=sg; cx.beginPath(); cx.arc(s.x,s.y,r,0,Math.PI*2); cx.fill();
+  cx.shadowBlur=0; cx.strokeStyle=sel?'rgba(255,255,255,.85)':'rgba(34,211,238,.8)'; cx.lineWidth=1.6*z;
+  cx.beginPath(); cx.arc(s.x,s.y,r,0,Math.PI*2); cx.stroke();
+  // Initials
+  const initials=(acc?acc.username:'DFT').replace(/[^a-zA-Z0-9а-яёА-ЯЁ]/g,'').slice(0,2).toUpperCase();
+  cx.font=`bold ${Math.max(9,r*.48)}px Orbitron,sans-serif`;
+  cx.fillStyle='rgba(255,255,255,.92)'; cx.textAlign='center'; cx.textBaseline='middle';
+  cx.shadowColor='rgba(0,0,0,.5)'; cx.shadowBlur=6;
+  cx.fillText(initials,s.x,s.y); cx.shadowBlur=0;
+  // Status dot
+  cx.fillStyle=scol; cx.shadowColor=scol; cx.shadowBlur=10;
+  cx.beginPath(); cx.arc(s.x+r*.7,s.y-r*.7,4.5*z,0,Math.PI*2); cx.fill(); cx.shadowBlur=0;
   // Label
-  cx.globalAlpha=.85; cx.font=`${Math.max(5,8.5*z)}px JetBrains Mono`; cx.fillStyle='#22d3ee'; cx.textBaseline='alphabetic';
-  cx.fillText(n.label,s.x,s.y+r+13*z); cx.globalAlpha=1;
+  cx.globalAlpha=.88; cx.font=`${Math.max(5,8.5*z)}px JetBrains Mono`; cx.fillStyle='#67e8f9'; cx.textBaseline='alphabetic';
+  cx.shadowColor='#22d3ee'; cx.shadowBlur=6;
+  cx.fillText(n.label,s.x,s.y+r+13*z); cx.shadowBlur=0; cx.globalAlpha=1;
 }
 
 function drawTrigger(s,n,z,sel){
@@ -732,15 +764,16 @@ function drawTrigger(s,n,z,sel){
     cx.fillStyle=col+'28'; cx.fill();
     cx.strokeStyle=col+'88'; cx.lineWidth=1*z; cx.stroke();
   }
-  // Icon
-  const ico=TI[trig&&trig.triggerType]||'⚡';
-  cx.font=`${Math.max(7,14*z)}px serif`; cx.textAlign='center'; cx.textBaseline='middle';
-  cx.globalAlpha=active?1:.55;
-  cx.fillText(ico,s.x,s.y-(active?3:1)*z);
+  // Abbreviation label (no emoji)
+  const abbr={NEW_FOLLOWER:'НП',NEW_COMMENT:'НК',NEW_LIKE:'НЛ',STORY_MENTION:'СТ'}[trig&&trig.triggerType]||'??';
+  cx.font=`bold ${Math.max(7,13*z)}px Orbitron,sans-serif`; cx.textAlign='center'; cx.textBaseline='middle';
+  cx.globalAlpha=active?1:.52;
+  cx.fillStyle=active?'#fff':col; cx.shadowColor=col; cx.shadowBlur=active?14:0;
+  cx.fillText(abbr,s.x,s.y-(active?3:1)*z); cx.shadowBlur=0;
   // Fire count
   if(trig&&trig.fireCount>0){
-    cx.font=`bold ${Math.max(5,7.5*z)}px JetBrains Mono`; cx.fillStyle=col;
-    cx.fillText('×'+trig.fireCount,s.x,s.y+(active?7:5)*z);
+    cx.font=`bold ${Math.max(5,7*z)}px JetBrains Mono`; cx.fillStyle=col; cx.shadowColor=col; cx.shadowBlur=6;
+    cx.fillText('x'+trig.fireCount,s.x,s.y+(active?9:6)*z); cx.shadowBlur=0;
   }
   cx.globalAlpha=.82; cx.font=`${Math.max(5,7.5*z)}px JetBrains Mono`; cx.fillStyle='#fff'; cx.textBaseline='alphabetic';
   const lbl=n.label.length>13?n.label.slice(0,11)+'…':n.label;
@@ -917,10 +950,11 @@ function onNodeClick(nd,e){
 // ══════════════════════════════════════════════
 //  RADIAL MENU
 // ══════════════════════════════════════════════
-// Пока исполняются только эти два типа (лайк/сторис — «скоро»)
 const RDEFS=[
-  {id:'NEW_FOLLOWER', icon:'💜',label:'Новый подписчик',  col:'#8b5cf6',ang:-90},
-  {id:'NEW_COMMENT',  icon:'💚',label:'Новый комментарий',col:'#10b981',ang:90}
+  {id:'NEW_FOLLOWER', icon:'НП',label:'Новый подписчик',  col:'#8b5cf6',ang:-90},
+  {id:'NEW_COMMENT',  icon:'НК',label:'Новый комментарий',col:'#10b981',ang:0},
+  {id:'NEW_LIKE',     icon:'НЛ',label:'Новый лайк',       col:'#e1306c',ang:90},
+  {id:'STORY_MENTION',icon:'СТ',label:'Ответ на сторис',  col:'#f77737',ang:180}
 ];
 
 function showRM(nd,e){
@@ -970,8 +1004,8 @@ function openRP(){ document.getElementById('rp').classList.add('open'); }
 function closeRP(){ document.getElementById('rp').classList.remove('open'); S.sel=null; }
 document.getElementById('rp-close').onclick=closeRP;
 
-const RL={RESPONDER:'⚔️ Основной',HELPER:'🧙 Черновой',BOTH:'⚔️🧙 Оба режима'};
-const SL={ACTIVE:'🟢 Активен',PAUSED:'🟡 На паузе',BLOCKED:'🔴 Заблокирован',CHALLENGE:'🟠 Проверка'};
+const RL={RESPONDER:'Основной',HELPER:'Черновой',BOTH:'Оба режима'};
+const SL={ACTIVE:'● Активен',PAUSED:'● На паузе',BLOCKED:'● Заблокирован',CHALLENGE:'● Проверка'};
 
 function showHubPanel(){
   const resp=S.accounts.filter(a=>a.role!=='HELPER').length;
@@ -979,7 +1013,7 @@ function showHubPanel(){
   const active=S.triggers.filter(t=>t.isActive).length;
   const errs=S.accounts.reduce((s,a)=>s+(a.errorCount||0),0);
   document.getElementById('rp-content').innerHTML=`
-    <div class="pt">⚡ ЦЕНТРАЛЬНЫЙ ХАБ</div>
+    <div class="pt">ЦЕНТРАЛЬНЫЙ ХАБ</div>
     <div class="info-grid">
       <div class="ic"><div class="ic-l">Основных</div><div class="ic-v" style="color:#8b5cf6">${resp}</div></div>
       <div class="ic"><div class="ic-l">Черновых</div><div class="ic-v" style="color:#22d3ee">${help}</div></div>
@@ -988,8 +1022,8 @@ function showHubPanel(){
       <div class="ic"><div class="ic-l">Триггеров</div><div class="ic-v">${S.triggers.length}</div></div>
       <div class="ic"><div class="ic-l">Ошибок</div><div class="ic-v" style="color:${errs>0?'#e1306c':'#10b981'}">${errs}</div></div>
     </div>
-    ${help===0?`<div style="background:rgba(247,119,55,.1);border:1px solid rgba(247,119,55,.35);border-radius:8px;padding:10px 12px;font-size:.7rem;color:#f77737;margin-bottom:12px">⚠️ Нет черновых аккаунтов! Поллинг заблокирован. Добавьте HELPER аккаунт.</div>`:''}
-    <button class="pbtn" onclick="window.location='/accounts'">🔗 Перейти к аккаунтам</button>
+    ${help===0?`<div style="background:rgba(247,119,55,.1);border:1px solid rgba(247,119,55,.35);border-radius:8px;padding:10px 12px;font-size:.7rem;color:#f77737;margin-bottom:12px">Нет черновых аккаунтов! Поллинг заблокирован. Добавьте HELPER аккаунт.</div>`:''}
+    <button class="pbtn" onclick="window.location='/accounts'">Перейти к аккаунтам</button>
   `;
   openRP();
 }
@@ -997,14 +1031,16 @@ function showHubPanel(){
 function showAccPanel(nd){
   const acc=nd.acc; if(!acc) return;
   const scol=stCol(acc.status);
-  const arch=acc.role==='HELPER'?{emoji:'🧙',hue:'#22d3ee'}:{emoji:'⚔️',hue:'#8b5cf6'};
+  const hue=acc.role==='HELPER'?'#22d3ee':'#8b5cf6';
+  const initials=acc.username.replace(/[^a-zA-Z0-9а-яёА-ЯЁ]/g,'').slice(0,2).toUpperCase();
   const trigs=S.triggers.filter(t=>String(t.responderId)===String(acc.id));
+  const abbrs={NEW_FOLLOWER:'НП',NEW_COMMENT:'НК',NEW_LIKE:'НЛ',STORY_MENTION:'СТ'};
   let thtml=trigs.length?'<div class="tlist">':'<div style="color:rgba(255,255,255,.28);font-size:.68rem;padding:8px 0">Нет триггеров</div>';
   trigs.forEach(t=>{
     const col=TC[t.triggerType]||'#8b5cf6';
     thtml+=`<div class="ti" onclick="selTrig('${t.id}')">
-      <span style="font-size:1.1rem">${TI[t.triggerType]||'⚡'}</span>
-      <div style="flex:1"><div class="ti-name" style="color:${col}">${t.name}</div><div class="ti-sub">⚡×${t.fireCount||0} · ${t.isActive?'активен':'пауза'}</div></div>
+      <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;background:${col}22;border:1px solid ${col}66;font-size:.6rem;font-weight:800;font-family:'Orbitron',sans-serif;color:${col}">${abbrs[t.triggerType]||'??'}</span>
+      <div style="flex:1"><div class="ti-name" style="color:${col}">${t.name}</div><div class="ti-sub">x${t.fireCount||0} · ${t.isActive?'активен':'пауза'}</div></div>
       <label class="tog" onclick="event.stopPropagation()">
         <input type="checkbox" ${t.isActive?'checked':''} onchange="togTrig('${t.id}',this.checked)">
         <div class="tog-t"><div class="tog-th"></div></div>
@@ -1016,23 +1052,23 @@ function showAccPanel(nd){
     <div class="pt">АККАУНТ</div>
     <div class="portrait">
       <div class="pw">
-        <div class="ph" style="background:radial-gradient(circle,${arch.hue}20,#0d0d1a)">
-          <div class="phalo" style="box-shadow:0 0 18px 5px ${scol}55;border:2px solid ${scol}88"></div>
-          <span style="font-size:1.8rem">${arch.emoji}</span>
+        <div class="ph" style="background:radial-gradient(circle at 35% 30%,${hue}88,${hue}22 40%,#0d0d1a);position:relative">
+          <div class="phalo" style="box-shadow:0 0 22px 6px ${scol}55;border:2px solid ${scol}88"></div>
+          <span style="font-size:1.1rem;font-weight:900;font-family:'Orbitron',sans-serif;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,.6)">${initials}</span>
         </div>
       </div>
       <div class="pi">
         <h3>@${acc.username}</h3>
-        <div style="margin-bottom:5px"><span class="sbadge s-${acc.status}">${SL[acc.status]||acc.status}</span></div>
-        <div class="sub">${RL[acc.role]||acc.role}</div>
+        <div style="margin-bottom:5px"><span class="sbadge s-${acc.status}" style="color:${scol}">${SL[acc.status]||acc.status}</span></div>
+        <div class="sub" style="color:${hue}">${RL[acc.role]||acc.role}</div>
       </div>
     </div>
     <div class="info-grid">
-      <div class="ic"><div class="ic-l">Сессия</div><div class="ic-v" style="color:${acc.sessionData?'#10b981':'#e1306c'};font-size:.72rem">${acc.sessionData?'✅ Активна':'❌ Отсутствует'}</div></div>
+      <div class="ic"><div class="ic-l">Сессия</div><div class="ic-v" style="color:${acc.sessionData?'#10b981':'#e1306c'};font-size:.72rem">${acc.sessionData?'Активна':'Отсутствует'}</div></div>
       <div class="ic"><div class="ic-l">Ошибок</div><div class="ic-v" style="color:${(acc.errorCount||0)>0?'#e1306c':'#10b981'}">${acc.errorCount||0}</div></div>
     </div>
     <div class="pl">ТРИГГЕРЫ</div>${thtml}
-    <button class="pbtn" onclick="openWiz('${acc.id}',null)">➕ Добавить триггер</button>
+    <button class="pbtn" onclick="openWiz('${acc.id}',null)">+ Добавить триггер</button>
   `;
   openRP();
 }
@@ -1048,18 +1084,19 @@ window.togTrig=async function(id,val){
     // откат UI при ошибке
     t.isActive=!val; if(nd) nd.trig=t; if(conn) conn.active=!val;
     const cb=document.getElementById('tt-'+id); if(cb) cb.checked=!val;
-    toast('⚠️ Не удалось изменить триггер','e'); return;
+    toast('Не удалось изменить триггер','e'); return;
   }
-  toast(val?'✅ Триггер активирован':'⏸ Триггер на паузе','s');
+  toast(val?'Триггер активирован':'Триггер на паузе','s');
 };
 
 function showTrigPanel(nd){
   const t=nd.trig; if(!t) return;
-  const col=TC[t.triggerType]||'#8b5cf6', ico=TI[t.triggerType]||'⚡';
+  const col=TC[t.triggerType]||'#8b5cf6';
+  const abbr={NEW_FOLLOWER:'НП',NEW_COMMENT:'НК',NEW_LIKE:'НЛ',STORY_MENTION:'СТ'}[t.triggerType]||'??';
   document.getElementById('rp-content').innerHTML=`
     <div class="pt">ТРИГГЕР</div>
     <div style="text-align:center;padding:14px 0">
-      <div style="font-size:2.4rem;margin-bottom:7px">${ico}</div>
+      <div style="display:inline-flex;align-items:center;justify-content:center;width:56px;height:56px;border-radius:14px;background:${col}22;border:2px solid ${col};box-shadow:0 0 24px ${col}55;font-size:1.1rem;font-weight:900;font-family:'Orbitron',sans-serif;color:${col};margin-bottom:10px">${abbr}</div>
       <div style="font-family:'Orbitron',sans-serif;font-size:.88rem;color:${col};text-shadow:0 0 16px ${col}">${t.name}</div>
       <div style="font-size:.65rem;color:rgba(255,255,255,.38);margin-top:3px">${TL[t.triggerType]||''}</div>
     </div>
@@ -1069,10 +1106,10 @@ function showTrigPanel(nd){
     </div>
     <div class="pl">СТАТУС</div>
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
-      <span style="font-size:.75rem;color:rgba(255,255,255,.7)">${t.isActive?'✅ Активен':'⏸ На паузе'}</span>
+      <span style="font-size:.75rem;color:rgba(255,255,255,.7)">${t.isActive?'Активен':'На паузе'}</span>
       <label class="tog"><input type="checkbox" id="tt-${t.id}" ${t.isActive?'checked':''} onchange="togTrig('${t.id}',this.checked)"><div class="tog-t"><div class="tog-th"></div></div></label>
     </div>
-    <button class="pbtn d" onclick="delTrig('${t.id}')">🗑 Удалить триггер</button>
+    <button class="pbtn d" onclick="delTrig('${t.id}')">Удалить триггер</button>
   `;
   openRP();
 }
@@ -1080,10 +1117,10 @@ function showTrigPanel(nd){
 window.delTrig=async function(id){
   if(!confirm('Удалить триггер?')) return;
   const r=await api(`/api/triggers/${id}`,{method:'DELETE'});
-  if(!r || r.error){ toast('⚠️ Не удалось удалить','e'); return; }
+  if(!r || r.error){ toast('Не удалось удалить','e'); return; }
   closeRP();
   await refreshData();
-  toast('🗑 Триггер удалён','i');
+  toast('Триггер удалён','i');
 };
 
 // ══════════════════════════════════════════════
@@ -1104,10 +1141,12 @@ function renderWiz(){
     m.innerHTML=`<div class="mt">СОЗДАТЬ ТРИГГЕР</div><div class="ms">Шаг 1 из 3 — Выберите тип события</div>
     <div class="steps">${dots}</div>
     <div class="tcards">${[
-      {id:'NEW_FOLLOWER', cls:'tc-f',icon:'💜',name:'Новый подписчик',desc:'Когда кто-то подписывается'},
-      {id:'NEW_COMMENT',  cls:'tc-c',icon:'💚',name:'Новый комментарий',desc:'Когда оставляют комментарий'}
+      {id:'NEW_FOLLOWER', cls:'tc-f',icon:'НП',col:'#8b5cf6',name:'Новый подписчик',desc:'Когда кто-то подписывается'},
+      {id:'NEW_COMMENT',  cls:'tc-c',icon:'НК',col:'#10b981',name:'Новый комментарий',desc:'Когда оставляют комментарий'},
+      {id:'NEW_LIKE',     cls:'tc-l',icon:'НЛ',col:'#e1306c',name:'Новый лайк',desc:'Когда ставят лайк'},
+      {id:'STORY_MENTION',cls:'tc-s',icon:'СТ',col:'#f77737',name:'Ответ на сторис',desc:'Когда упоминают в сторис'}
     ].map(t=>`<div class="tc ${t.cls} ${w.type===t.id?'sel':''}" onclick="pickType('${t.id}')">
-      <div class="ti2">${t.icon}</div><div class="tn">${t.name}</div><div class="td">${t.desc}</div>
+      <div class="ti2" style="font-size:1.4rem;font-weight:900;font-family:'Orbitron',sans-serif;color:${t.col};text-shadow:0 0 14px ${t.col};margin-bottom:8px">${t.icon}</div><div class="tn">${t.name}</div><div class="td">${t.desc}</div>
     </div>`).join('')}</div>
     <div class="ma">
       <button class="mb mb-c" onclick="closeMod()">Отмена</button>
@@ -1129,15 +1168,16 @@ function renderWiz(){
     </div>`;
   } else {
     const acc=S.accounts.find(a=>String(a.id)===String(w.accId));
-    const col=TC[w.type]||'#8b5cf6', ico=TI[w.type]||'⚡';
+    const col=TC[w.type]||'#8b5cf6';
+    const abbr={NEW_FOLLOWER:'НП',NEW_COMMENT:'НК',NEW_LIKE:'НЛ',STORY_MENTION:'СТ'}[w.type]||'??';
     m.innerHTML=`<div class="mt">СОЗДАТЬ ТРИГГЕР</div><div class="ms">Шаг 3 из 3 — Подтверждение</div>
     <div class="steps">${dots}</div>
     <div class="chain">
       <div class="cn">@${acc?acc.username:'?'}</div>
       <div class="ca">→</div>
-      <div class="cn" style="border-color:${col};color:${col}">${ico} ${TL[w.type]}</div>
+      <div class="cn" style="border-color:${col};color:${col}">${abbr} ${TL[w.type]}</div>
       <div class="ca">→</div>
-      <div class="cn" style="border-color:#22d3ee;color:#22d3ee">📨 DM</div>
+      <div class="cn" style="border-color:#22d3ee;color:#22d3ee">DM</div>
     </div>
     <div style="background:rgba(255,255,255,.04);border-radius:8px;padding:12px;font-size:.72rem;color:rgba(255,255,255,.7);margin-bottom:12px">
       <strong>${w.name||TL[w.type]}</strong>
@@ -1146,7 +1186,7 @@ function renderWiz(){
     </div>
     <div class="ma">
       <button class="mb mb-c" onclick="wizBack()">← Назад</button>
-      <button class="mb mb-n" onclick="wizDone()">✅ Создать триггер</button>
+      <button class="mb mb-n" onclick="wizDone()">Создать триггер</button>
     </div>`;
   }
 }
@@ -1168,33 +1208,33 @@ window.wizDone=async function(){
   const result=await api('/api/triggers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   // Ошибка сервера (например неподдерживаемый тип) — не делаем вид, что создали
   if(!result || result.error || result.ok===false){
-    toast('⚠️ '+((result&&result.error)||'Не удалось создать триггер'),'e');
+    toast((result&&result.error)||'Не удалось создать триггер','e');
     return;
   }
   closeMod();
   await refreshData();           // авторитетные данные с сервера
   const nd=S.nodes.find(n=>n.type==='TRIGGER'&&n.trig&&n.trig.responderId===w.accId&&n.trig.triggerType===w.type);
   if(nd) burst(nd.x,nd.y,TC[w.type]||'#8b5cf6',28);
-  toast('✅ Триггер создан!','s');
+  toast('Триггер создан!','s');
 };
 
 // ══════════════════════════════════════════════
 //  POLLING
 // ══════════════════════════════════════════════
 document.getElementById('poll-btn').addEventListener('click',async function(){
-  this.disabled=true; this.classList.add('charging'); this.textContent='⚡ ЗАПУСК...';
+  this.disabled=true; this.classList.add('charging'); this.textContent='ЗАПУСК...';
   await new Promise(r=>setTimeout(r,2800));
   const res=await api('/api/poll',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"manual":true}'});
-  this.classList.remove('charging'); this.disabled=false; this.textContent='🚀 ЗАПУСТИТЬ ПОЛЛИНГ';
-  if(res&&res.alert==='no-drafts'){ toast('⚠️ Нет черновых — поллинг заблокирован','e'); return; }
+  this.classList.remove('charging'); this.disabled=false; this.textContent='ЗАПУСТИТЬ ПОЛЛИНГ';
+  if(res&&res.alert==='no-drafts'){ toast('Нет черновых — поллинг заблокирован','e'); return; }
   S.nodes.forEach(n=>burst(n.x,n.y,n.glow,6));
   const sent=res&&res.summary?res.summary.reduce((s,r)=>s+(r.dmsQueued||0),0):0;
   S.totalDMs+=sent; updStats();
-  toast(`✅ Поллинг завершён! Отправлено ${sent} DM`,'s');
+  toast(`Поллинг завершён! Отправлено ${sent} DM`,'s');
 });
 
 document.getElementById('sync-btn').addEventListener('click',async()=>{
-  toast('🔄 Синхронизация...','i'); await loadAll(); toast('✅ Данные обновлены','s');
+  toast('Синхронизация...','i'); await loadAll(); toast('Данные обновлены','s');
 });
 
 // ══════════════════════════════════════════════
@@ -1213,7 +1253,7 @@ document.getElementById('search-inp').addEventListener('input',function(){
   </div>`).join('')||'<div style="padding:10px 16px;font-size:.7rem;color:rgba(255,255,255,.3)">Ничего не найдено</div>';
 });
 document.getElementById('search-inp').addEventListener('keydown',e=>{ if(e.key==='Enter'){ const q=e.target.value.toLowerCase().replace('@','').trim(); const a=S.accounts.find(x=>x.username.toLowerCase().includes(q)); if(a) goToAcc(a.id); } });
-window.goToAcc=function(id){ const nd=S.nodes.find(n=>n.accId===id||n.accId==id); if(nd){S.cam.x=nd.x;S.cam.y=nd.y;S.cam.z=1.3;updZoom();S.sel=nd;showAccPanel(nd);closeSearch();toast('✅ Найден аккаунт','s');} };
+window.goToAcc=function(id){ const nd=S.nodes.find(n=>n.accId===id||n.accId==id); if(nd){S.cam.x=nd.x;S.cam.y=nd.y;S.cam.z=1.3;updZoom();S.sel=nd;showAccPanel(nd);closeSearch();toast('Аккаунт найден','s');} };
 
 // ══════════════════════════════════════════════
 //  CONTROLS
