@@ -982,27 +982,66 @@ function TemplatesDrawer({ templates, loading, onClose, onApply, onDelete, onRel
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Действия для счётчиков (какие ключи в stats и как показывать)
+// Действия триггера (по категориям + счётчики + настройки)
 // ════════════════════════════════════════════════════════════════════════════
-const ACTION_META: { key: string; label: string; color: string; Icon: any }[] = [
-  { key: 'dm', label: 'DM', color: '#0071e3', Icon: Send },
-  { key: 'comment', label: 'Коммент', color: '#34c759', Icon: MessageCircle },
-  { key: 'like', label: 'Лайк', color: '#ff2d92', Icon: Heart },
-  { key: 'follow', label: 'Подписка', color: '#34c759', Icon: UserCheck },
-  { key: 'story', label: 'Сторис', color: '#ff9f0a', Icon: Clapperboard },
-]
+interface ActionRow { key: string; label: string; color: string; Icon: any; count: number; settings: string[] }
 
-function triggerActionKeys(trigger: DbTrigger): Set<string> {
+// Раскладывает триггер на действия по категориям + перечисляет включённые настройки каждого
+function describeActions(trigger: DbTrigger): ActionRow[] {
   const on = (a: any) => a && a.enabled !== false
   const acts = trigger.actions ?? []
-  const s = new Set<string>()
-  if (acts.some((a: any) => a.type === 'SEND_MESSAGE' && on(a))) s.add('dm')
-  if (acts.some((a: any) => (a.type === 'REPLY_COMMENT' || a.type === 'COMMENT_GATE') && on(a))) s.add('comment')
-  if (acts.some((a: any) => (a.type === 'LIKE_MEDIA' || a.type === 'LIKE_COMMENT') && on(a))) s.add('like')
-  if (acts.some((a: any) => a.type === 'FOLLOW_BACK' && on(a))) s.add('follow')
-  if (acts.some((a: any) => a.type === 'VIEW_STORIES' && on(a))) s.add('story')
-  return s
+  const stats = (trigger.stats ?? {}) as Record<string, number>
+  const isComment = trigger.triggerType === 'NEW_COMMENT'
+  const rows: ActionRow[] = []
+
+  const dm = acts.find((a: any) => a.type === 'SEND_MESSAGE' && on(a))
+  const legacyGate = acts.find((a: any) => a.type === 'COMMENT_GATE' && on(a))
+  if (dm) {
+    const set: string[] = []
+    if (dm.link?.enabled) set.push('ссылка')
+    if (dm.image?.enabled) set.push('фото')
+    const gate = dm.gate ?? (legacyGate ? { mode: 'followed_by' } : null)
+    if (gate) set.push(gate.mode === 'mutual' ? 'взаимная подписка' : 'проверка подписки')
+    rows.push({ key: 'dm', label: 'DM', color: '#0071e3', Icon: Send, count: stats.dm || 0, settings: set })
+  }
+
+  const reply = acts.find((a: any) => a.type === 'REPLY_COMMENT' && on(a))
+  if (reply) {
+    const n = (reply.replies ?? []).filter(Boolean).length
+    rows.push({ key: 'comment', label: 'Коммент', color: '#34c759', Icon: MessageCircle, count: stats.comment || 0, settings: [`${n} вар.`] })
+  }
+
+  const likeMedia = acts.some((a: any) => a.type === 'LIKE_MEDIA' && on(a))
+  const likeComment = acts.some((a: any) => a.type === 'LIKE_COMMENT' && on(a))
+  if (likeMedia || likeComment) {
+    const set: string[] = []
+    if (likeMedia) set.push(isComment ? 'посты автора' : 'последний пост')
+    if (likeComment) set.push('коммент')
+    rows.push({ key: 'like', label: 'Лайк', color: '#ff2d92', Icon: Heart, count: stats.like || 0, settings: set })
+  }
+
+  if (acts.some((a: any) => a.type === 'FOLLOW_BACK' && on(a))) {
+    rows.push({ key: 'follow', label: 'Подписка', color: '#34c759', Icon: UserCheck, count: stats.follow || 0, settings: [] })
+  }
+
+  const story = acts.find((a: any) => a.type === 'VIEW_STORIES' && on(a))
+  if (story) {
+    rows.push({ key: 'story', label: 'Сторис', color: '#ff9f0a', Icon: Clapperboard, count: stats.story || 0, settings: [story.like ? 'просмотр + лайк' : 'просмотр'] })
+  }
+  return rows
 }
+
+// Описание «Сигнала» (на что реагирует триггер-комментарий)
+function describeSignal(trigger: DbTrigger): string | null {
+  if (trigger.triggerType !== 'NEW_COMMENT') return null
+  const c = (trigger.conditions ?? {}) as any
+  if (c.mode !== 'specific') return 'на все слова'
+  const phrases: string[] = (c.phrases ?? []).filter(Boolean)
+  if (!phrases.length) return 'на все слова'
+  const shown = phrases.slice(0, 2).join(', ')
+  return `фразы: ${shown}${phrases.length > 2 ? ` +${phrases.length - 2}` : ''}${c.exact ? ' (точно)' : ''}`
+}
+
 
 // ── Компактная карточка кампании (триггера) ─────────────────────────────────
 function CampaignCard({ trigger, onToggle, onDelete, index = 0 }: {
@@ -1010,8 +1049,8 @@ function CampaignCard({ trigger, onToggle, onDelete, index = 0 }: {
 }) {
   const [showDetails, setShowDetails] = useState(false)
   const meta = META_BY_DB[trigger.triggerType]
-  const stats = trigger.stats ?? {}
-  const keys = triggerActionKeys(trigger)
+  const rows = describeActions(trigger)
+  const signal = describeSignal(trigger)
   const msg = (trigger.actions ?? []).find((a: any) => a.type === 'SEND_MESSAGE' && a.enabled !== false)
   const msgText: string = msg?.templates?.[0] ?? ''
   const delayMin: number = msg?.delayMin ?? 45
@@ -1037,28 +1076,33 @@ function CampaignCard({ trigger, onToggle, onDelete, index = 0 }: {
         <span className="text-[11px] text-subt">срабатываний</span>
       </div>
 
-      {/* Действия со счётчиками — активные (со срабатываниями) заметнее и первыми */}
-      <div className="flex flex-wrap items-center gap-1.5">
-        {ACTION_META
-          .filter((a) => keys.has(a.key))
-          .map((a) => ({ ...a, count: Number((stats as any)[a.key]) || 0 }))
-          .sort((x, y) => y.count - x.count)
-          .map((a) => {
-            const active = a.count > 0
-            return (
-              <Tooltip key={a.key} content={active ? `${a.label}: сработало ${a.count} раз` : `${a.label}: настроено, ещё не срабатывало`}>
-                <span
-                  className={cn('text-[11px] px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1.5 transition-all', !active && 'opacity-70')}
-                  style={active
-                    ? { background: `linear-gradient(135deg, ${a.color}, ${darken(a.color)})`, color: '#fff', boxShadow: `0 2px 8px ${hexA(a.color, 0.4)}` }
-                    : { background: hexA(a.color, 0.1), color: a.color }}>
-                  <a.Icon className="w-3.5 h-3.5" strokeWidth={2.4} />
-                  {a.label}
-                  <span className={cn('tabular-nums', active ? 'opacity-90' : 'opacity-60')}>×{a.count}</span>
-                </span>
-              </Tooltip>
-            )
-          })}
+      {/* Сигнал (на что реагирует) — для триггера-комментария */}
+      {signal && (
+        <div className="flex items-center gap-1.5 text-[11px] text-subt">
+          <Filter className="w-3.5 h-3.5 text-[#5e5ce6]" /> <span className="font-medium text-ink/70">Сигнал:</span> {signal}
+        </div>
+      )}
+
+      {/* Действия по категориям + их включённые настройки */}
+      <div className="flex flex-col gap-1.5">
+        {rows.map((r) => {
+          const active = r.count > 0
+          return (
+            <div key={r.key} className="flex items-center gap-2 flex-wrap">
+              <span
+                className={cn('text-[11px] px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1.5 shrink-0', !active && 'opacity-75')}
+                style={active
+                  ? { background: `linear-gradient(135deg, ${r.color}, ${darken(r.color)})`, color: '#fff', boxShadow: `0 2px 8px ${hexA(r.color, 0.4)}` }
+                  : { background: hexA(r.color, 0.1), color: r.color }}>
+                <r.Icon className="w-3.5 h-3.5" strokeWidth={2.4} /> {r.label}
+                <span className={cn('tabular-nums', active ? 'opacity-90' : 'opacity-60')}>×{r.count}</span>
+              </span>
+              {r.settings.map((sset, i) => (
+                <span key={i} className="text-[10px] text-subt bg-black/[0.04] px-1.5 py-0.5 rounded-md">{sset}</span>
+              ))}
+            </div>
+          )
+        })}
       </div>
 
       {showDetails && (
