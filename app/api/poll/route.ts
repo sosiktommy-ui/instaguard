@@ -353,9 +353,12 @@ export async function POST(req: NextRequest) {
           const willFollow = doFollowT && consume(dc, 'follow')
           const willLike = doLikeT && consume(dc, 'like')
           const willStory = Boolean(storiesAct) && consume(dc, 'story')
-          // Резервируем бюджет fallback (follow+like черновым при закрытой личке)
-          const fallbackFollow = willDM && !willFollow && consume(dc, 'follow')
-          const fallbackLike   = willDM && !willLike   && consume(dc, 'like')
+          // Флаги fallback (follow+like черновым при закрытой личке). Бюджет заранее НЕ
+          // списываем: иначе на каждом успешном DM утекал бы дневной лимит чернового
+          // (follow/like расходовались бы вхолостую). Закрытая личка редка — лёгкое
+          // превышение лимита при самом фолбэке допустимо.
+          const fallbackFollow = willDM && !willFollow
+          const fallbackLike   = willDM && !willLike
           if (!willDM && !willFollow && !willLike && !willStory) { s.limited = (s.limited ?? 0) + 1; continue }
 
           let text = willDM ? template.replace(/\{\{username\}\}/gi, target.username) : ''
