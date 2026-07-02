@@ -311,6 +311,16 @@ def get_followers(session_data: dict, username: str, proxy: str | None = None, a
     return result
 
 
+def get_following(session_data: dict, username: str, proxy: str | None = None, amount: int = 50) -> list[dict]:
+    """Список тех, на кого подписан аккаунт (для проверки «взаимная подписка» черновым)."""
+    cl = build_client(session_data, proxy)
+    user_id = cl.user_id_from_username(username)
+    following = cl.user_following(user_id, amount=amount)
+    result = [{"pk": str(u.pk), "username": u.username} for u in following.values()]
+    logger.info("get_following: @%s → %d following (amount=%d)", username, len(result), amount)
+    return result
+
+
 def send_direct_message(session_data: dict, to_user_id: str, text: str, proxy: str | None = None) -> dict:
     cl = build_client(session_data, proxy)
     thread = cl.direct_send(text, [int(to_user_id)])

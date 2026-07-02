@@ -91,6 +91,13 @@ export async function getFollowers(session: object, username: string, proxy?: st
   )
 }
 
+export async function getFollowing(session: object, username: string, proxy?: string, amount = 50) {
+  return workerFetch<{ following: Array<{ pk: string; username: string }> }>(
+    '/following',
+    { sessionData: session, username, proxy, amount }
+  )
+}
+
 export interface IgLiker { pk: string; username: string; media_id: string }
 
 export async function getLikers(session: object, username: string, proxy?: string, mediaCount = 3, perMedia = 50) {

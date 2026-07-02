@@ -218,6 +218,17 @@ def followers(payload: FollowersPayload, x_worker_secret: str = Header(...)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/following")
+def following(payload: FollowersPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        result = ig.get_following(payload.sessionData, payload.username, payload.proxy, payload.amount)
+        return {"following": result}
+    except Exception as e:
+        logging.error("get_following error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/send-dm")
 def send_dm(payload: DMPayload, x_worker_secret: str = Header(...)):
     _check_secret(x_worker_secret)

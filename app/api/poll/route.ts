@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import {
-  getFollowers, getComments, sendDM, sendDMPhoto, replyComment, likeComment,
-  getFriendship, viewStories, followUser, likeLatestMedia, likeUserMedias,
+  getFollowers, getFollowing, getComments, sendDM, sendDMPhoto, replyComment, likeComment,
+  viewStories, followUser, likeLatestMedia, likeUserMedias,
   getLikers, getStoryEvents, getAccountInfo,
 } from '@/lib/instagram/client'
 import { Queue } from 'bullmq'
@@ -22,6 +22,10 @@ const LIKERS_MEDIA_COUNT = 3
 const LIKERS_PER_MEDIA = 50
 // Сколько тредов директа читать на предмет ответов/упоминаний в сторис
 const STORY_EVENTS_AMOUNT = 15
+// Глубина скрейпа подписчиков/подписок ОСНОВНОГО черновым для проверки гейта.
+// Чем больше — тем полнее проверка, но тяжелее для чернового. Основной при этом не трогаем.
+const GATE_FOLLOWERS_SCAN = 900
+const GATE_FOLLOWING_SCAN = 900
 // Сколько последних подписчиков запрашивать у Instagram (лимит безопасности)
 const FOLLOWERS_FETCH_LIMIT = 50
 // Сколько последних постов и комментариев под каждым сканировать
@@ -297,9 +301,6 @@ export async function POST(req: NextRequest) {
     // Разнесённые задержки: первое действие скоро, дальше с интервалом ~45–115с
     let cursor = (isManual ? 8 + Math.random() * 14 : 45 + Math.random() * 75) * 1000
     const nextGap = () => (45 + Math.random() * 70) * 1000
-    // Кэш дружбы (following/followed_by) — проверяется сессией основного, один раз на юзера
-    const friendshipCache = new Map<string, { following: boolean; followed_by: boolean }>()
-
     // Черновой-парсер для этого основного (round-robin). Пул тут гарантированно непуст.
     const draft = nextDraft()
     if (!draft) { s.skipped = 'no-draft'; summary.push(s); continue }
@@ -308,13 +309,37 @@ export async function POST(req: NextRequest) {
     const parseSession = draft.sessionData as object   // сессия чернового: парсинг + лайк/подписка/сторис
     const parseProxy = draft.proxy ?? undefined
 
-    // Проверка дружбы сессией ОСНОВНОГО (кто подписан именно на него), с кэшем
-    const getFsCached = async (pk: string) => {
-      if (friendshipCache.has(pk)) return friendshipCache.get(pk)!
-      const fs = await getFriendship(session, pk, proxy)
-      const v = { following: Boolean(fs.following), followed_by: Boolean(fs.followed_by) }
-      friendshipCache.set(pk, v)
-      return v
+    // ── Проверка подписки БЕЗ обращения к основному ──────────────────────────
+    // Черновой скрейпит подписчиков основного (публично) → гейт = принадлежность множеству.
+    // Так проверка «подписан ли на нас» не грузит основной аккаунт вообще.
+    let gateFollowers: Set<string> | null = null   // кто подписан на основной (followed_by)
+    let gateFollowing: Set<string> | null = null   // на кого подписан основной (для mutual)
+    const ensureGateFollowers = async (): Promise<Set<string>> => {
+      if (gateFollowers) return gateFollowers
+      // Стартуем с накопленного снапшота подписчиков + добираем свежих черновым
+      const set = extractKnownPks(account.snapshots.find((sn) => sn.type === 'FOLLOWERS')?.data)
+      try {
+        const { followers } = await getFollowers(parseSession, account.username, parseProxy, GATE_FOLLOWERS_SCAN)
+        followers.forEach((f) => set.add(String(f.pk)))
+      } catch { /* не смогли добрать — используем что есть (гейт ошибётся в безопасную сторону) */ }
+      gateFollowers = set
+      return set
+    }
+    const ensureGateFollowing = async (): Promise<Set<string>> => {
+      if (gateFollowing) return gateFollowing
+      const set = new Set<string>()
+      try {
+        const { following } = await getFollowing(parseSession, account.username, parseProxy, GATE_FOLLOWING_SCAN)
+        following.forEach((u) => set.add(String(u.pk)))
+      } catch { /* degrade */ }
+      gateFollowing = set
+      return set
+    }
+    // true → цель проходит гейт. Не в множестве → безопасно НЕ шлём (защита основного).
+    const passesGateFor = async (pk: string, mode: GateMode): Promise<boolean> => {
+      const followed_by = (await ensureGateFollowers()).has(pk)
+      const following = mode === 'mutual' ? (await ensureGateFollowing()).has(pk) : false
+      return passesGate(mode, { following, followed_by })
     }
 
     // Общий обработчик «целей» (подписчики/лайкнувшие/ответившие на сторис):
@@ -343,10 +368,7 @@ export async function POST(req: NextRequest) {
           // Гейт подписки: если задан и не проходит — DM не шлём (лайк/подписка/сторис остаются)
           let dmAllowed = Boolean(msgAction?.templates?.[0])
           if (dmAllowed && gateMode) {
-            try {
-              const fs = await getFsCached(target.pk)
-              if (!passesGate(gateMode, fs)) dmAllowed = false
-            } catch { dmAllowed = false } // не смогли проверить → безопаснее не слать
+            dmAllowed = await passesGateFor(target.pk, gateMode)
           }
 
           const willDM = dmAllowed && consume(counters, 'dm')
@@ -530,9 +552,7 @@ export async function POST(req: NextRequest) {
 
             // Проверка подписки: если автор НЕ проходит гейт — только коммент-приглашение, стоп
             if (gateCfg) {
-              let ok = false
-              try { ok = passesGate(gateCfg.mode, await getFsCached(c.user_pk)) }
-              catch (e: any) { errors.push(`проверка подписки: ${e.message}`) }
+              const ok = await passesGateFor(c.user_pk, gateCfg.mode)
 
               if (!ok) {
                 const gateText = gateCfg.inviteText.replace(/\{\{username\}\}/gi, c.username)
