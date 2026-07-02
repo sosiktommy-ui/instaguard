@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Play, Pause, Trash2, X, AtSign, Lock, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp } from 'lucide-react'
+import { Plus, Play, Pause, Trash2, X, AtSign, Lock, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp, Info } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tilt } from '@/components/ui/Tilt'
 import { useStore, formatFollowers } from '@/lib/store'
@@ -12,10 +12,47 @@ interface RealAccount {
   id: string
   username: string
   status: 'ACTIVE' | 'PAUSED' | 'BLOCKED' | 'CHALLENGE'
+  role?: string
   lastChecked: string | null
   errorCount: number
   proxy: string | null
   followerCount: number
+  followers?: number | null
+  followersHistory?: { d: string; n: number }[] | null
+}
+
+// Мини-спарклайн прироста подписчиков (инлайн SVG, без библиотек)
+function Sparkline({ data, w = 116, h = 30 }: { data: { d: string; n: number }[]; w?: number; h?: number }) {
+  const pts = (data ?? []).filter((p) => typeof p?.n === 'number')
+  if (pts.length < 2) {
+    return <div className="text-[11px] text-subt/70 h-[30px] flex items-center">Копим данные для графика…</div>
+  }
+  const ns = pts.map((p) => p.n)
+  const min = Math.min(...ns), max = Math.max(...ns)
+  const span = max - min || 1
+  const stepX = w / (pts.length - 1)
+  const y = (n: number) => h - 3 - ((n - min) / span) * (h - 6)
+  const path = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${(i * stepX).toFixed(1)},${y(p.n).toFixed(1)}`).join(' ')
+  const area = `${path} L${w},${h} L0,${h} Z`
+  const delta = ns[ns.length - 1] - ns[0]
+  const up = delta >= 0
+  const col = up ? '#34c759' : '#ff3b30'
+  return (
+    <div className="flex items-center gap-2">
+      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="shrink-0">
+        <defs>
+          <linearGradient id="spark-g" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor={col} stopOpacity="0.28" />
+            <stop offset="1" stopColor={col} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={area} fill="url(#spark-g)" />
+        <path d={path} fill="none" stroke={col} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        <circle cx={w} cy={y(ns[ns.length - 1])} r="2.6" fill={col} />
+      </svg>
+      <span className="text-[11px] font-semibold tabular-nums" style={{ color: col }}>{up ? '+' : ''}{delta.toLocaleString('ru')}</span>
+    </div>
+  )
 }
 
 type AuthMode = 'password' | 'cookies'
@@ -263,9 +300,15 @@ function AccountDetailModal({ acc, ra, campaigns, onClose }: {
         <div className="p-6 space-y-5">
           {/* Ключевые цифры */}
           <div className="grid grid-cols-3 gap-3">
-            {tile(Users, formatFollowers(ra?.followerCount ?? acc.followers ?? 0), 'подписчики', '#8e8e93')}
+            {tile(Users, formatFollowers(ra?.followers ?? ra?.followerCount ?? acc.followers ?? 0), 'подписчики', '#8e8e93')}
             {tile(Zap, `${activeCount}/${campaigns.length}`, 'кампаний активно', '#0071e3')}
             {tile(Send, totalFires.toLocaleString('ru'), 'срабатываний', '#34c759')}
+          </div>
+
+          {/* Прирост подписчиков */}
+          <div className="rounded-2xl bg-canvas px-4 py-3">
+            <div className="text-[12px] font-semibold text-subt mb-1 flex items-center gap-1.5"><TrendingUp className="w-3.5 h-3.5" /> Прирост подписчиков</div>
+            <Sparkline data={ra?.followersHistory ?? []} w={480} h={44} />
           </div>
 
           {/* Разбивка действий */}
@@ -293,7 +336,7 @@ function AccountDetailModal({ acc, ra, campaigns, onClose }: {
               <div className="flex items-center gap-1.5 text-[12px] font-semibold text-subt">
                 <Activity className="w-3.5 h-3.5" /> Рекламные кампании ({campaigns.length})
               </div>
-              <a href={`/triggers?account=${ra?.id ?? ''}`} className="text-[12px] font-medium text-brand hover:underline">Открыть в рекламе →</a>
+              <a href={`/triggers?account=${ra?.id ?? ''}`} target="_blank" rel="noopener" className="text-[12px] font-medium text-brand hover:underline">Открыть в отдельном окне ↗</a>
             </div>
             {campaigns.length === 0 ? (
               <div className="rounded-2xl bg-canvas p-6 text-center">
@@ -354,12 +397,32 @@ function AccountDetailModal({ acc, ra, campaigns, onClose }: {
             )}
           </div>
 
-          {/* Прокси */}
-          {ra?.proxy && (
-            <div className="flex items-center gap-1.5 text-[11px] text-subt font-mono bg-canvas rounded-xl px-3 py-2">
-              <Globe className="w-3 h-3 shrink-0" /> <span className="truncate">{ra.proxy}</span>
+          {/* Подробности */}
+          <div>
+            <div className="flex items-center gap-1.5 text-[12px] font-semibold text-subt mb-2">
+              <Info className="w-3.5 h-3.5" /> Подробности
             </div>
-          )}
+            <div className="rounded-2xl bg-canvas divide-y divide-black/[0.05] text-[12.5px]">
+              <div className="flex items-center justify-between px-3.5 py-2.5">
+                <span className="text-subt">Роль</span>
+                <span className="font-medium">{ra?.role === 'HELPER' ? 'Черновой (парсер)' : ra?.role === 'BOTH' ? 'Универсальный' : 'Основной'}</span>
+              </div>
+              <div className="flex items-center justify-between px-3.5 py-2.5">
+                <span className="text-subt">Последняя проверка</span>
+                <span className="font-medium">{ra?.lastChecked ? new Date(ra.lastChecked).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+              </div>
+              <div className="flex items-center justify-between px-3.5 py-2.5">
+                <span className="text-subt">Ошибок подряд</span>
+                <span className={cn('font-medium', (ra?.errorCount ?? 0) > 0 ? 'text-bad' : 'text-ok')}>{ra?.errorCount ?? 0}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                <span className="text-subt shrink-0">Прокси</span>
+                <span className="font-mono text-[11px] text-ink/70 truncate flex items-center gap-1 min-w-0">
+                  <Globe className="w-3 h-3 shrink-0 text-subt" /> {ra?.proxy || 'не задан'}
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -483,11 +546,11 @@ function Accounts() {
     setReal((prev) => prev.map((a) => a.id === id ? { ...a, status: newStatus } : a))
   }
 
-  // Merge Zustand accounts (UI) with real DB accounts for display
-  const mergedAccounts = accounts.map((a) => ({
-    ...a,
-    real: realAccounts.find((r) => r.username === a.username),
-  }))
+  // Merge Zustand accounts (UI) with real DB accounts for display.
+  // Черновые (HELPER) сюда не показываем — у них своя вкладка «Черновые аккаунты».
+  const mergedAccounts = accounts
+    .map((a) => ({ ...a, real: realAccounts.find((r) => r.username === a.username) }))
+    .filter((a) => a.real?.role !== 'HELPER')
 
   return (
     <div className="space-y-6">
@@ -564,7 +627,7 @@ function Accounts() {
                   <div className="grid grid-cols-3 gap-2 mt-5 relative">
                     <div className="rounded-2xl bg-canvas p-3 text-center">
                       <div className="flex items-center justify-center gap-1 text-[15px] font-semibold">
-                        <Users className="w-3.5 h-3.5 text-subt" />{formatFollowers(ra?.followerCount ?? acc.followers)}
+                        <Users className="w-3.5 h-3.5 text-subt" />{formatFollowers(ra?.followers ?? ra?.followerCount ?? acc.followers)}
                       </div>
                       <div className="text-[11px] text-subt mt-0.5">подписчики</div>
                     </div>
@@ -578,8 +641,16 @@ function Accounts() {
                       <div className="flex items-center justify-center gap-1 text-[15px] font-semibold">
                         <Send className="w-3.5 h-3.5 text-ok" />{st.runs.toLocaleString('ru')}
                       </div>
-                      <div className="text-[11px] text-subt mt-0.5">ответов</div>
+                      <div className="text-[11px] text-subt mt-0.5">срабатываний</div>
                     </div>
+                  </div>
+
+                  {/* Спарклайн прироста подписчиков */}
+                  <div className="mt-3 rounded-2xl bg-canvas px-3 py-2 relative">
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-[10.5px] text-subt uppercase tracking-wider">Прирост подписчиков</span>
+                    </div>
+                    <Sparkline data={ra?.followersHistory ?? []} />
                   </div>
                   <div className="mt-2 text-[11px] text-brand/70 text-center opacity-0 group-hover:opacity-100 transition-opacity">Подробная статистика →</div>
                   </div>

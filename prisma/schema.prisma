@@ -32,6 +32,7 @@ model InstagramAccount {
   errorCount  Int           @default(0)
   limits      Json?
   followers   Int?          // реальное число подписчиков (из account_info)
+  followersHistory Json?    // история [{d:'YYYY-MM-DD', n}] для спарклайна прироста
 
   user                User           @relation(fields: [userId], references: [id])
   triggersAsResponder TriggerRule[]  @relation("ResponderRules")

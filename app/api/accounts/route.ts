@@ -7,7 +7,7 @@ export async function GET() {
       orderBy: { id: 'desc' },
       select: {
         id: true, username: true, status: true, role: true,
-        lastChecked: true, errorCount: true, proxy: true, followers: true, limits: true,
+        lastChecked: true, errorCount: true, proxy: true, followers: true, limits: true, followersHistory: true,
         snapshots: { orderBy: { createdAt: 'desc' }, take: 1, select: { data: true } },
       },
     })
@@ -23,6 +23,8 @@ export async function GET() {
         proxy: a.proxy,
         followers: a.followers ?? null,   // реальное число (из account_info); null пока не спарсили
         followerCount: tracked,           // отслеживается в базе
+        limits: a.limits ?? null,         // счётчики действий за сегодня
+        followersHistory: a.followersHistory ?? null,  // для спарклайна прироста
       }
     }))
   } catch {

@@ -408,9 +408,19 @@ export async function POST(req: NextRequest) {
 
     // Реальное число подписчиков аккаунта (один лёгкий запрос)
     let realFollowers: number | undefined
+    let followersHistory: any = undefined
     if (account.sessionData) {
       try { realFollowers = (await getAccountInfo(account.sessionData as object, account.proxy ?? undefined)).follower_count }
       catch {}
+    }
+    // Копим историю подписчиков (одна точка в день) для спарклайна прироста
+    if (realFollowers !== undefined) {
+      const today = new Date().toISOString().slice(0, 10)
+      const hist = Array.isArray(account.followersHistory) ? [...(account.followersHistory as any[])] : []
+      const last = hist[hist.length - 1]
+      if (last && last.d === today) last.n = realFollowers
+      else hist.push({ d: today, n: realFollowers })
+      followersHistory = hist.slice(-30)
     }
 
     try {
@@ -622,7 +632,7 @@ export async function POST(req: NextRequest) {
 
       await prisma.instagramAccount.update({
         where: { id: account.id },
-        data: { lastChecked: new Date(), errorCount: 0, limits: counters as any, ...(realFollowers !== undefined ? { followers: realFollowers } : {}) },
+        data: { lastChecked: new Date(), errorCount: 0, limits: counters as any, ...(realFollowers !== undefined ? { followers: realFollowers, followersHistory } : {}) },
       })
       summary.push(s)
     } catch (e: any) {
