@@ -163,10 +163,8 @@ async function mergeStats(triggerId: string, inc: Record<string, number>): Promi
 }
 
 async function runFollowerActionsInline(job: any) {
-  const session = job.sessionData as object          // основной: DM/фото
+  const session = job.sessionData as object          // основной делает ВСЕ действия
   const proxy = job.proxy ?? undefined
-  const draftSession = (job.draftSessionData ?? job.sessionData) as object  // черновой: подписка/лайк/сторис
-  const draftProxy = job.draftProxy ?? proxy
   let success = false
   const errors: string[] = []
   const inc: Record<string, number> = {}
@@ -176,16 +174,16 @@ async function runFollowerActionsInline(job: any) {
     try { await sendDM(session, job.followerPk, job.text, proxy); success = true; dmDone = true }
     catch (e: any) {
       if (statusFromError(e.message)) throw e  // бан/челлендж/лимит → пусть внешний catch остановит основной
-      // Личка закрыта → мягкий контакт черновым (только если бюджет был выделен при постановке в очередь)
+      // Личка закрыта → мягкий контакт основным (follow+лайк, только если бюджет был выделен)
       errors.push(`директ закрыт: ${e.message}`)
-      if (job.fallbackFollow) { try { await followUser(draftSession, job.followerPk, draftProxy); success = true; inc.follow = (inc.follow || 0) + 1 } catch {} }
-      if (job.fallbackLike)   { try { await randDelay(2, 5); await likeLatestMedia(draftSession, job.followerPk, draftProxy); success = true; inc.like = (inc.like || 0) + 1 } catch {} }
+      if (job.fallbackFollow) { try { await followUser(session, job.followerPk, proxy); success = true; inc.follow = (inc.follow || 0) + 1 } catch {} }
+      if (job.fallbackLike)   { try { await randDelay(2, 5); await likeLatestMedia(session, job.followerPk, proxy); success = true; inc.like = (inc.like || 0) + 1 } catch {} }
     }
   }
   if (job.image)  { await randDelay(2, 5); try { await sendDMPhoto(session, job.followerPk, job.image, proxy); success = true; dmDone = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
-  if (job.doFollow) { await randDelay(3, 7); try { await followUser(draftSession, job.followerPk, draftProxy); success = true; inc.follow = (inc.follow || 0) + 1 } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
-  if (job.doLike)   { await randDelay(3, 8); try { await likeLatestMedia(draftSession, job.followerPk, draftProxy); success = true; inc.like = (inc.like || 0) + 1 } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
-  if (job.viewStories) { await randDelay(4, 10); try { await viewStories(draftSession, job.followerPk, job.storyLike, draftProxy); success = true; inc.story = (inc.story || 0) + 1 } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
+  if (job.doFollow) { await randDelay(3, 7); try { await followUser(session, job.followerPk, proxy); success = true; inc.follow = (inc.follow || 0) + 1 } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
+  if (job.doLike)   { await randDelay(3, 8); try { await likeLatestMedia(session, job.followerPk, proxy); success = true; inc.like = (inc.like || 0) + 1 } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
+  if (job.viewStories) { await randDelay(4, 10); try { await viewStories(session, job.followerPk, job.storyLike, proxy); success = true; inc.story = (inc.story || 0) + 1 } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
   if (dmDone) inc.dm = (inc.dm || 0) + 1
 
   if (success) {
@@ -258,14 +256,9 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  // Round-robin по пулу черновых + отдельные дневные счётчики на каждый черновой.
+  // Round-robin по пулу черновых (LRU по lastChecked). Черновые только парсят — счётчиков действий у них нет.
   let draftCursor = 0
   const nextDraft = () => (draftPool.length ? draftPool[draftCursor++ % draftPool.length] : null)
-  const draftCounters = new Map<string, Counters>()
-  const getDraftCounters = (d: { id: string; limits: unknown }): Counters => {
-    if (!draftCounters.has(d.id)) draftCounters.set(d.id, loadCounters(d.limits))
-    return draftCounters.get(d.id)!
-  }
   const usedDraftIds = new Set<string>()
 
   const summary: PollSummary[] = []
@@ -305,8 +298,7 @@ export async function POST(req: NextRequest) {
     const draft = nextDraft()
     if (!draft) { s.skipped = 'no-draft'; summary.push(s); continue }
     usedDraftIds.add(draft.id)
-    const dc = getDraftCounters(draft)          // дневные лимиты чернового
-    const parseSession = draft.sessionData as object   // сессия чернового: парсинг + лайк/подписка/сторис
+    const parseSession = draft.sessionData as object   // сессия чернового: только парсинг/добор инфы
     const parseProxy = draft.proxy ?? undefined
 
     // ── Проверка подписки БЕЗ обращения к основному ──────────────────────────
@@ -371,14 +363,13 @@ export async function POST(req: NextRequest) {
             dmAllowed = await passesGateFor(target.pk, gateMode)
           }
 
+          // ВСЕ действия делает основной (лимиты counters); черновой только парсил цель
           const willDM = dmAllowed && consume(counters, 'dm')
-          const willFollow = doFollowT && consume(dc, 'follow')
-          const willLike = doLikeT && consume(dc, 'like')
-          const willStory = Boolean(storiesAct) && consume(dc, 'story')
-          // Флаги fallback (follow+like черновым при закрытой личке). Бюджет заранее НЕ
-          // списываем: иначе на каждом успешном DM утекал бы дневной лимит чернового
-          // (follow/like расходовались бы вхолостую). Закрытая личка редка — лёгкое
-          // превышение лимита при самом фолбэке допустимо.
+          const willFollow = doFollowT && consume(counters, 'follow')
+          const willLike = doLikeT && consume(counters, 'like')
+          const willStory = Boolean(storiesAct) && consume(counters, 'story')
+          // Флаги fallback (follow+like основным при закрытой личке). Бюджет заранее НЕ
+          // списываем: иначе на каждом успешном DM утекал бы дневной лимит вхолостую.
           const fallbackFollow = willDM && !willFollow
           const fallbackLike   = willDM && !willLike
           if (!willDM && !willFollow && !willLike && !willStory) { s.limited = (s.limited ?? 0) + 1; continue }
@@ -396,7 +387,6 @@ export async function POST(req: NextRequest) {
             text: text.trim(), image: willDM ? image : undefined,
             doFollow: willFollow, doLike: willLike,
             viewStories: willStory, storyLike: Boolean(storiesAct?.like), proxy: account.proxy,
-            draftSessionData: draft.sessionData, draftProxy: draft.proxy,
             fallbackFollow, fallbackLike,
           }
 
@@ -574,19 +564,19 @@ export async function POST(req: NextRequest) {
                   catch (e: any) { errors.push(`ответ: ${e.message}`) }
                 }
               }
-              if (doLikePosts && consume(dc, 'like', COMMENT_LIKE_POSTS)) {
+              if (doLikePosts && consume(counters, 'like', COMMENT_LIKE_POSTS)) {
                 await randDelay(2, 5)
-                try { await likeUserMedias(parseSession, c.user_pk, COMMENT_LIKE_POSTS, parseProxy); fired = true; inc.like = (inc.like || 0) + 1 }
+                try { await likeUserMedias(session, c.user_pk, COMMENT_LIKE_POSTS, proxy); fired = true; inc.like = (inc.like || 0) + 1 }
                 catch (e: any) { errors.push(`лайк постов: ${e.message}`) }
               }
-              if (likeCmt && consume(dc, 'like')) {
+              if (likeCmt && consume(counters, 'like')) {
                 await randDelay(1, 3)
-                try { await likeComment(parseSession, c.pk, parseProxy); fired = true; inc.like = (inc.like || 0) + 1 }
+                try { await likeComment(session, c.pk, proxy); fired = true; inc.like = (inc.like || 0) + 1 }
                 catch (e: any) { errors.push(`лайк коммента: ${e.message}`) }
               }
-              if (doFollow && consume(dc, 'follow')) {
+              if (doFollow && consume(counters, 'follow')) {
                 await randDelay(2, 5)
-                try { await followUser(parseSession, c.user_pk, parseProxy); fired = true; inc.follow = (inc.follow || 0) + 1 }
+                try { await followUser(session, c.user_pk, proxy); fired = true; inc.follow = (inc.follow || 0) + 1 }
                 catch (e: any) { errors.push(`подписка: ${e.message}`) }
               }
               if (dm?.templates?.[0] && consume(counters, 'dm')) {
@@ -604,15 +594,15 @@ export async function POST(req: NextRequest) {
                   }
                 } catch (e: any) {
                   if (statusFromError(e.message)) throw e  // бан/челлендж/лимит → основной на паузу
-                  // Личка закрыта / не доставлено → мягкий контакт черновым (follow + лайк)
+                  // Личка закрыта / не доставлено → мягкий контакт основным (follow + лайк)
                   errors.push(`директ закрыт: ${e.message}`)
-                  if (consume(dc, 'follow')) { try { await followUser(parseSession, c.user_pk, parseProxy); fired = true; inc.follow = (inc.follow || 0) + 1 } catch {} }
-                  if (consume(dc, 'like'))   { await randDelay(2, 5); try { await likeLatestMedia(parseSession, c.user_pk, parseProxy); fired = true; inc.like = (inc.like || 0) + 1 } catch {} }
+                  if (consume(counters, 'follow')) { try { await followUser(session, c.user_pk, proxy); fired = true; inc.follow = (inc.follow || 0) + 1 } catch {} }
+                  if (consume(counters, 'like'))   { await randDelay(2, 5); try { await likeLatestMedia(session, c.user_pk, proxy); fired = true; inc.like = (inc.like || 0) + 1 } catch {} }
                 }
               }
-              if (storiesAct && consume(dc, 'story')) {
+              if (storiesAct && consume(counters, 'story')) {
                 await randDelay(3, 7)
-                try { await viewStories(parseSession, c.user_pk, Boolean(storiesAct.like), parseProxy); fired = true; inc.story = (inc.story || 0) + 1 }
+                try { await viewStories(session, c.user_pk, Boolean(storiesAct.like), proxy); fired = true; inc.story = (inc.story || 0) + 1 }
                 catch (e: any) { errors.push(`сторис: ${e.message}`) }
               }
             }
@@ -650,11 +640,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Сохраняем дневные счётчики черновых и метку использования (для LRU-ротации между запусками)
+  // Метка использования черновых (для LRU-ротации между запусками)
   await Promise.all([...usedDraftIds].map((id) =>
     prisma.instagramAccount.update({
       where: { id },
-      data: { limits: draftCounters.get(id) as any, lastChecked: new Date() },
+      data: { lastChecked: new Date() },
     }).catch(() => null)
   ))
 

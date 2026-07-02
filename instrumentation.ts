@@ -54,12 +54,9 @@ export async function register() {
           sessionData, accountId, triggerId, triggerName,
           followerPk, followerUsername, text, image, doFollow, doLike,
           viewStories, storyLike, proxy,
-          draftSessionData, draftProxy,
           fallbackFollow, fallbackLike,
         } = job.data
-        // Основной шлёт DM/фото; черновой (если передан) делает подписку/лайк/сторис
-        const draftSession = draftSessionData ?? sessionData
-        const dProxy = draftProxy ?? proxy
+        // Все действия (DM/фото/подписка/лайк/сторис) выполняет основной аккаунт — сессия sessionData
 
         const workerUrl = process.env.PYTHON_WORKER_URL ?? 'http://localhost:8001'
         const workerSecret = process.env.PYTHON_WORKER_SECRET ?? ''
@@ -90,16 +87,16 @@ export async function register() {
             const m = (e.message || '').toLowerCase()
             // бан/челлендж/лимит → пробрасываем (обработчик failed остановит основной)
             if (/challenge|checkpoint|verify|feedback_required|spam|blocked|action.?block|429|login_required|please wait|few minutes/.test(m)) throw e
-            // личка закрыта / не доставлено → мягкий контакт черновым (только если бюджет выделен)
+            // личка закрыта / не доставлено → мягкий контакт основным (follow+лайк, если бюджет выделен)
             errors.push(`директ закрыт: ${e.message}`)
-            if (fallbackFollow) { try { await call('/follow-user', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true; inc.follow = (inc.follow || 0) + 1 } catch {} }
-            if (fallbackLike)   { try { await rd(2, 5); await call('/like-latest-media', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true; inc.like = (inc.like || 0) + 1 } catch {} }
+            if (fallbackFollow) { try { await call('/follow-user', { sessionData, userId: followerPk, proxy }); success = true; inc.follow = (inc.follow || 0) + 1 } catch {} }
+            if (fallbackLike)   { try { await rd(2, 5); await call('/like-latest-media', { sessionData, userId: followerPk, proxy }); success = true; inc.like = (inc.like || 0) + 1 } catch {} }
           }
         }
         if (image)    { await rd(2, 5); try { await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy }); success = true; dmDone = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
-        if (doFollow) { await rd(3, 8); try { await call('/follow-user', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true; inc.follow = (inc.follow || 0) + 1 } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
-        if (doLike)   { await rd(4, 10); try { await call('/like-latest-media', { sessionData: draftSession, userId: followerPk, proxy: dProxy }); success = true; inc.like = (inc.like || 0) + 1 } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
-        if (viewStories) { await rd(5, 12); try { await call('/user-stories', { sessionData: draftSession, userId: followerPk, like: storyLike, proxy: dProxy }); success = true; inc.story = (inc.story || 0) + 1 } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
+        if (doFollow) { await rd(3, 8); try { await call('/follow-user', { sessionData, userId: followerPk, proxy }); success = true; inc.follow = (inc.follow || 0) + 1 } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
+        if (doLike)   { await rd(4, 10); try { await call('/like-latest-media', { sessionData, userId: followerPk, proxy }); success = true; inc.like = (inc.like || 0) + 1 } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
+        if (viewStories) { await rd(5, 12); try { await call('/user-stories', { sessionData, userId: followerPk, like: storyLike, proxy }); success = true; inc.story = (inc.story || 0) + 1 } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
         if (dmDone) inc.dm = (inc.dm || 0) + 1
 
         if (success) {
