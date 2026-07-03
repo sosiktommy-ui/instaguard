@@ -1,12 +1,13 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Play, Pause, Trash2, X, AtSign, Lock, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp, Info } from 'lucide-react'
+import { Plus, Play, Pause, Trash2, X, AtSign, Lock, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp, Info, Gauge } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tilt } from '@/components/ui/Tilt'
 import { useStore, formatFollowers } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { cn } from '@/lib/utils'
+import { DAILY_CAPS, loadCounters, type ActionKind } from '@/lib/limits'
 
 interface RealAccount {
   id: string
@@ -19,6 +20,7 @@ interface RealAccount {
   followerCount: number
   followers?: number | null
   followersHistory?: { d: string; n: number }[] | null
+  limits?: Record<string, unknown> | null
 }
 
 // Мини-спарклайн прироста подписчиков (инлайн SVG, без библиотек)
@@ -210,6 +212,11 @@ function hexA(hex: string, a: number) {
   const n = parseInt(hex.slice(1), 16)
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`
 }
+function darken(hex: string, f = 0.78) {
+  const n = parseInt(hex.slice(1), 16)
+  const r = Math.round(((n >> 16) & 255) * f), g = Math.round(((n >> 8) & 255) * f), b = Math.round((n & 255) * f)
+  return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`
+}
 // Разбивка суммарных действий аккаунта (из stats кампаний)
 const ACT_META: Record<string, { label: string; color: string; Icon: any }> = {
   dm:      { label: 'DM',       color: '#0071e3', Icon: Send },
@@ -218,18 +225,88 @@ const ACT_META: Record<string, { label: string; color: string; Icon: any }> = {
   story:   { label: 'Сторис',   color: '#ff9f0a', Icon: Clapperboard },
   comment: { label: 'Комменты', color: '#34c759', Icon: MessageCircle },
 }
-// Значки действий кампании из её actions[]
-function campaignBadges(actions: any[]): { label: string; color: string; Icon: any }[] {
-  const isOn = (a: any) => a && a.enabled !== false
-  const out: { label: string; color: string; Icon: any }[] = []
-  const msg = (actions ?? []).find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
-  if (msg) out.push({ label: 'DM', color: '#0071e3', Icon: Send })
-  if (msg?.gate) out.push({ label: msg.gate.mode === 'mutual' ? 'взаимная подписка' : 'проверка подписки', color: '#0071e3', Icon: UserCheck })
-  if ((actions ?? []).some((a: any) => a.type === 'REPLY_COMMENT' && isOn(a))) out.push({ label: 'ответ в комментах', color: '#34c759', Icon: MessageCircle })
-  if ((actions ?? []).some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))) out.push({ label: 'лайк', color: '#ff2d92', Icon: Heart })
-  if ((actions ?? []).some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))) out.push({ label: 'подписка', color: '#34c759', Icon: UserCheck })
-  if ((actions ?? []).some((a: any) => a.type === 'VIEW_STORIES' && isOn(a))) out.push({ label: 'сторис', color: '#ff9f0a', Icon: Clapperboard })
-  return out
+
+// Действия кампании со счётчиком срабатываний по каждому (как на вкладке «Кампании»)
+interface ActRow { key: string; label: string; color: string; Icon: any; count: number; settings: string[] }
+function campaignActionRows(c: any): ActRow[] {
+  const on = (a: any) => a && a.enabled !== false
+  const acts = c.actions ?? []
+  const stats = (c.stats ?? {}) as Record<string, number>
+  const isComment = c.triggerType === 'NEW_COMMENT'
+  const rows: ActRow[] = []
+  const dm = acts.find((a: any) => a.type === 'SEND_MESSAGE' && on(a))
+  const legacyGate = acts.find((a: any) => a.type === 'COMMENT_GATE' && on(a))
+  if (dm) {
+    const set: string[] = []
+    if (dm.link?.enabled) set.push('ссылка')
+    if (dm.image?.enabled) set.push('фото')
+    const gate = dm.gate ?? (legacyGate ? { mode: 'followed_by' } : null)
+    if (gate) set.push(gate.mode === 'mutual' ? 'взаимная подписка' : 'проверка подписки')
+    rows.push({ key: 'dm', label: 'DM', color: '#0071e3', Icon: Send, count: stats.dm || 0, settings: set })
+  }
+  const reply = acts.find((a: any) => a.type === 'REPLY_COMMENT' && on(a))
+  if (reply) rows.push({ key: 'comment', label: 'Коммент', color: '#34c759', Icon: MessageCircle, count: stats.comment || 0, settings: [`${(reply.replies ?? []).filter(Boolean).length} вар.`] })
+  const likeMedia = acts.some((a: any) => a.type === 'LIKE_MEDIA' && on(a))
+  const likeComment = acts.some((a: any) => a.type === 'LIKE_COMMENT' && on(a))
+  if (likeMedia || likeComment) {
+    const set: string[] = []
+    if (likeMedia) set.push(isComment ? 'посты автора' : 'последний пост')
+    if (likeComment) set.push('коммент')
+    rows.push({ key: 'like', label: 'Лайк', color: '#ff2d92', Icon: Heart, count: stats.like || 0, settings: set })
+  }
+  if (acts.some((a: any) => a.type === 'FOLLOW_BACK' && on(a))) rows.push({ key: 'follow', label: 'Подписка', color: '#34c759', Icon: UserCheck, count: stats.follow || 0, settings: [] })
+  const story = acts.find((a: any) => a.type === 'VIEW_STORIES' && on(a))
+  if (story) rows.push({ key: 'story', label: 'Сторис', color: '#ff9f0a', Icon: Clapperboard, count: stats.story || 0, settings: [story.like ? 'просмотр + лайк' : 'просмотр'] })
+  return rows
+}
+
+// ── Универсальная статистика «Дневная загрузка» (защита от бана) ──────────────
+const LOAD_ORDER: ActionKind[] = ['dm', 'follow', 'like', 'comment', 'story']
+function loadColor(pct: number) { return pct >= 85 ? '#ff3b30' : pct >= 60 ? '#ff9f0a' : '#34c759' }
+function computeLoad(limits: unknown) {
+  const c = loadCounters(limits) as any   // сбрасывается, если счётчики не за сегодня
+  const per = LOAD_ORDER.map((k) => {
+    const used = Number(c[k]) || 0
+    const cap = DAILY_CAPS[k]
+    return { k, used, cap, pct: cap ? Math.min(100, Math.round((used / cap) * 100)) : 0 }
+  })
+  return { max: per.reduce((m, p) => Math.max(m, p.pct), 0), per }
+}
+// full — бары по каждому действию; compact — одна тонкая полоса «загрузки»
+function DailyLoad({ limits, compact = false }: { limits: unknown; compact?: boolean }) {
+  const { max, per } = computeLoad(limits)
+  const label = max >= 85 ? 'у лимита — риск' : max >= 60 ? 'высокая' : 'в норме'
+  if (compact) {
+    return (
+      <div className="flex items-center gap-1.5" title={`Дневная загрузка: ${max}% (${label})`}>
+        <Gauge className="w-3 h-3 shrink-0" style={{ color: loadColor(max) }} />
+        <div className="flex-1 h-1.5 rounded-full bg-black/[0.06] overflow-hidden">
+          <div className="h-full rounded-full" style={{ width: `${max}%`, background: loadColor(max) }} />
+        </div>
+        <span className="text-[10.5px] tabular-nums font-medium shrink-0" style={{ color: loadColor(max) }}>{max}%</span>
+      </div>
+    )
+  }
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-1.5 text-[12px] font-semibold text-subt"><Gauge className="w-3.5 h-3.5" /> Дневная загрузка</div>
+        <span className="text-[11px] font-medium" style={{ color: loadColor(max) }}>{label} · {max}%</span>
+      </div>
+      <div className="rounded-2xl bg-canvas p-3.5 space-y-2">
+        {per.map((p) => (
+          <div key={p.k} className="flex items-center gap-2.5">
+            <span className="text-[11px] text-subt w-[70px] shrink-0">{ACT_META[p.k].label}</span>
+            <div className="flex-1 h-2 rounded-full bg-black/[0.06] overflow-hidden">
+              <div className="h-full rounded-full transition-all" style={{ width: `${p.pct}%`, background: loadColor(p.pct) }} />
+            </div>
+            <span className="text-[11px] tabular-nums text-subt w-[52px] text-right shrink-0">{p.used}/{p.cap}</span>
+          </div>
+        ))}
+      </div>
+      <div className="text-[10.5px] text-subt mt-1.5">Сбрасывается каждый день. Чем ближе к лимиту — тем выше риск ограничений Instagram.</div>
+    </div>
+  )
 }
 
 // ── Детальное окно аккаунта: статистика + кампании ────────────────────────────
@@ -330,6 +407,9 @@ function AccountDetailModal({ acc, ra, campaigns, onClose }: {
             </div>
           )}
 
+          {/* Дневная загрузка (универсальная статистика — защита от бана) */}
+          <DailyLoad limits={ra?.limits ?? null} />
+
           {/* Рекламные кампании */}
           <div>
             <div className="flex items-center justify-between mb-2">
@@ -348,9 +428,7 @@ function AccountDetailModal({ acc, ra, campaigns, onClose }: {
                 {campaigns.map((c) => {
                   const meta = TYPE_META[c.triggerType] ?? { label: c.triggerType, color: '#8e8e93', Icon: Zap }
                   const Icon = meta.Icon
-                  const badges = campaignBadges(c.actions ?? [])
-                  const cs = (c.stats ?? {}) as Record<string, any>
-                  const csEntries = Object.keys(ACT_META).filter((k) => (Number(cs[k]) || 0) > 0)
+                  const rows = campaignActionRows(c)
                   return (
                     <div key={c.id} className={cn('rounded-2xl border p-3.5 transition-all', c.isActive ? 'border-line/60 bg-white' : 'border-line/40 bg-canvas/50 opacity-70')}>
                       <div className="flex items-start gap-3">
@@ -369,23 +447,21 @@ function AccountDetailModal({ acc, ra, campaigns, onClose }: {
                             <span className="text-[11px] px-2 py-0.5 rounded-full font-medium" style={{ background: hexA(meta.color, 0.12), color: meta.color }}>{meta.label}</span>
                             <span className="text-[11px] text-subt">сработал <span className="font-semibold text-ink">{(c.fireCount ?? 0).toLocaleString('ru')}</span> раз</span>
                           </div>
-                          {badges.length > 0 && (
+                          {rows.length > 0 && (
                             <div className="flex flex-wrap gap-1.5 mt-2">
-                              {badges.map((b, i) => {
-                                const BI = b.Icon
+                              {rows.map((r) => {
+                                const active = r.count > 0
                                 return (
-                                  <span key={i} className="flex items-center gap-1 text-[10.5px] px-2 py-0.5 rounded-full font-medium" style={{ background: hexA(b.color, 0.1), color: b.color }}>
-                                    <BI className="w-2.5 h-2.5" /> {b.label}
+                                  <span key={r.key} className={cn('flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg font-semibold', !active && 'opacity-80')}
+                                    style={active
+                                      ? { background: `linear-gradient(135deg, ${r.color}, ${darken(r.color)})`, color: '#fff', boxShadow: `0 2px 6px ${hexA(r.color, 0.35)}` }
+                                      : { background: hexA(r.color, 0.1), color: r.color }}>
+                                    <r.Icon className="w-3 h-3" strokeWidth={2.4} /> {r.label}
+                                    <span className="tabular-nums opacity-90">×{r.count.toLocaleString('ru')}</span>
+                                    {r.settings.length > 0 && <span className="opacity-70 font-normal hidden sm:inline">· {r.settings.join(', ')}</span>}
                                   </span>
                                 )
                               })}
-                            </div>
-                          )}
-                          {csEntries.length > 0 && (
-                            <div className="text-[11px] text-subt mt-2 flex flex-wrap gap-x-3 gap-y-0.5">
-                              {csEntries.map((k) => (
-                                <span key={k}>{ACT_META[k].label}: <span className="font-medium text-ink tabular-nums">{Number(cs[k]).toLocaleString('ru')}</span></span>
-                              ))}
                             </div>
                           )}
                         </div>
@@ -652,6 +728,12 @@ function Accounts() {
                     </div>
                     <Sparkline data={ra?.followersHistory ?? []} />
                   </div>
+                  {ra && (
+                    <div className="mt-2 rounded-2xl bg-canvas px-3 py-2 relative">
+                      <div className="text-[10.5px] text-subt uppercase tracking-wider mb-1">Дневная загрузка</div>
+                      <DailyLoad limits={ra.limits ?? null} compact />
+                    </div>
+                  )}
                   <div className="mt-2 text-[11px] text-brand/70 text-center opacity-0 group-hover:opacity-100 transition-opacity">Подробная статистика →</div>
                   </div>
 
