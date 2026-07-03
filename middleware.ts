@@ -9,7 +9,7 @@ const JWT_SECRET = new TextEncoder().encode(
 const INTERNAL_SECRET = process.env.INTERNAL_SECRET ?? 'instaguard-internal-cron'
 
 // Пути, доступные без входа
-const PUBLIC_PATHS = new Set<string>(['/login', '/api/auth/login'])
+const PUBLIC_PATHS = new Set<string>(['/login', '/register', '/api/auth/login', '/api/auth/register'])
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
@@ -26,8 +26,8 @@ export async function middleware(req: NextRequest) {
   }
 
   if (valid) {
-    // Уже вошёл — не пускаем обратно на /login
-    if (pathname === '/login') return NextResponse.redirect(new URL('/', req.url))
+    // Уже вошёл — не пускаем обратно на страницы входа/регистрации
+    if (pathname === '/login' || pathname === '/register') return NextResponse.redirect(new URL('/', req.url))
     return NextResponse.next()
   }
 

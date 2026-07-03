@@ -12,6 +12,7 @@ model User {
   email     String   @unique
   name      String?
   password  String
+  plan      String   @default("free")   // тариф (задел под биллинг: free / pro / …)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

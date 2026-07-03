@@ -1,9 +1,14 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { getCurrentUser } from '@/lib/auth'
 
 export async function GET() {
   try {
+    const user = await getCurrentUser()
+    if (!user) return NextResponse.json([], { status: 401 })
+
     const accounts = await prisma.instagramAccount.findMany({
+      where: { userId: user.id },
       orderBy: { id: 'desc' },
       select: {
         id: true, username: true, status: true, role: true,

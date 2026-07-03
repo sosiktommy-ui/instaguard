@@ -118,6 +118,23 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ### 2026-07-03
 
+#### feat(A): SaaS-фундамент — мультитенантность, публичная регистрация, изоляция по userId
+
+- **Реальные сессии на пользователя.** `lib/auth.ts`: `getUserOrFirst()` больше НЕ возвращает «первого юзера БД», а отдаёт пользователя JWT-сессии (`getCurrentUser`). Имя оставлено, чтобы не трогать импорты.
+- **Публичная регистрация:** `app/api/auth/register/route.ts` (email+пароль, bcrypt, валидация, `plan:'free'`, сразу создаёт сессию), страница `app/(auth)/register/page.tsx`, ссылки логин↔регистрация. Middleware: `/register` и `/api/auth/register` в `PUBLIC_PATHS`.
+- **Реальный выход:** `app/api/auth/logout/route.ts` (удаляет куку) + `handleLogout` в `TopNav` (чистит `instaguard-store`). Раньше кнопка только редиректила на `/login`, а кука оставалась.
+- **Изоляция данных по `userId` во ВСЕХ API:**
+  - `/api/accounts` (GET) — фильтр `where:{userId}` (раньше отдавал ВСЕ аккаунты!).
+  - `/api/accounts/auth` — привязка к юзеру сессии (не к «первому»), проверка что раздел его.
+  - `/api/accounts/[id]` (DELETE/PATCH) и `/reset-snapshot` — проверка владения.
+  - `/api/triggers` (POST) — проверка, что выбранные аккаунты принадлежат юзеру.
+  - `/api/logs` — фильтр по `account.userId` (раньше отдавал все логи).
+  - `/api/poll` — крон (по `x-internal-secret`) обрабатывает все тенанты; ручной вызов из UI скоупится по юзеру сессии.
+  - Триггеры/шаблоны/разделы уже фильтровались по `user.id` — теперь это юзер сессии.
+- **Поле плана:** `User.plan String @default("free")` (миграция `20260703120000_user_plan`) — задел под биллинг, оплата не включена.
+- **Убран авто-сид владельца** из `instrumentation.ts` (перезаписывал первого юзера email/паролем из `DEFAULT_USER_EMAIL/PASSWORD` — костыль под одного, ломал изоляцию). Переменные `DEFAULT_USER_*` больше не используются.
+- ⚠️ Существующие данные остаются привязаны к прежнему владельцу (недеструктивно): вход под его email покажет их; новые регистрации стартуют пустыми.
+
 #### redesign(C2): разделы/подразделы (папки) + фильтры аккаунтов
 
 - **Модель `Section`** (`prisma/schema.prisma`): `{ id, userId, parentId?, name }`, самоссылка `SectionTree` (двухуровневая иерархия: раздел → подраздел). У `InstagramAccount` — `sectionId?` (FK `ON DELETE SET NULL`). Миграция `20260703000000_add_sections` (идемпотентная, применяется через `prisma migrate deploy` в `start`).

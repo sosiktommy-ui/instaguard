@@ -1,36 +1,12 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return
 
-  // ── Авто-сид пользователя ──────────────────────────────────────────────────
-  try {
-    const { PrismaClient } = await import(/* webpackIgnore: true */ '@prisma/client')
-    const { hashSync } = await import(/* webpackIgnore: true */ 'bcryptjs')
-    const prisma = new PrismaClient()
-    // Гарантируем, что единственный владелец данных существует и логинится теми
-    // email/паролем, что заданы в переменных Railway — переменные всегда источник
-    // правды, при их смене нужно менять и пароль в уже существующей записи БД,
-    // иначе изменение переменной без редеплоя/пересоздания записи не действует.
-    const email = process.env.DEFAULT_USER_EMAIL ?? 'sosiktommy@gmail.com'
-    const password = process.env.DEFAULT_USER_PASSWORD ?? 'Qwerty123!@#'
-    const passwordHash = hashSync(password, 10)
-    // Единственный владелец = самый ранний пользователь (та же логика, что и getUserOrFirst)
-    const owner = await prisma.user.findFirst({ orderBy: { createdAt: 'asc' } })
-    if (owner) {
-      // Если старая версия сида уже успела создать отдельную запись с этим email
-      // (до фикса, апдейтящего владельца), удаляем её — иначе update ниже упадёт
-      // на unique-констрейнте по email и пароль владельца молча не обновится.
-      await prisma.user.deleteMany({ where: { email, NOT: { id: owner.id } } })
-      await prisma.user.update({ where: { id: owner.id }, data: { email, password: passwordHash } })
-    } else {
-      await prisma.user.create({ data: { email, name: 'Owner', password: passwordHash } })
-    }
-    console.log(`[seed] Ensured login user exists: ${email}`)
-    if (!process.env.JWT_SECRET) {
-      console.warn('[auth] JWT_SECRET is NOT set — using insecure fallback. Set JWT_SECRET in Railway!')
-    }
-    await prisma.$disconnect()
-  } catch (e) {
-    console.error('[seed] Auto-seed failed:', e)
+  // Мультитенант (план A): авто-сид «владельца» убран — пользователи создаются
+  // через публичную регистрацию (/register). Раньше здесь первый юзер БД
+  // насильно перезаписывался email/паролем из переменных Railway (костыль под
+  // однопользовательский режим) — это ломало изоляцию по userId.
+  if (!process.env.JWT_SECRET) {
+    console.warn('[auth] JWT_SECRET is NOT set — using insecure fallback. Set JWT_SECRET in Railway!')
   }
 
   // ── BullMQ: воркер отправки DM + авто-поллинг ─────────────────────────────

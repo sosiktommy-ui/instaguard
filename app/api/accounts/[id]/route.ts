@@ -1,9 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { getCurrentUser } from '@/lib/auth'
+
+// Проверяет, что аккаунт принадлежит пользователю сессии
+async function ownsAccount(id: string): Promise<boolean> {
+  const user = await getCurrentUser()
+  if (!user) return false
+  const acc = await prisma.instagramAccount.findFirst({ where: { id, userId: user.id }, select: { id: true } })
+  return Boolean(acc)
+}
 
 export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   try {
+    if (!(await ownsAccount(id))) return NextResponse.json({ error: 'Не найдено' }, { status: 404 })
     // FK стоят RESTRICT — сначала удаляем дочерние записи, потом сам аккаунт (в транзакции)
     await prisma.$transaction([
       prisma.log.deleteMany({ where: { accountId: id } }),
@@ -24,6 +34,7 @@ const PATCHABLE = new Set(['proxy', 'status', 'sectionId'])
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   try {
+    if (!(await ownsAccount(id))) return NextResponse.json({ error: 'Не найдено' }, { status: 404 })
     const body = await req.json().catch(() => ({}))
     const data: Record<string, unknown> = {}
     for (const k of Object.keys(body)) {

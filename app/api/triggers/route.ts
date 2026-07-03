@@ -32,6 +32,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Заполните название и выберите аккаунты' }, { status: 400 })
   }
 
+  // Аккаунты должны принадлежать пользователю сессии (мультитенант)
+  const owned = await prisma.instagramAccount.findMany({
+    where: { id: { in: accountIds as string[] }, userId: user.id }, select: { id: true },
+  })
+  if (owned.length !== (accountIds as string[]).length) {
+    return NextResponse.json({ error: 'Некоторые аккаунты недоступны' }, { status: 403 })
+  }
+
   const triggerType = TYPE_MAP[type]
   if (!triggerType) return NextResponse.json({ error: 'Неизвестный тип события' }, { status: 400 })
   // Исполняемые типы: подписка, комментарий, лайк, ответ/упоминание в сторис

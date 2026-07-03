@@ -23,6 +23,14 @@ export default function TopNav() {
   // Close drawer on route change
   useEffect(() => { setOpen(false) }, [pathname])
 
+  // Реальный выход: удаляем куку сессии на сервере + чистим локальный стор (мультитенант)
+  const handleLogout = async () => {
+    try { await fetch('/api/auth/logout', { method: 'POST' }) } catch {}
+    try { localStorage.removeItem('instaguard-store') } catch {}
+    router.push('/login')
+    router.refresh()
+  }
+
   const activeSub = SUBTABS.find((t) => t.href === pathname)
   const crumb = activeSub?.label ?? 'Рекламные кампании'
 
@@ -59,7 +67,7 @@ export default function TopNav() {
             </span>
             Активно
           </div>
-          <button onClick={() => router.push('/login')} className="text-subt hover:text-bad transition-colors p-2" title="Выйти">
+          <button onClick={handleLogout} className="text-subt hover:text-bad transition-colors p-2" title="Выйти">
             <LogOut className="w-[18px] h-[18px]" />
           </button>
         </div>
@@ -92,7 +100,7 @@ export default function TopNav() {
               })}
             </nav>
             <div className="mt-auto p-3 border-t border-black/[0.06]">
-              <button onClick={() => router.push('/login')}
+              <button onClick={handleLogout}
                 className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[15px] font-medium text-subt hover:bg-black/[0.04] hover:text-bad transition-all">
                 <LogOut className="w-[18px] h-[18px]" /> Выйти
               </button>

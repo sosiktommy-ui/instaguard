@@ -62,6 +62,11 @@ export default function LoginPage() {
           <Button onClick={handleLogin} disabled={loading} size="lg" className="w-full mt-1">
             {loading ? 'Вход…' : 'Войти'}
           </Button>
+
+          <p className="text-center text-[13px] text-subt pt-1">
+            Нет аккаунта?{' '}
+            <a href="/register" className="text-brand hover:underline font-medium">Зарегистрироваться</a>
+          </p>
         </div>
 
       </div>

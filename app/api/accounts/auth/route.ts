@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { loginByCredentials, loginByCookies } from '@/lib/instagram/client'
+import { getCurrentUser } from '@/lib/auth'
 
 export async function POST(req: NextRequest) {
   try {
@@ -50,18 +51,25 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Владелец = первый пользователь по createdAt (как в getUserOrFirst) — единый для всех данных
-    const user = await prisma.user.findFirst({ orderBy: { createdAt: 'asc' } })
+    // Аккаунт принадлежит пользователю текущей сессии (мультитенант)
+    const user = await getCurrentUser()
     if (!user) {
-      return NextResponse.json({ error: 'Нет пользователя в БД. Запустите seed.' }, { status: 500 })
+      return NextResponse.json({ error: 'Не авторизован' }, { status: 401 })
     }
 
-    const existing = await prisma.instagramAccount.findFirst({ where: { username: clean } })
+    // Раздел должен принадлежать этому же пользователю, иначе не назначаем
+    let validSection: string | null = null
+    if (section) {
+      const sec = await prisma.section.findFirst({ where: { id: section, userId: user.id }, select: { id: true } })
+      validSection = sec ? sec.id : null
+    }
+
+    const existing = await prisma.instagramAccount.findFirst({ where: { username: clean, userId: user.id } })
 
     const account = existing
       ? await prisma.instagramAccount.update({
           where: { id: existing.id },
-          data: { sessionData, status: 'ACTIVE', lastChecked: new Date(), proxy: proxy || null, role: accountRole, sectionId: section },
+          data: { sessionData, status: 'ACTIVE', lastChecked: new Date(), proxy: proxy || null, role: accountRole, sectionId: validSection },
         })
       : await prisma.instagramAccount.create({
           data: {
@@ -71,7 +79,7 @@ export async function POST(req: NextRequest) {
             sessionData,
             proxy: proxy || null,
             status: 'ACTIVE',
-            sectionId: section,
+            sectionId: validSection,
           },
         })
 

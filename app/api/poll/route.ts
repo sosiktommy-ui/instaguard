@@ -7,6 +7,7 @@ import {
 } from '@/lib/instagram/client'
 import { Queue } from 'bullmq'
 import { loadCounters, consume, MAX_NEW_PER_POLL, type Counters } from '@/lib/limits'
+import { getCurrentUser } from '@/lib/auth'
 
 // Сколько последних постов автора комментария лайкать (действие «Лайк» в триггере «Комментарий»)
 const COMMENT_LIKE_POSTS = 3
@@ -217,10 +218,21 @@ export async function POST(req: NextRequest) {
   // Ручная проверка: указан конкретный аккаунт ИЛИ явный флаг manual (кнопка «Проверить»)
   const isManual = Boolean(accountId) || body.manual === true
 
+  // Крон-вызов (по внутреннему секрету) обрабатывает ВСЕ тенанты. Ручной вызов из UI —
+  // только аккаунты пользователя сессии (изоляция данных, план A).
+  const isInternal = req.headers.get('x-internal-secret') === (process.env.INTERNAL_SECRET ?? 'instaguard-internal-cron')
+  let userId: string | null = null
+  if (!isInternal) {
+    const user = await getCurrentUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    userId = user.id
+  }
+  const scope = userId ? { userId } : {}
+
   // Основные аккаунты (отправители): исключаем черновых (HELPER) — те только парсят.
   const where: any = accountId
-    ? { id: accountId, status: 'ACTIVE' as const }
-    : { status: 'ACTIVE' as const, role: { in: ['RESPONDER', 'BOTH'] } }
+    ? { id: accountId, status: 'ACTIVE' as const, ...scope }
+    : { status: 'ACTIVE' as const, role: { in: ['RESPONDER', 'BOTH'] }, ...scope }
 
   const accounts = await prisma.instagramAccount.findMany({
     where,
@@ -232,7 +244,7 @@ export async function POST(req: NextRequest) {
 
   // Пул черновых (HELPER) аккаунтов-парсеров: активные, с живой сессией. LRU — кто дольше не работал.
   const draftPool = (await prisma.instagramAccount.findMany({
-    where: { role: 'HELPER', status: 'ACTIVE' },
+    where: { role: 'HELPER', status: 'ACTIVE', ...scope },
     orderBy: { lastChecked: 'asc' },
   })).filter((d) => d.sessionData)
 
