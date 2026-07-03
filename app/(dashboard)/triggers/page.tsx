@@ -14,6 +14,7 @@ import { Tilt } from '@/components/ui/Tilt'
 import { TriggerType } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
+import { SectionBar, type SectionItem } from '@/components/accounts/SectionBar'
 import { cn } from '@/lib/utils'
 
 // Маленькая «?»-подсказка
@@ -132,6 +133,7 @@ interface DbAccount {
   errorCount?: number
   followers?: number | null      // реальное число подписчиков
   followerCount?: number         // отслеживается в базе
+  sectionId?: string | null      // раздел/подраздел (папка)
 }
 interface DbTrigger {
   id: string
@@ -1250,6 +1252,9 @@ function TriggersScreen() {
   const [loadingTemplates, setLoadingTemplates] = useState(false)
   const [showTemplates, setShowTemplates] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
+  const [sections, setSections] = useState<SectionItem[]>([])
+  const [selSection, setSelSection] = useState('')
+  const [selSub, setSelSub] = useState('')
 
   const formApi = useRef<FormApi | null>(null)
   const [selId, setSelId] = useState<string | null>(null)
@@ -1269,8 +1274,11 @@ function TriggersScreen() {
     try { const res = await fetch('/api/templates'); if (res.ok) setTemplates(await res.json()) } catch {}
     setLoadingTemplates(false)
   }, [])
+  const loadSections = useCallback(async () => {
+    try { const res = await fetch('/api/sections'); if (res.ok) setSections(await res.json()) } catch {}
+  }, [])
 
-  useEffect(() => { loadAccounts(); loadTriggers(); loadTemplates() }, [loadAccounts, loadTriggers, loadTemplates])
+  useEffect(() => { loadAccounts(); loadTriggers(); loadTemplates(); loadSections() }, [loadAccounts, loadTriggers, loadTemplates, loadSections])
 
   // Открыть сразу конкретный аккаунт, если пришли со страницы «Аккаунты» (?account=<id>)
   useEffect(() => {
@@ -1308,6 +1316,17 @@ function TriggersScreen() {
 
   const selAcc = selId ? dbAccounts.find((a) => a.id === selId) : null
   const selCampaigns = selId ? campaignsFor(selId) : []
+
+  // Фильтр аккаунтов по выбранному разделу/подразделу (план §C2)
+  const childIds = useMemo(
+    () => new Set(sections.filter((s) => s.parentId === selSection).map((s) => s.id)),
+    [sections, selSection]
+  )
+  const visibleAccounts = useMemo(() => {
+    if (!selSection) return dbAccounts
+    if (selSub) return dbAccounts.filter((a) => a.sectionId === selSub)
+    return dbAccounts.filter((a) => a.sectionId === selSection || childIds.has(a.sectionId ?? ''))
+  }, [dbAccounts, selSection, selSub, childIds])
 
   const templatesBtn = (
     <button onClick={() => { setShowTemplates(true); loadTemplates() }}
@@ -1413,16 +1432,20 @@ function TriggersScreen() {
         <div className="flex items-center gap-2">
           <Users className="w-4 h-4 text-brand" />
           <span className="font-semibold text-[15px]">Аккаунты</span>
-          <span className="text-[12px] text-subt">({dbAccounts.length})</span>
+          <span className="text-[12px] text-subt">({visibleAccounts.length}{visibleAccounts.length !== dbAccounts.length ? ` из ${dbAccounts.length}` : ''})</span>
           <Hint text="Нажми на аккаунт, чтобы провалиться в его рекламные кампании" />
         </div>
         <div className="flex items-center gap-2">
           {templatesBtn}
-          <button onClick={() => { loadAccounts(); loadTriggers() }} className="p-1.5 text-subt hover:text-ink transition-colors" title="Обновить">
+          <button onClick={() => { loadAccounts(); loadTriggers(); loadSections() }} className="p-1.5 text-subt hover:text-ink transition-colors" title="Обновить">
             <RefreshCw className={cn('w-4 h-4', (loadingAccounts || loadingTriggers) && 'animate-spin')} />
           </button>
         </div>
       </div>
+
+      {/* Разделы/подразделы (папки) + фильтр — план §C2 */}
+      <SectionBar sections={sections} selSection={selSection} selSub={selSub}
+        onSelect={(sec, sub) => { setSelSection(sec); setSelSub(sub) }} onReload={loadSections} />
 
       {loadingAccounts ? (
         <div className="card py-12 text-center text-subt text-[13px]">Загрузка…</div>
@@ -1435,9 +1458,14 @@ function TriggersScreen() {
             <Plus className="w-3.5 h-3.5" /> Аккаунт
           </Button>
         </div>
+      ) : visibleAccounts.length === 0 ? (
+        <div className="card py-12 flex flex-col items-center gap-2 text-center px-6">
+          <div className="text-[13px] text-subt">В этом разделе пока нет аккаунтов</div>
+          <button onClick={() => { setSelSection(''); setSelSub('') }} className="text-[12.5px] text-brand hover:underline">Показать все</button>
+        </div>
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {dbAccounts.map((acc, i) => (
+          {visibleAccounts.map((acc, i) => (
             <AccountCard key={acc.id} acc={acc} index={i}
               campaigns={campaignsFor(acc.id)}
               activeTypes={activeByAccount.get(acc.id) ?? new Set<string>()}
@@ -1469,7 +1497,7 @@ function TriggersScreen() {
 
       {showAdd && (
         <AddAccountModal onClose={() => setShowAdd(false)}
-          onAdded={() => { loadAccounts(); loadTriggers() }} />
+          onAdded={() => { loadAccounts(); loadTriggers(); loadSections() }} />
       )}
     </div>
   )

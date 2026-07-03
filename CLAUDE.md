@@ -118,6 +118,13 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ### 2026-07-03
 
+#### redesign(C2): разделы/подразделы (папки) + фильтры аккаунтов
+
+- **Модель `Section`** (`prisma/schema.prisma`): `{ id, userId, parentId?, name }`, самоссылка `SectionTree` (двухуровневая иерархия: раздел → подраздел). У `InstagramAccount` — `sectionId?` (FK `ON DELETE SET NULL`). Миграция `20260703000000_add_sections` (идемпотентная, применяется через `prisma migrate deploy` в `start`).
+- **API:** `app/api/sections/route.ts` (GET со счётчиком аккаунтов, POST — раздел/подраздел, ограничение 2 уровня), `app/api/sections/[id]/route.ts` (DELETE каскадом подразделов + обнуление `sectionId` у аккаунтов; PATCH — переименование). Скоуп по `getUserOrFirst()`.
+- **Аккаунты:** `/api/accounts` (GET) отдаёт `sectionId`; `/api/accounts/auth` принимает `sectionId` при создании; `/api/accounts/[id]` (PATCH) — `sectionId` в `PATCHABLE`.
+- **Фронт:** `components/accounts/SectionBar.tsx` — чипы «Все» + разделы + «+ Раздел»; при выборе раздела второй ряд подразделов + «+ Подраздел»; создание инлайн-инпутом, удаление с попапом-подтверждением (§D2). На главном экране (`triggers/page.tsx`) — фильтр `visibleAccounts` по разделу/подразделу (раздел включает свои подразделы). В попапе добавления (`AddAccountModal`) и в модалке деталей (`accounts/page.tsx`) — выбор/смена раздела (два `select`).
+
 #### rebrand: ReactiveGram + фиолетовая палитра
 
 - **Название сервиса:** везде `ShadowGram` → **ReactiveGram** (`layout.tsx` title, `login`, `TopNav`, title Python-воркера).

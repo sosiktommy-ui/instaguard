@@ -1,12 +1,14 @@
 'use client'
 
-import { useState } from 'react'
-import { X, AtSign, Lock, Globe, Loader2 } from 'lucide-react'
+import { useState, useEffect, useMemo } from 'react'
+import { X, AtSign, Lock, Globe, Loader2, FolderTree } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useStore } from '@/lib/store'
 import { cn } from '@/lib/utils'
 
 type AuthMode = 'password' | 'cookies'
+
+interface SectionItem { id: string; parentId: string | null; name: string }
 
 /**
  * Единый переиспользуемый попап подключения Instagram-аккаунта.
@@ -23,6 +25,18 @@ export function AddAccountModal({ onClose, onAdded }: { onClose: () => void; onA
   const [error, setError]       = useState('')
   const [step, setStep]         = useState<'form' | 'auth'>('form')
 
+  // Разделы/подразделы (папки) — для назначения аккаунту при создании
+  const [sections, setSections] = useState<SectionItem[]>([])
+  const [secId, setSecId]       = useState('')  // корневой раздел
+  const [subId, setSubId]       = useState('')  // подраздел
+
+  useEffect(() => {
+    fetch('/api/sections').then((r) => r.ok ? r.json() : []).then(setSections).catch(() => {})
+  }, [])
+
+  const roots = useMemo(() => sections.filter((s) => !s.parentId), [sections])
+  const subs = useMemo(() => sections.filter((s) => s.parentId === secId), [sections, secId])
+
   const canSubmit = mode === 'password'
     ? username.trim() && password.trim()
     : cookies.trim()
@@ -33,9 +47,10 @@ export function AddAccountModal({ onClose, onAdded }: { onClose: () => void; onA
     setStep('auth')
 
     try {
+      const sectionId = subId || secId || undefined
       const body = mode === 'cookies'
-        ? { authMethod: 'cookies', cookies: cookies.trim(), proxy: proxy.trim() || undefined }
-        : { username: username.replace(/^@/, '').trim(), password, proxy: proxy.trim() || undefined }
+        ? { authMethod: 'cookies', cookies: cookies.trim(), proxy: proxy.trim() || undefined, sectionId }
+        : { username: username.replace(/^@/, '').trim(), password, proxy: proxy.trim() || undefined, sectionId }
 
       const res = await fetch('/api/accounts/auth', {
         method: 'POST',
@@ -74,6 +89,26 @@ export function AddAccountModal({ onClose, onAdded }: { onClose: () => void; onA
             </button>
           ))}
         </div>
+
+        {/* Раздел / подраздел (папка). Создаются на главном экране кнопкой «+ Раздел». */}
+        {step === 'form' && roots.length > 0 && (
+          <div className="mb-4">
+            <label className="text-[13px] text-subt font-medium mb-2 flex items-center gap-1.5">
+              <FolderTree className="w-3.5 h-3.5" /> Раздел (необязательно)
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <select value={secId} onChange={(e) => { setSecId(e.target.value); setSubId('') }} className="field text-[13px] py-2.5">
+                <option value="">— без раздела —</option>
+                {roots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              <select value={subId} onChange={(e) => setSubId(e.target.value)} disabled={!secId || subs.length === 0}
+                className="field text-[13px] py-2.5 disabled:opacity-40">
+                <option value="">{secId && subs.length === 0 ? 'нет подразделов' : '— подраздел —'}</option>
+                {subs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+          </div>
+        )}
 
         {step === 'auth' ? (
           <div className="py-12 flex flex-col items-center gap-4 text-center">

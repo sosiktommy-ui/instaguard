@@ -8,6 +8,7 @@ export async function GET() {
       select: {
         id: true, username: true, status: true, role: true,
         lastChecked: true, errorCount: true, proxy: true, followers: true, limits: true, followersHistory: true,
+        sectionId: true,
         snapshots: { orderBy: { createdAt: 'desc' }, take: 1, select: { data: true } },
       },
     })
@@ -25,6 +26,7 @@ export async function GET() {
         followerCount: tracked,           // отслеживается в базе
         limits: a.limits ?? null,         // счётчики действий за сегодня
         followersHistory: a.followersHistory ?? null,  // для спарклайна прироста
+        sectionId: a.sectionId ?? null,   // раздел/подраздел (папка)
       }
     }))
   } catch {

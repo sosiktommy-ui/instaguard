@@ -18,6 +18,25 @@ model User {
   accounts  InstagramAccount[]
   triggers  TriggerRule[]
   templates Template[]
+  sections  Section[]
+}
+
+// Пользовательские папки для аккаунтов: раздел → подраздел (двухуровневая иерархия).
+// Напр. «Польша» → «Краков». Свободные названия, без справочника.
+model Section {
+  id        String   @id @default(cuid())
+  userId    String
+  parentId  String?
+  name      String
+  createdAt DateTime @default(now())
+
+  user     User               @relation(fields: [userId], references: [id])
+  parent   Section?           @relation("SectionTree", fields: [parentId], references: [id])
+  children Section[]          @relation("SectionTree")
+  accounts InstagramAccount[]
+
+  @@index([userId])
+  @@index([parentId])
 }
 
 model InstagramAccount {
@@ -33,8 +52,10 @@ model InstagramAccount {
   limits      Json?
   followers   Int?          // реальное число подписчиков (из account_info)
   followersHistory Json?    // история [{d:'YYYY-MM-DD', n}] для спарклайна прироста
+  sectionId   String?       // раздел/подраздел (папка пользователя)
 
   user                User           @relation(fields: [userId], references: [id])
+  section             Section?       @relation(fields: [sectionId], references: [id])
   triggersAsResponder TriggerRule[]  @relation("ResponderRules")
   triggersAsHelper    TriggerRule[]  @relation("HelperRules")
   snapshots           Snapshot[]

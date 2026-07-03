@@ -19,7 +19,7 @@ export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id:
 }
 
 // Разрешаем менять только безопасные поля (не sessionData/userId/role/username)
-const PATCHABLE = new Set(['proxy', 'status'])
+const PATCHABLE = new Set(['proxy', 'status', 'sectionId'])
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params

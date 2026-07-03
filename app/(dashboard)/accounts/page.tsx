@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { Plus, Play, Pause, Trash2, X, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp, Info, Gauge } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
+import { type SectionItem } from '@/components/accounts/SectionBar'
+import { FolderTree } from 'lucide-react'
 import { Tilt } from '@/components/ui/Tilt'
 import { useStore, formatFollowers } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
@@ -22,6 +24,7 @@ interface RealAccount {
   followers?: number | null
   followersHistory?: { d: string; n: number }[] | null
   limits?: Record<string, unknown> | null
+  sectionId?: string | null
 }
 
 // Мини-спарклайн прироста подписчиков (инлайн SVG, без библиотек)
@@ -168,12 +171,33 @@ function DailyLoad({ limits, compact = false }: { limits: unknown; compact?: boo
 }
 
 // ── Детальное окно аккаунта: статистика + кампании ────────────────────────────
-function AccountDetailModal({ acc, ra, campaigns, onClose }: {
+function AccountDetailModal({ acc, ra, campaigns, sections = [], onChanged, onClose }: {
   acc: { username: string; followers?: number }
   ra?: RealAccount
   campaigns: any[]
+  sections?: SectionItem[]
+  onChanged?: () => void
   onClose: () => void
 }) {
+  const roots = sections.filter((s) => !s.parentId)
+  const curSub = sections.find((s) => s.id === ra?.sectionId && s.parentId)
+  const [secId, setSecId] = useState(curSub ? (curSub.parentId as string) : (ra?.sectionId ?? ''))
+  const [subId, setSubId] = useState(curSub ? curSub.id : '')
+  const [savingSec, setSavingSec] = useState(false)
+  const subs = sections.filter((s) => s.parentId === secId)
+
+  const saveSection = async (nextSec: string, nextSub: string) => {
+    if (!ra?.id) return
+    setSavingSec(true)
+    try {
+      await fetch(`/api/accounts/${ra.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sectionId: nextSub || nextSec || null }),
+      })
+      onChanged?.()
+    } finally { setSavingSec(false) }
+  }
+
   const status = ra?.status ?? 'ACTIVE'
   const st = status === 'ACTIVE'
     ? { pill: 'bg-ok/10 text-ok', dot: 'bg-ok', t: 'Активен' }
@@ -239,6 +263,29 @@ function AccountDetailModal({ acc, ra, campaigns, onClose }: {
             {tile(Zap, `${activeCount}/${campaigns.length}`, 'кампаний активно', '#663af1')}
             {tile(Send, totalFires.toLocaleString('ru'), 'срабатываний', '#34c759')}
           </div>
+
+          {/* Раздел / подраздел (папка) — редактирование, план §C2 */}
+          {ra?.id && roots.length > 0 && (
+            <div className="rounded-2xl bg-canvas px-4 py-3">
+              <div className="text-[12px] font-semibold text-subt mb-2 flex items-center gap-1.5">
+                <FolderTree className="w-3.5 h-3.5" /> Раздел {savingSec && <Loader2 className="w-3 h-3 animate-spin" />}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <select value={secId} disabled={savingSec}
+                  onChange={(e) => { const v = e.target.value; setSecId(v); setSubId(''); saveSection(v, '') }}
+                  className="field text-[13px] py-2.5">
+                  <option value="">— без раздела —</option>
+                  {roots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                <select value={subId} disabled={savingSec || !secId || subs.length === 0}
+                  onChange={(e) => { const v = e.target.value; setSubId(v); saveSection(secId, v) }}
+                  className="field text-[13px] py-2.5 disabled:opacity-40">
+                  <option value="">{secId && subs.length === 0 ? 'нет подразделов' : '— подраздел —'}</option>
+                  {subs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+            </div>
+          )}
 
           {/* Прирост подписчиков */}
           <div className="rounded-2xl bg-canvas px-4 py-3">
@@ -378,12 +425,14 @@ function Accounts() {
   const [detail, setDetail] = useState<{ acc: any; ra?: RealAccount } | null>(null)
 
   const [dbTriggers, setDbTriggers] = useState<any[]>([])
+  const [sections, setSections] = useState<SectionItem[]>([])
 
   const loadRealAccounts = useCallback(async () => {
     try {
-      const [accRes, trRes] = await Promise.all([fetch('/api/accounts'), fetch('/api/triggers')])
+      const [accRes, trRes, secRes] = await Promise.all([fetch('/api/accounts'), fetch('/api/triggers'), fetch('/api/sections')])
       if (accRes.ok) setReal(await accRes.json())
       if (trRes.ok) setDbTriggers(await trRes.json())
+      if (secRes.ok) setSections(await secRes.json())
     } catch {}
   }, [])
 
@@ -664,6 +713,8 @@ function Accounts() {
         <AccountDetailModal
           acc={detail.acc}
           ra={detail.ra}
+          sections={sections}
+          onChanged={loadRealAccounts}
           campaigns={dbTriggers.filter((t) => t.responder?.id === (detail.ra?.id ?? detail.acc.id))}
           onClose={() => setDetail(null)}
         />
