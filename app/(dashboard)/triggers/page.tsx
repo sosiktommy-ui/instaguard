@@ -751,20 +751,10 @@ function CreateForm({
         { k: 'actStories' as const, icon: Clapperboard, label: 'Сторис',   color: '#ff9f0a', tip: 'Просмотреть и (по желанию) пролайкать сторис подписчика' },
       ]
 
-  return (
-    <div className="card overflow-hidden">
-      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between px-5 py-4 hover:bg-black/[0.02] transition-colors">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-xl bg-brand/10 flex items-center justify-center">
-            {editId ? <Settings className="w-4 h-4 text-brand" /> : <Plus className="w-4 h-4 text-brand" />}
-          </div>
-          <span className="font-semibold text-[15px]">{editId ? 'Редактирование кампании' : 'Создать кампанию'}</span>
-        </div>
-        {open ? <ChevronUp className="w-4 h-4 text-subt" /> : <ChevronDown className="w-4 h-4 text-subt" />}
-      </button>
+  const closeEdit = () => { setEditId(null); setOpen(false); setD({ ...DEFAULT_DRAFT }); setSaveMsg(null) }
 
-      {open && (
-        <div className="border-t border-black/[0.05] p-5">
+  // Тело формы (шаги) — переиспользуется в двух оболочках: попап (редактирование) и карточка снизу (создание).
+  const body = (
           <div className={cn('grid gap-5', hideAccounts ? 'lg:grid-cols-2' : 'lg:grid-cols-3')}>
 
             {/* ── Шаг 1 — аккаунты (скрыт при редактировании и при создании для конкретного аккаунта) ── */}
@@ -1004,8 +994,37 @@ function CreateForm({
               </Button>
             </div>
           </div>
+  )
+
+  // Редактирование — во всплывающем попапе (чтобы не путать с формой снизу).
+  if (editId) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in" onClick={closeEdit}>
+        <div className="card w-full max-w-4xl max-h-[90vh] overflow-y-auto animate-scale-in" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-between px-5 py-4 border-b border-black/[0.05] sticky top-0 bg-card z-10">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-brand/10 flex items-center justify-center"><Settings className="w-4 h-4 text-brand" /></div>
+              <span className="font-semibold text-[15px]">Редактирование кампании</span>
+            </div>
+            <button onClick={closeEdit} className="text-subt hover:text-ink" aria-label="Закрыть"><X className="w-5 h-5" /></button>
+          </div>
+          <div className="p-5">{body}</div>
         </div>
-      )}
+      </div>
+    )
+  }
+
+  // Создание — раскрывающаяся карточка снизу.
+  return (
+    <div className="card overflow-hidden">
+      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between px-5 py-4 hover:bg-black/[0.02] transition-colors">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-xl bg-brand/10 flex items-center justify-center"><Plus className="w-4 h-4 text-brand" /></div>
+          <span className="font-semibold text-[15px]">Создать кампанию</span>
+        </div>
+        {open ? <ChevronUp className="w-4 h-4 text-subt" /> : <ChevronDown className="w-4 h-4 text-subt" />}
+      </button>
+      {open && <div className="border-t border-black/[0.05] p-5">{body}</div>}
     </div>
   )
 }
@@ -1127,7 +1146,7 @@ function describeSignal(trigger: DbTrigger): string | null {
 
 
 // Детали конкретного действия (раскрываются по клику)
-function ActionDetail({ trigger, k }: { trigger: DbTrigger; k: string }) {
+function ActionDetail({ trigger, k, onEdit }: { trigger: DbTrigger; k: string; onEdit?: () => void }) {
   const on = (a: any) => a && a.enabled !== false
   const acts = trigger.actions ?? []
   const isComment = trigger.triggerType === 'NEW_COMMENT'
@@ -1187,7 +1206,17 @@ function ActionDetail({ trigger, k }: { trigger: DbTrigger; k: string }) {
     body = <div className="flex items-center gap-1"><Clapperboard className="w-3 h-3 shrink-0 text-[#ff9f0a]" /> Просматривает сторис{st?.like ? ' и ставит лайк' : ''}</div>
   }
 
-  return <div className={box}>{summary}{body}</div>
+  return (
+    <div className={box}>
+      {summary}
+      {body}
+      {onEdit && (
+        <button onClick={onEdit} className="flex items-center gap-1 text-[11px] font-medium text-brand hover:underline pt-1">
+          <Settings className="w-3 h-3" /> Изменить это действие
+        </button>
+      )}
+    </div>
+  )
 }
 
 // ── Компактная карточка кампании (триггера) ─────────────────────────────────
@@ -1198,6 +1227,8 @@ function CampaignCard({ trigger, onToggle, onEdit, onDelete, index = 0 }: {
   const meta = META_BY_DB[trigger.triggerType]
   const rows = describeActions(trigger)
   const signal = describeSignal(trigger)
+  const firedTotal = trigger.fireCount ?? 0                       // сколько раз кампания сработала
+  const doneTotal = rows.reduce((s, r) => s + r.done, 0)         // сколько действий реально выполнено
 
   return (
     <div className={cn('card card-3d rise p-3.5 flex flex-col gap-2.5', !trigger.isActive && 'opacity-55')} style={{ animationDelay: `${index * 60}ms` }}>
@@ -1213,10 +1244,22 @@ function CampaignCard({ trigger, onToggle, onEdit, onDelete, index = 0 }: {
         </button>
       </div>
 
-      {/* Сработал N раз */}
-      <div className="flex items-baseline gap-1.5">
-        <span className="text-[20px] font-semibold tracking-tighter leading-none text-ok tabular-nums">{(trigger.fireCount ?? 0).toLocaleString('ru')}</span>
-        <span className="text-[11px] text-subt">срабатываний</span>
+      {/* Итог кампании: сработало (запусков) vs выполнено действий (успехов) */}
+      <div className="grid grid-cols-2 gap-2">
+        <div className="bg-canvas rounded-xl px-2.5 py-2">
+          <div className="flex items-center gap-1 text-[10px] text-subt">
+            Сработало
+            <Hint text="Сколько раз кампания сработала: событие подошло (новая подписка / комментарий / лайк / сторис) и бот начал выполнять действия." />
+          </div>
+          <div className="text-[19px] font-semibold tracking-tighter leading-none tabular-nums mt-1">{firedTotal.toLocaleString('ru')}</div>
+        </div>
+        <div className="bg-canvas rounded-xl px-2.5 py-2">
+          <div className="flex items-center gap-1 text-[10px] text-subt">
+            Выполнено действий
+            <Hint text="Сколько отдельных действий (DM, лайк, подписка, сторис, коммент) реально выполнено за все срабатывания. Меньше «Сработало» — часть действий не прошла (закрытая личка, лимит и т.п.)." />
+          </div>
+          <div className="text-[19px] font-semibold tracking-tighter leading-none text-ok tabular-nums mt-1">{doneTotal.toLocaleString('ru')}</div>
+        </div>
       </div>
 
       {/* Сигнал (на что реагирует) — для триггера-комментария, кликабелен */}
@@ -1279,7 +1322,7 @@ function CampaignCard({ trigger, onToggle, onEdit, onDelete, index = 0 }: {
                 </span>
                 <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', isOpen && 'rotate-180')} />
               </button>
-              {isOpen && <div className="pl-1 pt-1"><ActionDetail trigger={trigger} k={r.key} /></div>}
+              {isOpen && <div className="pl-1 pt-1"><ActionDetail trigger={trigger} k={r.key} onEdit={onEdit} /></div>}
             </div>
           )
         })}

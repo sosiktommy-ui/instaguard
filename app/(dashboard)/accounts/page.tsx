@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Play, Pause, Trash2, X, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp, Info, Gauge } from 'lucide-react'
+import { Plus, Play, Pause, Trash2, X, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp, Info } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
 import { type SectionItem } from '@/components/accounts/SectionBar'
@@ -12,7 +12,6 @@ import ClientOnly from '@/components/common/ClientOnly'
 import { cn } from '@/lib/utils'
 import { readStat, ACTION_KEYS } from '@/lib/stats'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
-import { DAILY_CAPS, loadCounters, type ActionKind } from '@/lib/limits'
 
 interface RealAccount {
   id: string
@@ -123,55 +122,6 @@ function campaignActionRows(c: any): ActRow[] {
   const story = acts.find((a: any) => a.type === 'VIEW_STORIES' && on(a))
   if (story) { const st = readStat(stats, 'story'); rows.push({ key: 'story', label: 'Сторис', color: '#ff9f0a', Icon: Clapperboard, fired: st.fired, done: st.done, settings: [story.like ? 'просмотр + лайк' : 'просмотр'] }) }
   return rows
-}
-
-// ── Универсальная статистика «Дневная загрузка» (защита от бана) ──────────────
-const LOAD_ORDER: ActionKind[] = ['dm', 'follow', 'like', 'comment', 'story']
-function loadColor(pct: number) { return pct >= 85 ? '#ff3b30' : pct >= 60 ? '#ff9f0a' : '#34c759' }
-function computeLoad(limits: unknown) {
-  const c = loadCounters(limits) as any   // сбрасывается, если счётчики не за сегодня
-  const per = LOAD_ORDER.map((k) => {
-    const used = Number(c[k]) || 0
-    const cap = DAILY_CAPS[k]
-    return { k, used, cap, pct: cap ? Math.min(100, Math.round((used / cap) * 100)) : 0 }
-  })
-  return { max: per.reduce((m, p) => Math.max(m, p.pct), 0), per }
-}
-// full — бары по каждому действию; compact — одна тонкая полоса «загрузки»
-function DailyLoad({ limits, compact = false }: { limits: unknown; compact?: boolean }) {
-  const { max, per } = computeLoad(limits)
-  const label = max >= 85 ? 'у лимита — риск' : max >= 60 ? 'высокая' : 'в норме'
-  if (compact) {
-    return (
-      <div className="flex items-center gap-1.5" title={`Дневная загрузка: ${max}% (${label})`}>
-        <Gauge className="w-3 h-3 shrink-0" style={{ color: loadColor(max) }} />
-        <div className="flex-1 h-1.5 rounded-full bg-black/[0.06] overflow-hidden">
-          <div className="h-full rounded-full" style={{ width: `${max}%`, background: loadColor(max) }} />
-        </div>
-        <span className="text-[10.5px] tabular-nums font-medium shrink-0" style={{ color: loadColor(max) }}>{max}%</span>
-      </div>
-    )
-  }
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-1.5 text-[12px] font-semibold text-subt"><Gauge className="w-3.5 h-3.5" /> Дневная загрузка</div>
-        <span className="text-[11px] font-medium" style={{ color: loadColor(max) }}>{label} · {max}%</span>
-      </div>
-      <div className="rounded-2xl bg-canvas p-3.5 space-y-2">
-        {per.map((p) => (
-          <div key={p.k} className="flex items-center gap-2.5">
-            <span className="text-[11px] text-subt w-[70px] shrink-0">{ACT_META[p.k].label}</span>
-            <div className="flex-1 h-2 rounded-full bg-black/[0.06] overflow-hidden">
-              <div className="h-full rounded-full transition-all" style={{ width: `${p.pct}%`, background: loadColor(p.pct) }} />
-            </div>
-            <span className="text-[11px] tabular-nums text-subt w-[52px] text-right shrink-0">{p.used}/{p.cap}</span>
-          </div>
-        ))}
-      </div>
-      <div className="text-[10.5px] text-subt mt-1.5">Сбрасывается каждый день. Чем ближе к лимиту — тем выше риск ограничений Instagram.</div>
-    </div>
-  )
 }
 
 // ── Детальное окно аккаунта: статистика + кампании ────────────────────────────
@@ -321,9 +271,6 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], onChanged, onCl
               </div>
             </div>
           )}
-
-          {/* Дневная загрузка (универсальная статистика — защита от бана) */}
-          <DailyLoad limits={ra?.limits ?? null} />
 
           {/* Рекламные кампании */}
           <div>
@@ -649,12 +596,6 @@ function Accounts() {
                     </div>
                     <Sparkline data={ra?.followersHistory ?? []} />
                   </div>
-                  {ra && (
-                    <div className="mt-2 rounded-2xl bg-canvas px-3 py-2 relative">
-                      <div className="text-[10.5px] text-subt uppercase tracking-wider mb-1">Дневная загрузка</div>
-                      <DailyLoad limits={ra.limits ?? null} compact />
-                    </div>
-                  )}
                   <div className="mt-2 text-[11px] text-brand/70 text-center opacity-0 group-hover:opacity-100 transition-opacity">Подробная статистика →</div>
                   </div>
 
