@@ -25,3 +25,5 @@ next-env.d.ts
 .DS_Store
 *.log
 tsconfig.tsbuildinfo
+
+public/Foto/IMG_3634.PNG
