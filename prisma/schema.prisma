@@ -24,10 +24,12 @@ model User {
   settings  UserSettings?
 }
 
-// Настройки пользователя (пока — только авто-привязка прокси; задел под этап 9)
+// Настройки пользователя
 model UserSettings {
-  userId           String @id
-  accountsPerProxy Int    @default(3)  // сколько аккаунтов авто-вешать на один пуловый прокси
+  userId           String  @id
+  accountsPerProxy Int     @default(3)      // сколько аккаунтов авто-вешать на один пуловый прокси
+  allowNoProxy     Boolean @default(false)  // разрешить работу аккаунтов без прокси (риск бана)
+  allowNoDrafts    Boolean @default(false)  // разрешить основным парсить самим, когда нет черновых
 
   user User @relation(fields: [userId], references: [id])
 }

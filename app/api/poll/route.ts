@@ -256,11 +256,19 @@ export async function POST(req: NextRequest) {
   // Основные, которым реально есть что делать (есть активные триггеры)
   const workingMains = accounts.filter((a) => a.sessionData && a.triggersAsResponder.length)
 
-  // ФОЛБЭК: черновых нет / все забанены → НЕ парсим основными (защита от бана) + тревога владельцу.
-  if (workingMains.length && draftPool.length === 0) {
+  // Настройки владельцев: разрешён ли парсинг основными без черновых (этап 9)
+  const ownerIds = [...new Set(accounts.map((a) => a.userId))]
+  const settingsRows = ownerIds.length
+    ? await prisma.userSettings.findMany({ where: { userId: { in: ownerIds } }, select: { userId: true, allowNoDrafts: true } })
+    : []
+  const allowNoDrafts = new Map(settingsRows.map((r) => [r.userId, r.allowNoDrafts]))
+
+  // ФОЛБЭК: черновых нет И никому не разрешено «без черновых» → НЕ парсим основными + тревога.
+  const anyCanProceed = draftPool.length > 0 || workingMains.some((a) => allowNoDrafts.get(a.userId))
+  if (workingMains.length && !anyCanProceed) {
     await notifyOwner(
       workingMains.map((a) => a.id),
-      '🚨 Нет доступных черновых аккаунтов (все забанены/на паузе). Парсинг основными остановлен — срочно добавьте черновой аккаунт, иначе основной под угрозой бана.'
+      '🚨 Нет доступных черновых аккаунтов (все забанены/на паузе). Парсинг основными остановлен — добавьте черновой аккаунт или включите «Работать без черновых» в Настройках.'
     )
     return NextResponse.json({
       ok: true, alert: 'no-drafts',
@@ -311,12 +319,21 @@ export async function POST(req: NextRequest) {
     // Разнесённые задержки: первое действие скоро, дальше с интервалом ~45–115с
     let cursor = (isManual ? 8 + Math.random() * 14 : 45 + Math.random() * 75) * 1000
     const nextGap = () => (45 + Math.random() * 70) * 1000
-    // Черновой-парсер для этого основного (round-robin). Пул тут гарантированно непуст.
+    // Черновой-парсер для этого основного (round-robin). Если черновых нет, но владелец
+    // разрешил «Работать без черновых» — основной парсит сам своей сессией.
     const draft = nextDraft()
-    if (!draft) { s.skipped = 'no-draft'; summary.push(s); continue }
-    usedDraftIds.add(draft.id)
-    const parseSession = draft.sessionData as object   // сессия чернового: только парсинг/добор инфы
-    const parseProxy = draft.proxy ?? undefined
+    let parseSession: object
+    let parseProxy: string | undefined
+    if (draft) {
+      usedDraftIds.add(draft.id)
+      parseSession = draft.sessionData as object   // сессия чернового: только парсинг/добор инфы
+      parseProxy = draft.proxy ?? undefined
+    } else if (allowNoDrafts.get(account.userId)) {
+      parseSession = session   // основной делает «грязную» работу сам (разрешено в Настройках)
+      parseProxy = proxy
+    } else {
+      s.skipped = 'no-draft'; summary.push(s); continue
+    }
 
     // ── Проверка подписки БЕЗ обращения к основному ──────────────────────────
     // Черновой скрейпит подписчиков основного (публично) → гейт = принадлежность множеству.
