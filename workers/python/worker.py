@@ -9,7 +9,7 @@ import instagrapi_client as ig
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
-app = FastAPI(title="ShadowGram Python Worker")
+app = FastAPI(title="ReactiveGram Python Worker")
 
 WORKER_SECRET = os.getenv("WORKER_SECRET", "")
 

@@ -43,7 +43,7 @@ export default function LoginPage() {
       <div className="w-full max-w-[400px] animate-scale-in">
         <div className="flex flex-col items-center mb-8">
           <AppLogo size={96} detailed className="mb-5 float-y drop-shadow-2xl" />
-          <h1 className="text-[28px] font-semibold tracking-tight">Вход в ShadowGram</h1>
+          <h1 className="text-[28px] font-semibold tracking-tight">Вход в ReactiveGram</h1>
           <p className="text-subt mt-1.5 text-[15px]">Automation Suite</p>
         </div>
 
