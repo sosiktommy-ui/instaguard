@@ -1197,12 +1197,14 @@ function AccountCard({ acc, campaigns, activeTypes, onOpen, index = 0 }: {
   acc: DbAccount; campaigns: DbTrigger[]; activeTypes: Set<string>; onOpen: () => void; index?: number
 }) {
   const active = campaigns.filter((t) => t.isActive).length
+  const paused = campaigns.length - active
   const fires = campaigns.reduce((s, t) => s + (t.fireCount ?? 0), 0)
   const ps = plateState(acc, active)
   const followers = acc.followers ?? acc.followerCount ?? 0
+  const activeMetas = TRIG_META.filter((m) => activeTypes.has(m.db))
   return (
     <button onClick={onOpen}
-      className={cn('card card-3d rise text-left p-4 flex flex-col gap-3 w-full border', PLATE_STYLE[ps])}
+      className={cn('group card card-3d rise text-left p-4 flex flex-col gap-3 w-full border', PLATE_STYLE[ps])}
       style={{ animationDelay: `${index * 70}ms` }}>
       <div className="flex items-center gap-2.5">
         <span className="w-9 h-9 rounded-2xl bg-gradient-to-br from-[#feda75] via-[#d62976] to-[#4f5bd5] flex items-center justify-center text-white font-semibold shrink-0">
@@ -1218,14 +1220,26 @@ function AccountCard({ acc, campaigns, activeTypes, onOpen, index = 0 }: {
         <ChevronRight className="w-5 h-5 text-subt shrink-0" />
       </div>
 
-      <div className="flex items-center gap-1.5">
-        {TRIG_META.map((m) => <TrigBadge key={m.key} meta={m} active={activeTypes.has(m.db)} size={24} tip={false} />)}
+      {/* Иконки триггеров: свёрнуто — только активные типы; при наведении раскрываются все */}
+      <div className="min-h-[22px] flex items-center">
+        <div className="flex items-center gap-1.5 group-hover:hidden">
+          {activeMetas.length
+            ? activeMetas.map((m) => <TrigBadge key={m.key} meta={m} active size={22} tip={false} />)
+            : <span className="text-[10.5px] text-subt">Нет активных триггеров</span>}
+        </div>
+        <div className="hidden group-hover:flex items-center gap-1.5">
+          {TRIG_META.map((m) => <TrigBadge key={m.key} meta={m} active={activeTypes.has(m.db)} size={22} tip={false} />)}
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-2">
         <div className="bg-canvas rounded-xl px-2 py-2 text-center">
-          <div className="text-[16px] font-semibold tracking-tighter leading-none">{campaigns.length}</div>
-          <div className="text-[10px] text-subt mt-1">Кампаний</div>
+          <div className="flex items-center justify-center gap-1 leading-none">
+            <span className="text-[16px] font-semibold tracking-tighter text-ok">{active}</span>
+            <span className="text-subt text-[12px]">/</span>
+            <span className="text-[16px] font-semibold tracking-tighter text-subt">{paused}</span>
+          </div>
+          <div className="text-[10px] text-subt mt-1">Активн. · пауза</div>
         </div>
         <div className="bg-canvas rounded-xl px-2 py-2 text-center">
           <div className="text-[16px] font-semibold tracking-tighter leading-none">{followers.toLocaleString('ru')}</div>
