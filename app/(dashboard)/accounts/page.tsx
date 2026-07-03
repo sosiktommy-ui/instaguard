@@ -10,6 +10,7 @@ import { Tilt } from '@/components/ui/Tilt'
 import { useStore, formatFollowers } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { cn } from '@/lib/utils'
+import { readStat, ACTION_KEYS } from '@/lib/stats'
 import { DAILY_CAPS, loadCounters, type ActionKind } from '@/lib/limits'
 
 interface RealAccount {
@@ -88,11 +89,11 @@ const ACT_META: Record<string, { label: string; color: string; Icon: any }> = {
 }
 
 // Действия кампании со счётчиком срабатываний по каждому (как на вкладке «Кампании»)
-interface ActRow { key: string; label: string; color: string; Icon: any; count: number; settings: string[] }
+interface ActRow { key: string; label: string; color: string; Icon: any; fired: number; done: number; settings: string[] }
 function campaignActionRows(c: any): ActRow[] {
   const on = (a: any) => a && a.enabled !== false
   const acts = c.actions ?? []
-  const stats = (c.stats ?? {}) as Record<string, number>
+  const stats = c.stats ?? {}
   const isComment = c.triggerType === 'NEW_COMMENT'
   const rows: ActRow[] = []
   const dm = acts.find((a: any) => a.type === 'SEND_MESSAGE' && on(a))
@@ -103,21 +104,23 @@ function campaignActionRows(c: any): ActRow[] {
     if (dm.image?.enabled) set.push('фото')
     const gate = dm.gate ?? (legacyGate ? { mode: 'followed_by' } : null)
     if (gate) set.push(gate.mode === 'mutual' ? 'взаимная подписка' : 'проверка подписки')
-    rows.push({ key: 'dm', label: 'DM', color: '#663af1', Icon: Send, count: stats.dm || 0, settings: set })
+    const st = readStat(stats, 'dm')
+    rows.push({ key: 'dm', label: 'DM', color: '#663af1', Icon: Send, fired: st.fired, done: st.done, settings: set })
   }
   const reply = acts.find((a: any) => a.type === 'REPLY_COMMENT' && on(a))
-  if (reply) rows.push({ key: 'comment', label: 'Коммент', color: '#34c759', Icon: MessageCircle, count: stats.comment || 0, settings: [`${(reply.replies ?? []).filter(Boolean).length} вар.`] })
+  if (reply) { const st = readStat(stats, 'comment'); rows.push({ key: 'comment', label: 'Коммент', color: '#34c759', Icon: MessageCircle, fired: st.fired, done: st.done, settings: [`${(reply.replies ?? []).filter(Boolean).length} вар.`] }) }
   const likeMedia = acts.some((a: any) => a.type === 'LIKE_MEDIA' && on(a))
   const likeComment = acts.some((a: any) => a.type === 'LIKE_COMMENT' && on(a))
   if (likeMedia || likeComment) {
     const set: string[] = []
     if (likeMedia) set.push(isComment ? 'посты автора' : 'последний пост')
     if (likeComment) set.push('коммент')
-    rows.push({ key: 'like', label: 'Лайк', color: '#ff2d92', Icon: Heart, count: stats.like || 0, settings: set })
+    const st = readStat(stats, 'like')
+    rows.push({ key: 'like', label: 'Лайк', color: '#ff2d92', Icon: Heart, fired: st.fired, done: st.done, settings: set })
   }
-  if (acts.some((a: any) => a.type === 'FOLLOW_BACK' && on(a))) rows.push({ key: 'follow', label: 'Подписка', color: '#34c759', Icon: UserCheck, count: stats.follow || 0, settings: [] })
+  if (acts.some((a: any) => a.type === 'FOLLOW_BACK' && on(a))) { const st = readStat(stats, 'follow'); rows.push({ key: 'follow', label: 'Подписка', color: '#34c759', Icon: UserCheck, fired: st.fired, done: st.done, settings: [] }) }
   const story = acts.find((a: any) => a.type === 'VIEW_STORIES' && on(a))
-  if (story) rows.push({ key: 'story', label: 'Сторис', color: '#ff9f0a', Icon: Clapperboard, count: stats.story || 0, settings: [story.like ? 'просмотр + лайк' : 'просмотр'] })
+  if (story) { const st = readStat(stats, 'story'); rows.push({ key: 'story', label: 'Сторис', color: '#ff9f0a', Icon: Clapperboard, fired: st.fired, done: st.done, settings: [story.like ? 'просмотр + лайк' : 'просмотр'] }) }
   return rows
 }
 
@@ -209,12 +212,16 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], onChanged, onCl
 
   const totalFires = campaigns.reduce((s, c) => s + (c.fireCount ?? 0), 0)
   const activeCount = campaigns.filter((c) => c.isActive).length
-  const agg: Record<string, number> = {}
+  const aggDone: Record<string, number> = {}
+  const aggFired: Record<string, number> = {}
   campaigns.forEach((c) => {
-    const s = (c.stats ?? {}) as Record<string, any>
-    for (const k in s) agg[k] = (agg[k] ?? 0) + (Number(s[k]) || 0)
+    for (const k of ACTION_KEYS) {
+      const st = readStat(c.stats ?? {}, k)
+      aggDone[k] = (aggDone[k] ?? 0) + st.done
+      aggFired[k] = (aggFired[k] ?? 0) + st.fired
+    }
   })
-  const aggEntries = Object.keys(ACT_META).filter((k) => (agg[k] ?? 0) > 0)
+  const aggEntries = Object.keys(ACT_META).filter((k) => (aggFired[k] ?? 0) > 0)
 
   const tile = (icon: any, val: string | number, label: string, color: string) => {
     const Icon = icon
@@ -297,14 +304,16 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], onChanged, onCl
           {aggEntries.length > 0 && (
             <div>
               <div className="flex items-center gap-1.5 text-[12px] font-semibold text-subt mb-2">
-                <TrendingUp className="w-3.5 h-3.5" /> Выполнено действий
+                <TrendingUp className="w-3.5 h-3.5" /> Действия <span className="font-normal text-subt/70">· выполнено / сработало</span>
               </div>
               <div className="flex flex-wrap gap-2">
                 {aggEntries.map((k) => {
                   const m = ACT_META[k]; const Icon = m.Icon
+                  const gap = (aggFired[k] ?? 0) - (aggDone[k] ?? 0)
                   return (
-                    <span key={k} className="flex items-center gap-1.5 text-[12.5px] font-medium px-3 py-1.5 rounded-xl" style={{ background: hexA(m.color, 0.1), color: m.color }}>
-                      <Icon className="w-3.5 h-3.5" /> {m.label} <span className="tabular-nums font-semibold">×{agg[k].toLocaleString('ru')}</span>
+                    <span key={k} className="flex items-center gap-1.5 text-[12.5px] font-medium px-3 py-1.5 rounded-xl" style={{ background: hexA(m.color, 0.1), color: m.color }} title="выполнено / сработало">
+                      <Icon className="w-3.5 h-3.5" /> {m.label} <span className="tabular-nums font-semibold">{(aggDone[k] ?? 0).toLocaleString('ru')}/{(aggFired[k] ?? 0).toLocaleString('ru')}</span>
+                      {gap > 0 && <span className="text-bad font-semibold">−{gap}</span>}
                     </span>
                   )
                 })}
@@ -355,14 +364,17 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], onChanged, onCl
                           {rows.length > 0 && (
                             <div className="flex flex-wrap gap-1.5 mt-2">
                               {rows.map((r) => {
-                                const active = r.count > 0
+                                const active = r.done > 0
+                                const gap = r.fired - r.done
                                 return (
                                   <span key={r.key} className={cn('flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg font-semibold', !active && 'opacity-80')}
+                                    title="выполнено / сработало"
                                     style={active
                                       ? { background: `linear-gradient(135deg, ${r.color}, ${darken(r.color)})`, color: '#fff', boxShadow: `0 2px 6px ${hexA(r.color, 0.35)}` }
                                       : { background: hexA(r.color, 0.1), color: r.color }}>
                                     <r.Icon className="w-3 h-3" strokeWidth={2.4} /> {r.label}
-                                    <span className="tabular-nums opacity-90">×{r.count.toLocaleString('ru')}</span>
+                                    <span className="tabular-nums opacity-90">{r.done.toLocaleString('ru')}/{r.fired.toLocaleString('ru')}</span>
+                                    {gap > 0 && <span className="opacity-90 font-normal">(−{gap})</span>}
                                     {r.settings.length > 0 && <span className="opacity-70 font-normal hidden sm:inline">· {r.settings.join(', ')}</span>}
                                   </span>
                                 )

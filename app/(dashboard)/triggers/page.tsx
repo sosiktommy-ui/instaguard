@@ -16,6 +16,7 @@ import ClientOnly from '@/components/common/ClientOnly'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
 import { SectionBar, type SectionItem } from '@/components/accounts/SectionBar'
 import { cn } from '@/lib/utils'
+import { readStat } from '@/lib/stats'
 
 // Маленькая «?»-подсказка
 function Hint({ text }: { text: string }) {
@@ -141,7 +142,7 @@ interface DbTrigger {
   triggerType: string
   isActive: boolean
   fireCount: number
-  stats?: Record<string, number> | null   // счётчики по действиям
+  stats?: Record<string, number | { fired: number; done: number }> | null   // счётчики по действиям (fired/done, легаси — число)
   actions: any[]
   conditions?: any
   createdAt: string
@@ -987,13 +988,14 @@ function TemplatesDrawer({ templates, loading, onClose, onApply, onDelete, onRel
 // ════════════════════════════════════════════════════════════════════════════
 // Действия триггера (по категориям + счётчики + настройки)
 // ════════════════════════════════════════════════════════════════════════════
-interface ActionRow { key: string; label: string; color: string; Icon: any; count: number; settings: string[] }
+interface ActionRow { key: string; label: string; color: string; Icon: any; fired: number; done: number; settings: string[] }
 
-// Раскладывает триггер на действия по категориям + перечисляет включённые настройки каждого
+// Раскладывает триггер на действия по категориям + перечисляет включённые настройки каждого.
+// fired = «сработало» (попыток), done = «выполнено» (успехов) — из stats (см. lib/stats).
 function describeActions(trigger: DbTrigger): ActionRow[] {
   const on = (a: any) => a && a.enabled !== false
   const acts = trigger.actions ?? []
-  const stats = (trigger.stats ?? {}) as Record<string, number>
+  const stats = trigger.stats ?? {}
   const isComment = trigger.triggerType === 'NEW_COMMENT'
   const rows: ActionRow[] = []
 
@@ -1005,13 +1007,15 @@ function describeActions(trigger: DbTrigger): ActionRow[] {
     if (dm.image?.enabled) set.push('фото')
     const gate = dm.gate ?? (legacyGate ? { mode: 'followed_by' } : null)
     if (gate) set.push(gate.mode === 'mutual' ? 'взаимная подписка' : 'проверка подписки')
-    rows.push({ key: 'dm', label: 'DM', color: '#663af1', Icon: Send, count: stats.dm || 0, settings: set })
+    const st = readStat(stats, 'dm')
+    rows.push({ key: 'dm', label: 'DM', color: '#663af1', Icon: Send, fired: st.fired, done: st.done, settings: set })
   }
 
   const reply = acts.find((a: any) => a.type === 'REPLY_COMMENT' && on(a))
   if (reply) {
     const n = (reply.replies ?? []).filter(Boolean).length
-    rows.push({ key: 'comment', label: 'Коммент', color: '#34c759', Icon: MessageCircle, count: stats.comment || 0, settings: [`${n} вар.`] })
+    const st = readStat(stats, 'comment')
+    rows.push({ key: 'comment', label: 'Коммент', color: '#34c759', Icon: MessageCircle, fired: st.fired, done: st.done, settings: [`${n} вар.`] })
   }
 
   const likeMedia = acts.some((a: any) => a.type === 'LIKE_MEDIA' && on(a))
@@ -1020,16 +1024,19 @@ function describeActions(trigger: DbTrigger): ActionRow[] {
     const set: string[] = []
     if (likeMedia) set.push(isComment ? 'посты автора' : 'последний пост')
     if (likeComment) set.push('коммент')
-    rows.push({ key: 'like', label: 'Лайк', color: '#ff2d92', Icon: Heart, count: stats.like || 0, settings: set })
+    const st = readStat(stats, 'like')
+    rows.push({ key: 'like', label: 'Лайк', color: '#ff2d92', Icon: Heart, fired: st.fired, done: st.done, settings: set })
   }
 
   if (acts.some((a: any) => a.type === 'FOLLOW_BACK' && on(a))) {
-    rows.push({ key: 'follow', label: 'Подписка', color: '#34c759', Icon: UserCheck, count: stats.follow || 0, settings: [] })
+    const st = readStat(stats, 'follow')
+    rows.push({ key: 'follow', label: 'Подписка', color: '#34c759', Icon: UserCheck, fired: st.fired, done: st.done, settings: [] })
   }
 
   const story = acts.find((a: any) => a.type === 'VIEW_STORIES' && on(a))
   if (story) {
-    rows.push({ key: 'story', label: 'Сторис', color: '#ff9f0a', Icon: Clapperboard, count: stats.story || 0, settings: [story.like ? 'просмотр + лайк' : 'просмотр'] })
+    const st = readStat(stats, 'story')
+    rows.push({ key: 'story', label: 'Сторис', color: '#ff9f0a', Icon: Clapperboard, fired: st.fired, done: st.done, settings: [story.like ? 'просмотр + лайк' : 'просмотр'] })
   }
   return rows
 }
@@ -1053,48 +1060,61 @@ function ActionDetail({ trigger, k }: { trigger: DbTrigger; k: string }) {
   const isComment = trigger.triggerType === 'NEW_COMMENT'
   const box = 'text-[11.5px] text-subt bg-canvas rounded-xl px-3 py-2.5 leading-relaxed space-y-1.5 animate-fade-in'
 
+  // Честная статистика действия: сработало (попыток) vs выполнено (успехов)
+  const stat = readStat(trigger.stats, k)
+  const gap = stat.fired - stat.done
+  const summary = (
+    <div className="flex items-center gap-2.5 flex-wrap text-[11px] pb-1.5 border-b border-black/[0.05]">
+      <span className="text-ink/70">Сработало <span className="font-semibold tabular-nums">{stat.fired.toLocaleString('ru')}</span></span>
+      <span className="text-ok">Выполнено <span className="font-semibold tabular-nums">{stat.done.toLocaleString('ru')}</span></span>
+      {gap > 0 && (
+        <Tooltip content="Триггер сработал, но действие не выполнилось: закрытая личка, нет поста для лайка, не прошла подписка или дневной лимит.">
+          <span className="text-bad cursor-help">не выполнено <span className="font-semibold tabular-nums">{gap.toLocaleString('ru')}</span></span>
+        </Tooltip>
+      )}
+    </div>
+  )
+
+  let body: React.ReactNode = null
   if (k === 'dm') {
     const dm = acts.find((a: any) => a.type === 'SEND_MESSAGE' && on(a))
     const legacyGate = acts.find((a: any) => a.type === 'COMMENT_GATE' && on(a))
     const gate = dm?.gate ?? (legacyGate ? { mode: 'followed_by', inviteText: legacyGate.text } : null)
-    return (
-      <div className={box}>
+    body = (
+      <>
         {dm?.templates?.[0] && <div className="text-ink/80">«{dm.templates[0]}»</div>}
         {dm?.link?.enabled && <div className="flex items-center gap-1 text-brand"><Link2 className="w-3 h-3 shrink-0" /> {dm.link.text || 'Ссылка'} <span className="text-subt truncate">→ {dm.link.url}</span></div>}
         {dm?.image?.enabled && dm.image.url && <img src={dm.image.url} alt="" className="w-full max-h-32 object-cover rounded-lg border border-line/60" />}
         {gate && <div className="flex items-center gap-1"><UserCheck className="w-3 h-3 shrink-0 text-brand" /> Проверка подписки{gate.mode === 'mutual' ? ' (взаимная)' : ''}{gate.inviteText ? ` · неподписанным: «${gate.inviteText}»` : ''}</div>}
         <div className="text-[10.5px] text-subt/70">Задержка отправки: {dm?.delayMin ?? 45}–{dm?.delayMax ?? 180}с</div>
-      </div>
+      </>
     )
-  }
-  if (k === 'comment') {
+  } else if (k === 'comment') {
     const reply = acts.find((a: any) => a.type === 'REPLY_COMMENT' && on(a))
     const variants: string[] = (reply?.replies ?? []).filter(Boolean)
-    return (
-      <div className={box}>
+    body = (
+      <>
         <div className="font-medium text-ink/70">Варианты ответа — {variants.length} (бот выбирает случайный):</div>
         <ol className="list-decimal ml-4 space-y-0.5">{variants.map((v, i) => <li key={i}>{v}</li>)}</ol>
-      </div>
+      </>
     )
-  }
-  if (k === 'like') {
+  } else if (k === 'like') {
     const lm = acts.some((a: any) => a.type === 'LIKE_MEDIA' && on(a))
     const lc = acts.some((a: any) => a.type === 'LIKE_COMMENT' && on(a))
-    return (
-      <div className={box}>
+    body = (
+      <>
         {lm && <div className="flex items-center gap-1"><Heart className="w-3 h-3 shrink-0 text-[#ff2d92]" /> Лайкает {isComment ? 'последние посты автора комментария' : 'последний пост подписчика'}</div>}
         {lc && <div className="flex items-center gap-1"><Heart className="w-3 h-3 shrink-0 text-[#ff2d92]" /> Лайкает сам комментарий</div>}
-      </div>
+      </>
     )
-  }
-  if (k === 'follow') {
-    return <div className={box}><div className="flex items-center gap-1"><UserCheck className="w-3 h-3 shrink-0 text-ok" /> Подписывается на {isComment ? 'автора комментария' : 'нового подписчика'}</div></div>
-  }
-  if (k === 'story') {
+  } else if (k === 'follow') {
+    body = <div className="flex items-center gap-1"><UserCheck className="w-3 h-3 shrink-0 text-ok" /> Подписывается на {isComment ? 'автора комментария' : 'нового подписчика'}</div>
+  } else if (k === 'story') {
     const st = acts.find((a: any) => a.type === 'VIEW_STORIES' && on(a))
-    return <div className={box}><div className="flex items-center gap-1"><Clapperboard className="w-3 h-3 shrink-0 text-[#ff9f0a]" /> Просматривает сторис{st?.like ? ' и ставит лайк' : ''}</div></div>
+    body = <div className="flex items-center gap-1"><Clapperboard className="w-3 h-3 shrink-0 text-[#ff9f0a]" /> Просматривает сторис{st?.like ? ' и ставит лайк' : ''}</div>
   }
-  return null
+
+  return <div className={box}>{summary}{body}</div>
 }
 
 // ── Компактная карточка кампании (триггера) ─────────────────────────────────
@@ -1152,9 +1172,15 @@ function CampaignCard({ trigger, onToggle, onDelete, index = 0 }: {
 
       {/* Действия — кликабельные строки, раскрывают детали. Мелкий текст: «нажми, чтобы раскрыть» */}
       <div className="flex flex-col gap-1.5">
-        <div className="text-[10px] text-subt/70 uppercase tracking-wider">Действия — нажми, чтобы раскрыть</div>
+        <div className="text-[10px] text-subt/70 uppercase tracking-wider flex items-center gap-1">
+          Действия
+          <Tooltip content="Первое число — выполнено (успешно), второе — сработало (сколько раз бот пытался). Если выполнено меньше — действие часто не проходит.">
+            <span className="normal-case tracking-normal text-subt/60 cursor-help">· выполнено / сработало</span>
+          </Tooltip>
+        </div>
         {rows.map((r) => {
-          const active = r.count > 0
+          const active = r.done > 0
+          const gap = r.fired - r.done
           const isOpen = openKey === r.key
           return (
             <div key={r.key}>
@@ -1168,8 +1194,11 @@ function CampaignCard({ trigger, onToggle, onDelete, index = 0 }: {
                     ? { background: `linear-gradient(135deg, ${r.color}, ${darken(r.color)})`, color: '#fff', boxShadow: `0 2px 8px ${hexA(r.color, 0.4)}` }
                     : { background: hexA(r.color, 0.1), color: r.color }}>
                   <r.Icon className="w-3.5 h-3.5" strokeWidth={2.4} /> {r.label}
-                  <span className={cn('tabular-nums', active ? 'opacity-90' : 'opacity-60')}>×{r.count}</span>
+                  <span className={cn('tabular-nums', active ? 'opacity-90' : 'opacity-60')}>{r.done}/{r.fired}</span>
                 </span>
+                {gap > 0 && (
+                  <span className="text-[10px] font-medium text-bad bg-bad/10 px-1.5 py-0.5 rounded-md shrink-0">−{gap} не вып.</span>
+                )}
                 <span className="flex-1 flex items-center gap-1 flex-wrap">
                   {r.settings.map((sset, i) => (
                     <span key={i} className="text-[10px] text-subt bg-black/[0.04] px-1.5 py-0.5 rounded-md">{sset}</span>

@@ -1,3 +1,5 @@
+import { mergeStatsMap } from './lib/stats'
+
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return
 
@@ -53,42 +55,42 @@ export async function register() {
         // Каждое действие независимо: ошибка лайка/подписки не блокирует DM.
         // Между действиями — случайная пауза (2-8 с) для естественности.
         const rd = (a: number, b: number) => new Promise<void>((r) => setTimeout(r, Math.round((a + Math.random() * (b - a)) * 1000)))
-        let success = false
         const errors: string[] = []
-        const inc: Record<string, number> = {}   // счётчики по действиям
-        let dmDone = false
+        const incFired: Record<string, number> = {}   // «сработало» (попытки)
+        const incDone: Record<string, number> = {}    // «выполнено» (успехи)
+        let dmFired = false, dmSucceeded = false
         if (text) {
-          try { await call('/send-dm', { sessionData, toUserId: followerPk, text, proxy }); success = true; dmDone = true }
+          dmFired = true
+          try { await call('/send-dm', { sessionData, toUserId: followerPk, text, proxy }); dmSucceeded = true }
           catch (e: any) {
             const m = (e.message || '').toLowerCase()
             // бан/челлендж/лимит → пробрасываем (обработчик failed остановит основной)
             if (/challenge|checkpoint|verify|feedback_required|spam|blocked|action.?block|429|login_required|please wait|few minutes/.test(m)) throw e
             // личка закрыта / не доставлено → мягкий контакт основным (follow+лайк, если бюджет выделен)
             errors.push(`директ закрыт: ${e.message}`)
-            if (fallbackFollow) { try { await call('/follow-user', { sessionData, userId: followerPk, proxy }); success = true; inc.follow = (inc.follow || 0) + 1 } catch {} }
-            if (fallbackLike)   { try { await rd(2, 5); await call('/like-latest-media', { sessionData, userId: followerPk, proxy }); success = true; inc.like = (inc.like || 0) + 1 } catch {} }
+            if (fallbackFollow) { incFired.follow = (incFired.follow || 0) + 1; try { await call('/follow-user', { sessionData, userId: followerPk, proxy }); incDone.follow = (incDone.follow || 0) + 1 } catch {} }
+            if (fallbackLike)   { incFired.like = (incFired.like || 0) + 1; try { await rd(2, 5); await call('/like-latest-media', { sessionData, userId: followerPk, proxy }); incDone.like = (incDone.like || 0) + 1 } catch {} }
           }
         }
-        if (image)    { await rd(2, 5); try { await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy }); success = true; dmDone = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
-        if (doFollow) { await rd(3, 8); try { await call('/follow-user', { sessionData, userId: followerPk, proxy }); success = true; inc.follow = (inc.follow || 0) + 1 } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
-        if (doLike)   { await rd(4, 10); try { await call('/like-latest-media', { sessionData, userId: followerPk, proxy }); success = true; inc.like = (inc.like || 0) + 1 } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
-        if (viewStories) { await rd(5, 12); try { await call('/user-stories', { sessionData, userId: followerPk, like: storyLike, proxy }); success = true; inc.story = (inc.story || 0) + 1 } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
-        if (dmDone) inc.dm = (inc.dm || 0) + 1
+        if (image) { dmFired = true; await rd(2, 5); try { await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy }); dmSucceeded = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
+        if (dmFired) { incFired.dm = (incFired.dm || 0) + 1; if (dmSucceeded) incDone.dm = (incDone.dm || 0) + 1 }
+        if (doFollow) { incFired.follow = (incFired.follow || 0) + 1; await rd(3, 8); try { await call('/follow-user', { sessionData, userId: followerPk, proxy }); incDone.follow = (incDone.follow || 0) + 1 } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
+        if (doLike)   { incFired.like = (incFired.like || 0) + 1; await rd(4, 10); try { await call('/like-latest-media', { sessionData, userId: followerPk, proxy }); incDone.like = (incDone.like || 0) + 1 } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
+        if (viewStories) { incFired.story = (incFired.story || 0) + 1; await rd(5, 12); try { await call('/user-stories', { sessionData, userId: followerPk, like: storyLike, proxy }); incDone.story = (incDone.story || 0) + 1 } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
 
-        if (success) {
+        const attempted = Object.keys(incFired).length > 0
+        const success = Object.keys(incDone).length > 0
+        if (attempted) {
           const cur = await prisma.triggerRule.findUnique({ where: { id: triggerId }, select: { stats: true } }).catch(() => null)
-          const st = ((cur?.stats ?? {}) as Record<string, number>)
-          for (const k in inc) st[k] = (Number(st[k]) || 0) + inc[k]
+          const level = success ? (errors.length ? 'WARN' : 'SUCCESS') : 'ERROR'
+          const message = success
+            ? `Сработал триггер «${triggerName}» → @${followerUsername}${errors.length ? ` (частично: ${errors.join('; ')})` : ''}`
+            : `Триггер «${triggerName}» → @${followerUsername}: действия не выполнены${errors.length ? ` (${errors.join('; ')})` : ''}`
           await Promise.all([
-            prisma.log.create({
-              data: { accountId, level: errors.length ? 'WARN' : 'SUCCESS', message: `Сработал триггер «${triggerName}» → @${followerUsername}${errors.length ? ` (частично: ${errors.join('; ')})` : ''}` },
-            }),
-            prisma.triggerRule.update({ where: { id: triggerId }, data: { fireCount: { increment: 1 }, stats: st } }),
+            prisma.log.create({ data: { accountId, level, message } }),
+            prisma.triggerRule.update({ where: { id: triggerId }, data: { fireCount: { increment: 1 }, stats: mergeStatsMap(cur?.stats ?? {}, incFired, incDone) as any } }),
           ])
-          console.log(`[dm-worker] ✓ trigger fired for @${followerUsername}`)
-        } else {
-          // Ни одно действие не выполнено — бросаем, чтобы BullMQ повторил попытку
-          throw new Error(errors.join('; ') || 'Ни одно действие не выполнено')
+          console.log(`[dm-worker] ${success ? '✓ выполнено' : '⚠ сработало без выполнения'} → @${followerUsername}`)
         }
       },
       {

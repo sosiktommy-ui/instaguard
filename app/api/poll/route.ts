@@ -8,6 +8,7 @@ import {
 import { Queue } from 'bullmq'
 import { loadCounters, consume, MAX_NEW_PER_POLL, type Counters } from '@/lib/limits'
 import { getCurrentUser } from '@/lib/auth'
+import { mergeStatsMap } from '@/lib/stats'
 
 // Сколько последних постов автора комментария лайкать (действие «Лайк» в триггере «Комментарий»)
 const COMMENT_LIKE_POSTS = 3
@@ -152,48 +153,52 @@ function matchPhrase(text: string, match: any): boolean {
   })
 }
 
-// Выполняет действия триггера-подписки для одного подписчика синхронно
-// Читает текущие счётчики действий триггера и возвращает их с прибавленным inc.
-// undefined (если inc пуст) → Prisma пропустит поле stats.
-async function mergeStats(triggerId: string, inc: Record<string, number>): Promise<any> {
-  if (!inc || Object.keys(inc).length === 0) return undefined
+// Читает текущие счётчики действий триггера и сливает прибавки «сработало» (fired)
+// и «выполнено» (done). undefined (пустой инкремент) → Prisma пропустит поле stats.
+async function mergeStats(triggerId: string, incFired: Record<string, number>, incDone: Record<string, number>): Promise<any> {
+  if (!Object.keys(incFired).length && !Object.keys(incDone).length) return undefined
   const cur = await prisma.triggerRule.findUnique({ where: { id: triggerId }, select: { stats: true } }).catch(() => null)
-  const st = ((cur?.stats ?? {}) as Record<string, number>)
-  for (const k in inc) st[k] = (Number(st[k]) || 0) + inc[k]
-  return st
+  return mergeStatsMap(cur?.stats ?? {}, incFired, incDone)
 }
 
+// Выполняет действия триггера-подписки для одной цели синхронно.
+// Считаем отдельно «сработало» (попытались) и «выполнено» (получилось).
 async function runFollowerActionsInline(job: any) {
   const session = job.sessionData as object          // основной делает ВСЕ действия
   const proxy = job.proxy ?? undefined
-  let success = false
   const errors: string[] = []
-  const inc: Record<string, number> = {}
-  let dmDone = false
+  const incFired: Record<string, number> = {}
+  const incDone: Record<string, number> = {}
+  let dmFired = false, dmSucceeded = false
 
   if (job.text) {
-    try { await sendDM(session, job.followerPk, job.text, proxy); success = true; dmDone = true }
+    dmFired = true
+    try { await sendDM(session, job.followerPk, job.text, proxy); dmSucceeded = true }
     catch (e: any) {
       if (statusFromError(e.message)) throw e  // бан/челлендж/лимит → пусть внешний catch остановит основной
       // Личка закрыта → мягкий контакт основным (follow+лайк, только если бюджет был выделен)
       errors.push(`директ закрыт: ${e.message}`)
-      if (job.fallbackFollow) { try { await followUser(session, job.followerPk, proxy); success = true; inc.follow = (inc.follow || 0) + 1 } catch {} }
-      if (job.fallbackLike)   { try { await randDelay(2, 5); await likeLatestMedia(session, job.followerPk, proxy); success = true; inc.like = (inc.like || 0) + 1 } catch {} }
+      if (job.fallbackFollow) { incFired.follow = (incFired.follow || 0) + 1; try { await followUser(session, job.followerPk, proxy); incDone.follow = (incDone.follow || 0) + 1 } catch {} }
+      if (job.fallbackLike)   { incFired.like = (incFired.like || 0) + 1; try { await randDelay(2, 5); await likeLatestMedia(session, job.followerPk, proxy); incDone.like = (incDone.like || 0) + 1 } catch {} }
     }
   }
-  if (job.image)  { await randDelay(2, 5); try { await sendDMPhoto(session, job.followerPk, job.image, proxy); success = true; dmDone = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
-  if (job.doFollow) { await randDelay(3, 7); try { await followUser(session, job.followerPk, proxy); success = true; inc.follow = (inc.follow || 0) + 1 } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
-  if (job.doLike)   { await randDelay(3, 8); try { await likeLatestMedia(session, job.followerPk, proxy); success = true; inc.like = (inc.like || 0) + 1 } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
-  if (job.viewStories) { await randDelay(4, 10); try { await viewStories(session, job.followerPk, job.storyLike, proxy); success = true; inc.story = (inc.story || 0) + 1 } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
-  if (dmDone) inc.dm = (inc.dm || 0) + 1
+  if (job.image) { dmFired = true; await randDelay(2, 5); try { await sendDMPhoto(session, job.followerPk, job.image, proxy); dmSucceeded = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
+  if (dmFired) { incFired.dm = (incFired.dm || 0) + 1; if (dmSucceeded) incDone.dm = (incDone.dm || 0) + 1 }
+  if (job.doFollow) { incFired.follow = (incFired.follow || 0) + 1; await randDelay(3, 7); try { await followUser(session, job.followerPk, proxy); incDone.follow = (incDone.follow || 0) + 1 } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
+  if (job.doLike)   { incFired.like = (incFired.like || 0) + 1; await randDelay(3, 8); try { await likeLatestMedia(session, job.followerPk, proxy); incDone.like = (incDone.like || 0) + 1 } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
+  if (job.viewStories) { incFired.story = (incFired.story || 0) + 1; await randDelay(4, 10); try { await viewStories(session, job.followerPk, job.storyLike, proxy); incDone.story = (incDone.story || 0) + 1 } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
 
-  if (success) {
+  const attempted = Object.keys(incFired).length > 0
+  const success = Object.keys(incDone).length > 0
+  if (attempted) {
+    const level = success ? (errors.length ? 'WARN' : 'SUCCESS') : 'ERROR'
+    const message = success
+      ? `Сработал триггер «${job.triggerName}» → @${job.followerUsername}${errors.length ? ` (частично: ${errors.join('; ')})` : ''}`
+      : `Триггер «${job.triggerName}» → @${job.followerUsername}: действия не выполнены${errors.length ? ` (${errors.join('; ')})` : ''}`
     await Promise.all([
-      prisma.log.create({ data: { accountId: job.accountId, level: errors.length ? 'WARN' : 'SUCCESS', message: `Сработал триггер «${job.triggerName}» → @${job.followerUsername}${errors.length ? ` (частично: ${errors.join('; ')})` : ''}` } }),
-      prisma.triggerRule.update({ where: { id: job.triggerId }, data: { fireCount: { increment: 1 }, stats: await mergeStats(job.triggerId, inc) } }),
+      prisma.log.create({ data: { accountId: job.accountId, level, message } }),
+      prisma.triggerRule.update({ where: { id: job.triggerId }, data: { fireCount: { increment: 1 }, stats: await mergeStats(job.triggerId, incFired, incDone) } }),
     ])
-  } else if (errors.length) {
-    await prisma.log.create({ data: { accountId: job.accountId, level: 'ERROR', message: `@${job.followerUsername}: ${errors.join('; ')}` } })
   }
 }
 
@@ -560,7 +565,8 @@ export async function POST(req: NextRequest) {
             let fired = false
             let gatedStop = false
             const errors: string[] = []
-            const inc: Record<string, number> = {}   // счётчики по действиям
+            const incFired: Record<string, number> = {}   // «сработало» (попытки)
+            const incDone: Record<string, number> = {}    // «выполнено» (успехи)
 
             // Проверка подписки: если автор НЕ проходит гейт — только коммент-приглашение, стоп
             if (gateCfg) {
@@ -569,7 +575,8 @@ export async function POST(req: NextRequest) {
               if (!ok) {
                 const gateText = gateCfg.inviteText.replace(/\{\{username\}\}/gi, c.username)
                 if (gateText && consume(counters, 'comment')) {
-                  try { await replyComment(session, c.media_id, gateText, c.pk, proxy); fired = true; inc.comment = (inc.comment || 0) + 1 }
+                  incFired.comment = (incFired.comment || 0) + 1
+                  try { await replyComment(session, c.media_id, gateText, c.pk, proxy); fired = true; incDone.comment = (incDone.comment || 0) + 1 }
                   catch (e: any) { errors.push(`коммент-приглашение: ${e.message}`) }
                 } else if (gateText) { s.limited = (s.limited ?? 0) + 1 }
                 gatedStop = true
@@ -581,27 +588,32 @@ export async function POST(req: NextRequest) {
               if (reply) {
                 const variants: string[] = (reply.replies ?? []).filter(Boolean)
                 if (variants.length && consume(counters, 'comment')) {
+                  incFired.comment = (incFired.comment || 0) + 1
                   const pick = variants[Math.floor(Math.random() * variants.length)].replace(/\{\{username\}\}/gi, c.username)
-                  try { await replyComment(session, c.media_id, pick, c.pk, proxy); fired = true; inc.comment = (inc.comment || 0) + 1 }
+                  try { await replyComment(session, c.media_id, pick, c.pk, proxy); fired = true; incDone.comment = (incDone.comment || 0) + 1 }
                   catch (e: any) { errors.push(`ответ: ${e.message}`) }
                 }
               }
               if (doLikePosts && consume(counters, 'like', COMMENT_LIKE_POSTS)) {
+                incFired.like = (incFired.like || 0) + 1
                 await randDelay(2, 5)
-                try { await likeUserMedias(session, c.user_pk, COMMENT_LIKE_POSTS, proxy); fired = true; inc.like = (inc.like || 0) + 1 }
+                try { await likeUserMedias(session, c.user_pk, COMMENT_LIKE_POSTS, proxy); fired = true; incDone.like = (incDone.like || 0) + 1 }
                 catch (e: any) { errors.push(`лайк постов: ${e.message}`) }
               }
               if (likeCmt && consume(counters, 'like')) {
+                incFired.like = (incFired.like || 0) + 1
                 await randDelay(1, 3)
-                try { await likeComment(session, c.pk, proxy); fired = true; inc.like = (inc.like || 0) + 1 }
+                try { await likeComment(session, c.pk, proxy); fired = true; incDone.like = (incDone.like || 0) + 1 }
                 catch (e: any) { errors.push(`лайк коммента: ${e.message}`) }
               }
               if (doFollow && consume(counters, 'follow')) {
+                incFired.follow = (incFired.follow || 0) + 1
                 await randDelay(2, 5)
-                try { await followUser(session, c.user_pk, proxy); fired = true; inc.follow = (inc.follow || 0) + 1 }
+                try { await followUser(session, c.user_pk, proxy); fired = true; incDone.follow = (incDone.follow || 0) + 1 }
                 catch (e: any) { errors.push(`подписка: ${e.message}`) }
               }
               if (dm?.templates?.[0] && consume(counters, 'dm')) {
+                incFired.dm = (incFired.dm || 0) + 1
                 await randDelay(3, 8)
                 let text = String(dm.templates[0]).replace(/\{\{username\}\}/gi, c.username)
                 if (dm.link?.enabled && dm.link.url) {
@@ -609,7 +621,7 @@ export async function POST(req: NextRequest) {
                   text += `\n\n${lt ? lt + ': ' : ''}${dm.link.url}`
                 }
                 try {
-                  await sendDM(session, c.user_pk, text.trim(), proxy); fired = true; inc.dm = (inc.dm || 0) + 1
+                  await sendDM(session, c.user_pk, text.trim(), proxy); fired = true; incDone.dm = (incDone.dm || 0) + 1
                   if (dm.image?.enabled && dm.image.url) {
                     await randDelay(2, 4)
                     await sendDMPhoto(session, c.user_pk, dm.image.url, proxy)
@@ -618,25 +630,29 @@ export async function POST(req: NextRequest) {
                   if (statusFromError(e.message)) throw e  // бан/челлендж/лимит → основной на паузу
                   // Личка закрыта / не доставлено → мягкий контакт основным (follow + лайк)
                   errors.push(`директ закрыт: ${e.message}`)
-                  if (consume(counters, 'follow')) { try { await followUser(session, c.user_pk, proxy); fired = true; inc.follow = (inc.follow || 0) + 1 } catch {} }
-                  if (consume(counters, 'like'))   { await randDelay(2, 5); try { await likeLatestMedia(session, c.user_pk, proxy); fired = true; inc.like = (inc.like || 0) + 1 } catch {} }
+                  if (consume(counters, 'follow')) { incFired.follow = (incFired.follow || 0) + 1; try { await followUser(session, c.user_pk, proxy); fired = true; incDone.follow = (incDone.follow || 0) + 1 } catch {} }
+                  if (consume(counters, 'like'))   { incFired.like = (incFired.like || 0) + 1; await randDelay(2, 5); try { await likeLatestMedia(session, c.user_pk, proxy); fired = true; incDone.like = (incDone.like || 0) + 1 } catch {} }
                 }
               }
               if (storiesAct && consume(counters, 'story')) {
+                incFired.story = (incFired.story || 0) + 1
                 await randDelay(3, 7)
-                try { await viewStories(session, c.user_pk, Boolean(storiesAct.like), proxy); fired = true; inc.story = (inc.story || 0) + 1 }
+                try { await viewStories(session, c.user_pk, Boolean(storiesAct.like), proxy); fired = true; incDone.story = (incDone.story || 0) + 1 }
                 catch (e: any) { errors.push(`сторис: ${e.message}`) }
               }
             }
 
-            if (fired) {
+            const attempted = Object.keys(incFired).length > 0
+            if (attempted) {
+              const level = fired ? (errors.length ? 'WARN' : 'SUCCESS') : 'ERROR'
+              const message = fired
+                ? `Коммент @${c.username} → «${trigger.name}»${gatedStop ? ' (не подписан → приглашение)' : ''}${errors.length ? ` (частично: ${errors.join('; ')})` : ''}`
+                : `Коммент @${c.username} → «${trigger.name}»: действия не выполнены${errors.length ? ` (${errors.join('; ')})` : ''}`
               await Promise.all([
-                prisma.log.create({ data: { accountId: account.id, level: errors.length ? 'WARN' : 'SUCCESS', message: `Коммент @${c.username} → «${trigger.name}»${gatedStop ? ' (не подписан → приглашение)' : ''}${errors.length ? ` (частично: ${errors.join('; ')})` : ''}` } }),
-                prisma.triggerRule.update({ where: { id: trigger.id }, data: { fireCount: { increment: 1 }, stats: await mergeStats(trigger.id, inc) } }),
+                prisma.log.create({ data: { accountId: account.id, level, message } }),
+                prisma.triggerRule.update({ where: { id: trigger.id }, data: { fireCount: { increment: 1 }, stats: await mergeStats(trigger.id, incFired, incDone) } }),
               ])
-              s.commentActions++
-            } else if (errors.length) {
-              await prisma.log.create({ data: { accountId: account.id, level: 'ERROR', message: `Коммент @${c.username}: ${errors.join('; ')}` } })
+              if (fired) s.commentActions++
             }
           }
         }
