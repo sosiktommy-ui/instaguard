@@ -15,8 +15,10 @@ const config: Config = {
         subt: '#6e6e73',
         line: '#d2d2d7',
         brand: {
-          DEFAULT: '#0071e3',
-          hover: '#0077ed',
+          DEFAULT: '#663af1',
+          hover: '#763bf4',
+          light: '#9b66ff',
+          alt: '#6a7df9',
         },
         ok: '#34c759',
         warn: '#ff9500',

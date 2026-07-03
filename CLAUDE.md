@@ -116,6 +116,19 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-03
+
+#### rebrand: ReactiveGram + фиолетовая палитра
+
+- **Название сервиса:** везде `ShadowGram` → **ReactiveGram** (`layout.tsx` title, `login`, `TopNav`, title Python-воркера).
+- **Логотип:** `components/common/AppLogo.tsx` теперь рендерит `/Foto/reactive.png` (файл в `public/Foto/reactive.png`). Favicon — `app/icon.png` (копия иконки); удалены старые генераторы `app/icon.svg` и `app/icon.tsx`.
+- **Палитра:** синий бренд заменён на фиолетовый. `--brand #0071e3 → #663af1`; вторичный `#5e5ce6 → #6a7df9`; светлый акцент/градиенты `#9b66ff`. Обновлены `tailwind.config.ts` (brand.DEFAULT/hover/light/alt), `globals.css` (selection, aurora, neon, halo) и hex-цвета в `triggers/accounts/drafts/stats`.
+
+#### redesign(B2): главный экран — создание кампании наверх, аккаунты под ним, «+ Аккаунт» → попап
+
+- `app/(dashboard)/triggers/page.tsx` (Level-1): порядок сверху вниз — **1) «Создание кампании» (CreateForm)** → **2) Аккаунты** → **3) кнопка «+ Аккаунт» под списком** → **4) сводка (StatCard)**. Раньше форма была внизу, а «+ Аккаунт» уводил на `/accounts`.
+- **Единый переиспользуемый попап аккаунта:** `AddModal` вынесен из `accounts/page.tsx` в `components/accounts/AddAccountModal.tsx` (основа §C1). Кнопка «+ Аккаунт» на главной и пустое состояние открывают модалку, не переходят на вкладку. `accounts/page.tsx` использует тот же компонент.
+
 ### 2026-07-02
 
 #### feat: аккаунт-центричная вкладка (пирамидка) + счётчики действий + реальные подписчики

@@ -203,8 +203,8 @@ function Drafts() {
 
       {accounts.length === 0 ? (
         <div className="card p-14 text-center flex flex-col items-center">
-          <div className="w-14 h-14 rounded-3xl bg-[#5e5ce6]/10 flex items-center justify-center mb-4">
-            <Zap className="w-7 h-7 text-[#5e5ce6]" />
+          <div className="w-14 h-14 rounded-3xl bg-[#6a7df9]/10 flex items-center justify-center mb-4">
+            <Zap className="w-7 h-7 text-[#6a7df9]" />
           </div>
           <h3 className="text-[18px] font-semibold tracking-tight">Нет черновых аккаунтов</h3>
           <p className="text-subt text-[13px] mt-1.5 max-w-xs">
@@ -216,7 +216,7 @@ function Drafts() {
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {accounts.map((a) => (
             <div key={a.id} className="card p-5 relative overflow-hidden">
-              <div className="absolute -top-10 -right-10 w-32 h-32 rounded-full bg-[#5e5ce6]/10 blur-2xl pointer-events-none" />
+              <div className="absolute -top-10 -right-10 w-32 h-32 rounded-full bg-[#6a7df9]/10 blur-2xl pointer-events-none" />
               <div className="flex items-start justify-between relative">
                 <div className="flex items-center gap-3">
                   <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-zinc-300 to-zinc-500 flex items-center justify-center text-white font-semibold text-lg shadow-md">
@@ -224,7 +224,7 @@ function Drafts() {
                   </div>
                   <div>
                     <div className="font-semibold text-[15px]">@{a.username}</div>
-                    <div className="text-[11px] text-[#5e5ce6] font-medium">черновой · парсер</div>
+                    <div className="text-[11px] text-[#6a7df9] font-medium">черновой · парсер</div>
                   </div>
                 </div>
                 <span className={cn('flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-1 rounded-full',

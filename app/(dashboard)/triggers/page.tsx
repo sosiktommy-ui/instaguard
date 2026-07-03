@@ -13,6 +13,7 @@ import { Tooltip } from '@/components/ui/Tooltip'
 import { Tilt } from '@/components/ui/Tilt'
 import { TriggerType } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
+import { AddAccountModal } from '@/components/accounts/AddAccountModal'
 import { cn } from '@/lib/utils'
 
 // Маленькая «?»-подсказка
@@ -26,7 +27,7 @@ function Hint({ text }: { text: string }) {
 
 // ── Метаданные типов триггеров (цвет, иконка, подпись) ────────────────────────
 const TRIG_META = [
-  { key: 'FOLLOW',      db: 'NEW_FOLLOWER',  label: 'Новая подписка',  desc: 'Основной триггер — ответ новым подписчикам', Icon: UserPlus,      color: '#0071e3', soon: false },
+  { key: 'FOLLOW',      db: 'NEW_FOLLOWER',  label: 'Новая подписка',  desc: 'Основной триггер — ответ новым подписчикам', Icon: UserPlus,      color: '#663af1', soon: false },
   { key: 'COMMENT',     db: 'NEW_COMMENT',   label: 'Комментарий',     desc: 'Реакция на комментарии под постами',         Icon: MessageCircle, color: '#34c759', soon: false },
   { key: 'LIKE',        db: 'NEW_LIKE',      label: 'Лайк',            desc: 'Реакция на лайки ваших постов',              Icon: Heart,         color: '#ff2d92', soon: false },
   { key: 'STORY_REPLY', db: 'STORY_MENTION', label: 'Ответ на сторис', desc: 'Ответы и упоминания в сторис',               Icon: Clapperboard,  color: '#ff9f0a', soon: false },
@@ -300,10 +301,10 @@ function TriggerCard({ trigger, onToggle, onDelete, index = 0 }: {
 
       <div className="flex items-center gap-1.5 flex-wrap">
         {sigSpecific && badge('#34c759', Filter, 'фразы', 'Реагирует только на конкретные фразы (Сигнал)')}
-        {hasGate && badge('#0071e3', UserCheck, 'проверка подписки', 'Если автор не подписан — бот пишет приглашение в комментарии и не шлёт DM')}
-        {msg && badge('#0071e3', Send, 'DM', 'Отправляет личное сообщение в директ')}
-        {msg?.link?.enabled && badge('#0071e3', Link2, 'ссылка', 'В конец сообщения добавляется кликабельная ссылка')}
-        {msg?.image?.enabled && badge('#0071e3', ImageIcon, 'фото', 'К сообщению прикрепляется картинка')}
+        {hasGate && badge('#663af1', UserCheck, 'проверка подписки', 'Если автор не подписан — бот пишет приглашение в комментарии и не шлёт DM')}
+        {msg && badge('#663af1', Send, 'DM', 'Отправляет личное сообщение в директ')}
+        {msg?.link?.enabled && badge('#663af1', Link2, 'ссылка', 'В конец сообщения добавляется кликабельная ссылка')}
+        {msg?.image?.enabled && badge('#663af1', ImageIcon, 'фото', 'К сообщению прикрепляется картинка')}
         {reply && badge('#34c759', MessageCircle, `коммент ×${(reply.replies ?? []).filter(Boolean).length}`, 'Отвечает в комментариях случайным из вариантов')}
         {hasLikeComment && badge('#ff2d92', Heart, 'лайк коммента', 'Лайкает сам комментарий')}
         {hasLike && badge('#ff2d92', Heart, isComment ? 'лайк постов' : 'лайк', isComment ? 'Заходит к автору и лайкает его посты' : 'Лайкает последний пост подписчика')}
@@ -353,7 +354,7 @@ function CheckRow({ on, onChange, icon: Icon, label, disabled }: {
 }
 
 // Сворачиваемая группа (аккордеон)
-function Group({ title, icon: Icon, accent = '#0071e3', defaultOpen = true, children }: {
+function Group({ title, icon: Icon, accent = '#663af1', defaultOpen = true, children }: {
   title: string; icon?: any; accent?: string; defaultOpen?: boolean; children: React.ReactNode
 }) {
   const [open, setOpen] = useState(defaultOpen)
@@ -497,7 +498,7 @@ function GateBlock({ d, set }: { d: Draft; set: <K extends keyof Draft>(k: K, v:
         <span className={cn('w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0', d.dmGate ? 'bg-brand border-brand' : 'border-line')}>
           {d.dmGate && <Check className="w-3 h-3 text-white" />}
         </span>
-        <UserCheck className="w-4 h-4" style={{ color: d.dmGate ? '#0071e3' : '#6e6e73' }} />
+        <UserCheck className="w-4 h-4" style={{ color: d.dmGate ? '#663af1' : '#6e6e73' }} />
         <span className="text-[13px] font-semibold">Проверять подписку перед DM</span>
       </button>
       {d.dmGate && (
@@ -666,13 +667,13 @@ function CreateForm({
   // Чипы действий зависят от события
   const chips = isComment
     ? [
-        { k: 'actDM' as const,          icon: Send,         label: 'Директ',   color: '#0071e3', tip: 'Личное сообщение автору комментария + ответ в комментариях (настраивается ниже)' },
+        { k: 'actDM' as const,          icon: Send,         label: 'Директ',   color: '#663af1', tip: 'Личное сообщение автору комментария + ответ в комментариях (настраивается ниже)' },
         { k: 'actLikeComment' as const, icon: Heart,        label: 'Лайк',     color: '#ff2d92', tip: 'Зайти на профиль автора комментария и пролайкать его последние посты' },
         { k: 'actFollow' as const,      icon: UserCheck,    label: 'Подписка', color: '#34c759', tip: 'Подписаться на автора комментария' },
         { k: 'actStories' as const,     icon: Clapperboard, label: 'Сторис',   color: '#ff9f0a', tip: 'Просмотреть и (по желанию) пролайкать сторис автора комментария' },
       ]
     : [
-        { k: 'actDM' as const,      icon: Send,         label: 'Директ',   color: '#0071e3', tip: 'Отправить личное сообщение новому подписчику' },
+        { k: 'actDM' as const,      icon: Send,         label: 'Директ',   color: '#663af1', tip: 'Отправить личное сообщение новому подписчику' },
         { k: 'actLike' as const,    icon: Heart,        label: 'Лайк',     color: '#ff2d92', tip: 'Лайкнуть последний пост нового подписчика' },
         { k: 'actFollow' as const,  icon: UserCheck,    label: 'Подписка', color: '#34c759', tip: 'Подписаться в ответ на нового подписчика' },
         { k: 'actStories' as const, icon: Clapperboard, label: 'Сторис',   color: '#ff9f0a', tip: 'Просмотреть и (по желанию) пролайкать сторис подписчика' },
@@ -833,7 +834,7 @@ function CreateForm({
                   {d.actDM && <GateBlock d={d} set={set} />}
 
                   {/* Группа «Сигнал» — на что реагировать (общая для всего триггера) */}
-                  <Group title="Сигнал — на что реагировать" icon={Filter} accent="#5e5ce6">
+                  <Group title="Сигнал — на что реагировать" icon={Filter} accent="#6a7df9">
                     <MatchConfig
                       mode={d.dmMatchMode} phrases={d.dmPhrases} exact={d.dmExact}
                       onMode={(m) => set('dmMatchMode', m)} onPhrases={(s) => set('dmPhrases', s)} onExact={(b) => set('dmExact', b)}
@@ -912,7 +913,7 @@ function CreateForm({
                 </button>
               )}
 
-              <Button className="w-full mt-1 sheen grad-anim bg-gradient-to-r from-brand via-[#5e5ce6] to-brand text-white hover:brightness-105" onClick={save} disabled={!canSave || saving}>
+              <Button className="w-full mt-1 sheen grad-anim bg-gradient-to-r from-brand via-[#9b66ff] to-brand text-white hover:brightness-105" onClick={save} disabled={!canSave || saving}>
                 <Zap className="w-3.5 h-3.5" fill="white" />
                 {saving ? 'Сохранение…'
                   : selected.length === 0 ? 'Выберите аккаунты'
@@ -1002,7 +1003,7 @@ function describeActions(trigger: DbTrigger): ActionRow[] {
     if (dm.image?.enabled) set.push('фото')
     const gate = dm.gate ?? (legacyGate ? { mode: 'followed_by' } : null)
     if (gate) set.push(gate.mode === 'mutual' ? 'взаимная подписка' : 'проверка подписки')
-    rows.push({ key: 'dm', label: 'DM', color: '#0071e3', Icon: Send, count: stats.dm || 0, settings: set })
+    rows.push({ key: 'dm', label: 'DM', color: '#663af1', Icon: Send, count: stats.dm || 0, settings: set })
   }
 
   const reply = acts.find((a: any) => a.type === 'REPLY_COMMENT' && on(a))
@@ -1133,7 +1134,7 @@ function CampaignCard({ trigger, onToggle, onDelete, index = 0 }: {
           <div>
             <button onClick={() => expandable && setOpenKey(isOpen ? null : 'signal')}
               className={cn('w-full flex items-center gap-1.5 text-[11px] text-subt px-2 py-1.5 rounded-xl text-left', expandable && (isOpen ? 'bg-black/[0.04]' : 'hover:bg-black/[0.03]'))}>
-              <Filter className="w-3.5 h-3.5 text-[#5e5ce6] shrink-0" />
+              <Filter className="w-3.5 h-3.5 text-[#6a7df9] shrink-0" />
               <span className="font-medium text-ink/70">Сигнал:</span> <span className="flex-1 truncate">{signal}</span>
               {expandable && <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', isOpen && 'rotate-180')} />}
             </button>
@@ -1248,6 +1249,7 @@ function TriggersScreen() {
   const [loadingTriggers, setLoadingTriggers] = useState(true)
   const [loadingTemplates, setLoadingTemplates] = useState(false)
   const [showTemplates, setShowTemplates] = useState(false)
+  const [showAdd, setShowAdd] = useState(false)
 
   const formApi = useRef<FormApi | null>(null)
   const [selId, setSelId] = useState<string | null>(null)
@@ -1393,16 +1395,21 @@ function TriggersScreen() {
     )
   }
 
-  // ── Уровень 1: аккаунты ────────────────────────────────────────────────────
+  // ── Уровень 1: главный экран ───────────────────────────────────────────────
+  // Порядок (план B2): 1) создание кампании — наверх; 2) аккаунты; 3) «+ Аккаунт» → попап; 4) сводка.
   return (
     <div className="space-y-5 pb-24">
-      <div className="grid grid-cols-3 gap-3">
-        <StatCard icon={Users} color="#0071e3" value={dbAccounts.length} label="Аккаунтов" tip="Всего подключённых Instagram-аккаунтов" delay={0} />
-        <StatCard icon={Zap} color="#5e5ce6" value={dbTriggers.length} label="Кампаний" tip="Всего рекламных кампаний по всем аккаунтам" delay={90} />
-        <StatCard icon={Send} color="#34c759" value={totalFires} label="Срабатываний" tip="Суммарно выполнено действий по всем кампаниям" delay={180} />
-      </div>
+      {/* 1. Создание кампании — главное действие */}
+      <CreateForm
+        dbAccounts={dbAccounts}
+        dbTriggers={dbTriggers}
+        loadingAccounts={loadingAccounts}
+        onCreated={() => { loadTriggers(); loadTemplates() }}
+        formRef={formApi}
+      />
 
-      <div className="flex items-center justify-between px-1">
+      {/* 2. Аккаунты */}
+      <div className="flex items-center justify-between px-1 pt-1">
         <div className="flex items-center gap-2">
           <Users className="w-4 h-4 text-brand" />
           <span className="font-semibold text-[15px]">Аккаунты</span>
@@ -1411,9 +1418,6 @@ function TriggersScreen() {
         </div>
         <div className="flex items-center gap-2">
           {templatesBtn}
-          <a href="/accounts" className="flex items-center gap-1.5 text-[12.5px] font-medium px-3 py-1.5 rounded-xl bg-black/[0.05] text-ink hover:bg-black/[0.08] transition-colors">
-            <Plus className="w-3.5 h-3.5" /> Аккаунт
-          </a>
           <button onClick={() => { loadAccounts(); loadTriggers() }} className="p-1.5 text-subt hover:text-ink transition-colors" title="Обновить">
             <RefreshCw className={cn('w-4 h-4', (loadingAccounts || loadingTriggers) && 'animate-spin')} />
           </button>
@@ -1426,7 +1430,10 @@ function TriggersScreen() {
         <div className="card py-14 flex flex-col items-center gap-3 text-center px-6">
           <div className="w-14 h-14 rounded-3xl bg-brand/8 flex items-center justify-center"><Users className="w-7 h-7 text-brand/50" /></div>
           <div className="font-semibold text-[16px] tracking-tight text-ink/70">Нет аккаунтов</div>
-          <div className="text-[13px] text-subt max-w-xs"><a href="/accounts" className="text-brand hover:underline">Добавьте аккаунт</a>, чтобы запускать по нему кампании</div>
+          <div className="text-[13px] text-subt max-w-xs">Подключите первый аккаунт, чтобы запускать по нему кампании</div>
+          <Button size="sm" className="mt-1" onClick={() => setShowAdd(true)}>
+            <Plus className="w-3.5 h-3.5" /> Аккаунт
+          </Button>
         </div>
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -1439,20 +1446,30 @@ function TriggersScreen() {
         </div>
       )}
 
-      {/* Общая форма создания триггера — можно выбрать несколько аккаунтов сразу;
-          созданные триггеры подтягиваются к своим аккаунтам (кампании) */}
-      <CreateForm
-        dbAccounts={dbAccounts}
-        dbTriggers={dbTriggers}
-        loadingAccounts={loadingAccounts}
-        onCreated={() => { loadTriggers(); loadTemplates() }}
-        formRef={formApi}
-      />
+      {/* 3. «+ Аккаунт» — под списком, открывает попап (не уводит на вкладку) */}
+      {!loadingAccounts && dbAccounts.length > 0 && (
+        <button onClick={() => setShowAdd(true)}
+          className="w-full flex items-center justify-center gap-2 py-3.5 rounded-3xl border border-dashed border-line text-subt hover:text-brand hover:border-brand/50 hover:bg-brand/[0.03] transition-colors text-[13.5px] font-medium">
+          <Plus className="w-4 h-4" /> Аккаунт
+        </button>
+      )}
+
+      {/* 4. Сводка */}
+      <div className="grid grid-cols-3 gap-3 pt-1">
+        <StatCard icon={Users} color="#663af1" value={dbAccounts.length} label="Аккаунтов" tip="Всего подключённых Instagram-аккаунтов" delay={0} />
+        <StatCard icon={Zap} color="#6a7df9" value={dbTriggers.length} label="Кампаний" tip="Всего рекламных кампаний по всем аккаунтам" delay={90} />
+        <StatCard icon={Send} color="#34c759" value={totalFires} label="Срабатываний" tip="Суммарно выполнено действий по всем кампаниям" delay={180} />
+      </div>
 
       {showTemplates && (
         <TemplatesDrawer templates={templates} loading={loadingTemplates}
           onClose={() => setShowTemplates(false)} onApply={(d) => formApi.current?.load(d)}
           onDelete={deleteTemplate} onReload={loadTemplates} />
+      )}
+
+      {showAdd && (
+        <AddAccountModal onClose={() => setShowAdd(false)}
+          onAdded={() => { loadAccounts(); loadTriggers() }} />
       )}
     </div>
   )

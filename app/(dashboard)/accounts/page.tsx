@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Play, Pause, Trash2, X, AtSign, Lock, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp, Info, Gauge } from 'lucide-react'
+import { Plus, Play, Pause, Trash2, X, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp, Info, Gauge } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { AddAccountModal } from '@/components/accounts/AddAccountModal'
 import { Tilt } from '@/components/ui/Tilt'
 import { useStore, formatFollowers } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
@@ -57,153 +58,10 @@ function Sparkline({ data, w = 116, h = 30 }: { data: { d: string; n: number }[]
   )
 }
 
-type AuthMode = 'password' | 'cookies'
-
-function AddModal({ onClose, onAdded }: { onClose: () => void; onAdded: (username: string) => void }) {
-  const addAccount = useStore((s) => s.addAccount)
-  const [mode, setMode]         = useState<AuthMode>('password')
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [cookies, setCookies]   = useState('')
-  const [proxy, setProxy]       = useState('')
-  const [loading, setLoading]   = useState(false)
-  const [error, setError]       = useState('')
-  const [step, setStep]         = useState<'form' | 'auth'>('form')
-
-  const canSubmit = mode === 'password'
-    ? username.trim() && password.trim()
-    : cookies.trim()
-
-  const save = async () => {
-    setLoading(true)
-    setError('')
-    setStep('auth')
-
-    try {
-      const body = mode === 'cookies'
-        ? { authMethod: 'cookies', cookies: cookies.trim(), proxy: proxy.trim() || undefined }
-        : { username: username.replace(/^@/, '').trim(), password, proxy: proxy.trim() || undefined }
-
-      const res = await fetch('/api/accounts/auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json()
-      if (!res.ok) { setError(data.error ?? 'Ошибка авторизации'); setStep('form'); return }
-
-      addAccount({ id: data.account.id, username: data.account.username, followers: 0 })
-      onAdded(data.account.username)
-      onClose()
-    } catch {
-      setError('Ошибка сети — проверьте подключение')
-      setStep('form')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in" onClick={onClose}>
-      <div className="card w-full max-w-md p-7 animate-scale-in" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="text-[22px] font-semibold tracking-tight">Подключить аккаунт</h2>
-          <button onClick={onClose} className="text-subt hover:text-ink"><X size={22} /></button>
-        </div>
-
-        {/* Mode toggle */}
-        <div className="flex gap-1 p-1 bg-canvas rounded-2xl mb-5">
-          {(['password', 'cookies'] as AuthMode[]).map((m) => (
-            <button key={m} onClick={() => { setMode(m); setError('') }}
-              className={cn('flex-1 py-2 text-[13px] font-medium rounded-xl transition-all',
-                mode === m ? 'bg-card shadow text-ink' : 'text-subt hover:text-ink')}>
-              {m === 'password' ? '🔑 Логин / Пароль' : '🍪 Куки'}
-            </button>
-          ))}
-        </div>
-
-        {step === 'auth' ? (
-          <div className="py-12 flex flex-col items-center gap-4 text-center">
-            <Loader2 className="w-10 h-10 text-brand animate-spin" />
-            <div className="font-medium">Авторизация в Instagram…</div>
-            <div className="text-[13px] text-subt">Это может занять 15–30 секунд</div>
-          </div>
-        ) : mode === 'password' ? (
-          <div className="space-y-4">
-            <div>
-              <label className="text-[13px] text-subt font-medium block mb-2">Instagram логин</label>
-              <div className="relative">
-                <AtSign className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
-                <input value={username} onChange={(e) => setUsername(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && save()}
-                  autoFocus className="field pl-10" placeholder="username" />
-              </div>
-            </div>
-            <div>
-              <label className="text-[13px] text-subt font-medium block mb-2">Пароль</label>
-              <div className="relative">
-                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
-                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && save()}
-                  className="field pl-10" placeholder="••••••••" />
-              </div>
-            </div>
-            <div>
-              <label className="text-[13px] text-subt font-medium block mb-2">Прокси (необязательно)</label>
-              <div className="relative">
-                <Globe className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
-                <input value={proxy} onChange={(e) => setProxy(e.target.value)}
-                  className="field pl-10 font-mono text-[13px]" placeholder="user:pass@host:port" />
-              </div>
-              <p className="text-[11px] text-subt mt-1.5 pl-1">Форматы: <code className="font-mono">user:pass@host:port</code> или <code className="font-mono">http://user:pass@host:port</code></p>
-            </div>
-            {error && <p className="text-bad text-[13px] text-center">{error}</p>}
-            <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed">
-              Пароль не хранится — только сессия Instagram.
-            </div>
-            <div className="flex gap-3">
-              <Button variant="secondary" className="flex-1" onClick={onClose}>Отмена</Button>
-              <Button className="flex-1" onClick={save} disabled={!canSubmit}>Авторизоваться</Button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div>
-              <label className="text-[13px] text-subt font-medium block mb-2">Куки Instagram</label>
-              <textarea
-                value={cookies} onChange={(e) => setCookies(e.target.value)}
-                autoFocus rows={6}
-                className="field font-mono text-[11px] resize-none leading-relaxed"
-                placeholder={'{"sessionid": "abc123...", "ds_user_id": "12345", "csrftoken": "..."}\n\nИли просто sessionid:\nabc123...'}
-              />
-            </div>
-            <div>
-              <label className="text-[13px] text-subt font-medium block mb-2">Прокси (необязательно)</label>
-              <div className="relative">
-                <Globe className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
-                <input value={proxy} onChange={(e) => setProxy(e.target.value)}
-                  className="field pl-10 font-mono text-[13px]" placeholder="user:pass@host:port" />
-              </div>
-              <p className="text-[11px] text-subt mt-1.5 pl-1">Форматы: <code className="font-mono">user:pass@host:port</code> или <code className="font-mono">http://user:pass@host:port</code></p>
-            </div>
-            {error && <p className="text-bad text-[13px] text-center">{error}</p>}
-            <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed">
-              Экспортируйте куки с instagram.com через расширение браузера (например, Cookie-Editor). Нужен как минимум <code className="font-mono bg-black/5 px-1 rounded">sessionid</code>.
-            </div>
-            <div className="flex gap-3">
-              <Button variant="secondary" className="flex-1" onClick={onClose}>Отмена</Button>
-              <Button className="flex-1" onClick={save} disabled={!canSubmit}>Подключить</Button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
 
 // ── Метаданные типов кампаний (совпадают с вкладкой «Триггеры») ───────────────
 const TYPE_META: Record<string, { label: string; color: string; Icon: any }> = {
-  NEW_FOLLOWER:  { label: 'Новая подписка',  color: '#0071e3', Icon: UserPlus },
+  NEW_FOLLOWER:  { label: 'Новая подписка',  color: '#663af1', Icon: UserPlus },
   NEW_COMMENT:   { label: 'Комментарий',     color: '#34c759', Icon: MessageCircle },
   NEW_LIKE:      { label: 'Лайк',            color: '#ff2d92', Icon: Heart },
   STORY_MENTION: { label: 'Ответ на сторис', color: '#ff9f0a', Icon: Clapperboard },
@@ -219,7 +77,7 @@ function darken(hex: string, f = 0.78) {
 }
 // Разбивка суммарных действий аккаунта (из stats кампаний)
 const ACT_META: Record<string, { label: string; color: string; Icon: any }> = {
-  dm:      { label: 'DM',       color: '#0071e3', Icon: Send },
+  dm:      { label: 'DM',       color: '#663af1', Icon: Send },
   like:    { label: 'Лайки',    color: '#ff2d92', Icon: Heart },
   follow:  { label: 'Подписки', color: '#34c759', Icon: UserCheck },
   story:   { label: 'Сторис',   color: '#ff9f0a', Icon: Clapperboard },
@@ -242,7 +100,7 @@ function campaignActionRows(c: any): ActRow[] {
     if (dm.image?.enabled) set.push('фото')
     const gate = dm.gate ?? (legacyGate ? { mode: 'followed_by' } : null)
     if (gate) set.push(gate.mode === 'mutual' ? 'взаимная подписка' : 'проверка подписки')
-    rows.push({ key: 'dm', label: 'DM', color: '#0071e3', Icon: Send, count: stats.dm || 0, settings: set })
+    rows.push({ key: 'dm', label: 'DM', color: '#663af1', Icon: Send, count: stats.dm || 0, settings: set })
   }
   const reply = acts.find((a: any) => a.type === 'REPLY_COMMENT' && on(a))
   if (reply) rows.push({ key: 'comment', label: 'Коммент', color: '#34c759', Icon: MessageCircle, count: stats.comment || 0, settings: [`${(reply.replies ?? []).filter(Boolean).length} вар.`] })
@@ -378,7 +236,7 @@ function AccountDetailModal({ acc, ra, campaigns, onClose }: {
           {/* Ключевые цифры */}
           <div className="grid grid-cols-3 gap-3">
             {tile(Users, formatFollowers(ra?.followers ?? ra?.followerCount ?? acc.followers ?? 0), 'подписчики', '#8e8e93')}
-            {tile(Zap, `${activeCount}/${campaigns.length}`, 'кампаний активно', '#0071e3')}
+            {tile(Zap, `${activeCount}/${campaigns.length}`, 'кампаний активно', '#663af1')}
             {tile(Send, totalFires.toLocaleString('ru'), 'срабатываний', '#34c759')}
           </div>
 
@@ -800,7 +658,7 @@ function Accounts() {
         </div>
       )}
 
-      {showAdd && <AddModal onClose={() => setShowAdd(false)} onAdded={() => loadRealAccounts()} />}
+      {showAdd && <AddAccountModal onClose={() => setShowAdd(false)} onAdded={() => loadRealAccounts()} />}
 
       {detail && (
         <AccountDetailModal

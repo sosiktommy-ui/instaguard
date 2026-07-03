@@ -31,7 +31,7 @@ export default function VantaBackground() {
           right: '-14%',
           width: '50vw',
           height: '50vw',
-          background: 'radial-gradient(circle, rgba(94,92,230,0.07), transparent 70%)',
+          background: 'radial-gradient(circle, rgba(102,58,241,0.07), transparent 70%)',
           filter: 'blur(100px)',
         }}
       />

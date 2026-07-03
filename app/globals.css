@@ -8,7 +8,9 @@
   --ink: #1d1d1f;
   --subt: #6e6e73;
   --line: #d2d2d7;
-  --brand: #0071e3;
+  --brand: #663af1;
+  --brand-light: #9b66ff;
+  --brand-alt: #6a7df9;
 }
 
 @layer base {
@@ -24,7 +26,7 @@
     letter-spacing: -0.01em;
   }
   ::selection {
-    background: rgba(0, 113, 227, 0.18);
+    background: rgba(102, 58, 241, 0.18);
   }
 }
 
@@ -91,12 +93,12 @@
 .aurora::before {
   top: -10%;
   left: -5%;
-  background: radial-gradient(circle at center, rgba(0, 113, 227, 0.35), transparent 70%);
+  background: radial-gradient(circle at center, rgba(102, 58, 241, 0.32), transparent 70%);
 }
 .aurora::after {
   bottom: -15%;
   right: -10%;
-  background: radial-gradient(circle at center, rgba(94, 92, 230, 0.3), transparent 70%);
+  background: radial-gradient(circle at center, rgba(155, 102, 255, 0.3), transparent 70%);
   animation-delay: -11s;
 }
 
@@ -212,7 +214,7 @@
   inset: -1.5px;
   border-radius: inherit;
   padding: 1.5px;
-  background: conic-gradient(from 0deg, #0071e3, #5e5ce6, #ff5fa2, #22d3ee, #0071e3);
+  background: conic-gradient(from 0deg, #663af1, #9b66ff, #6a7df9, #22d3ee, #663af1);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
@@ -225,8 +227,8 @@
 
 /* Пульсирующее кольцо-свечение */
 @keyframes halo {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(94,92,230,0.0); }
-  50%      { box-shadow: 0 0 22px 2px rgba(94,92,230,0.35); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(102,58,241,0.0); }
+  50%      { box-shadow: 0 0 22px 2px rgba(102,58,241,0.35); }
 }
 .halo { animation: halo 3s ease-in-out infinite; }
 

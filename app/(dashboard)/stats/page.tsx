@@ -59,7 +59,7 @@ function Stats() {
 
   const cards = [
     { icon: Users, label: 'Аккаунтов', value: accounts.length, tone: 'bg-brand/10 text-brand' },
-    { icon: Eye, label: 'Подписчиков в базе', value: formatFollowers(totalReach), tone: 'bg-[#5e5ce6]/10 text-[#5e5ce6]' },
+    { icon: Eye, label: 'Подписчиков в базе', value: formatFollowers(totalReach), tone: 'bg-[#6a7df9]/10 text-[#6a7df9]' },
     { icon: Zap, label: 'Активных триггеров', value: activeTriggers, tone: 'bg-warn/10 text-warn' },
     { icon: Send, label: 'Срабатываний', value: totalRuns.toLocaleString('ru'), tone: 'bg-ok/10 text-ok' },
     { icon: AlertCircle, label: 'Ошибок', value: totalErrors, tone: 'bg-bad/10 text-bad' },
