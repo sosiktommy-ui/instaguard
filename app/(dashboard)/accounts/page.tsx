@@ -11,6 +11,7 @@ import { useStore, formatFollowers } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { cn } from '@/lib/utils'
 import { readStat, ACTION_KEYS } from '@/lib/stats'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { DAILY_CAPS, loadCounters, type ActionKind } from '@/lib/limits'
 
 interface RealAccount {
@@ -435,6 +436,7 @@ function Accounts() {
   const [editProxyId, setEditProxyId]   = useState<string | null>(null)
   const [editProxyVal, setEditProxyVal] = useState('')
   const [detail, setDetail] = useState<{ acc: any; ra?: RealAccount } | null>(null)
+  const [pendingDel, setPendingDel] = useState<{ raId?: string; accId: string; username: string } | null>(null)
 
   const [dbTriggers, setDbTriggers] = useState<any[]>([])
   const [sections, setSections] = useState<SectionItem[]>([])
@@ -708,7 +710,7 @@ function Accounts() {
                       </Button>
                     )}
                     <Button variant="danger" size="icon" disabled={isLoading}
-                      onClick={() => ra ? handleDelete(ra.id, acc.username) : removeAccount(acc.id)}>
+                      onClick={() => setPendingDel({ raId: ra?.id, accId: acc.id, username: acc.username })}>
                       {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                     </Button>
                   </div>
@@ -718,6 +720,20 @@ function Accounts() {
           })}
         </div>
       )}
+
+      <ConfirmDialog
+        open={Boolean(pendingDel)}
+        title="Удалить аккаунт?"
+        message={`@${pendingDel?.username ?? ''} будет отключён и удалён вместе со своими кампаниями и статистикой.`}
+        confirmLabel="Удалить"
+        onConfirm={() => {
+          const p = pendingDel
+          setPendingDel(null)
+          if (p?.raId) handleDelete(p.raId, p.username)
+          else if (p) removeAccount(p.accId)
+        }}
+        onCancel={() => setPendingDel(null)}
+      />
 
       {showAdd && <AddAccountModal onClose={() => setShowAdd(false)} onAdded={() => loadRealAccounts()} />}
 

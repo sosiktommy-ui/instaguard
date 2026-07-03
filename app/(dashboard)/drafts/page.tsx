@@ -5,6 +5,7 @@ import { Plus, Trash2, Globe, Zap, ShieldCheck, Loader2, AlertTriangle, Link2, X
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import ClientOnly from '@/components/common/ClientOnly'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 
 interface HelperAccount {
   id: string
@@ -150,6 +151,7 @@ function Drafts() {
   const [editProxyId, setEditProxyId] = useState<string | null>(null)
   const [editProxyVal, setEditProxyVal] = useState('')
   const [msg, setMsg] = useState('')
+  const [pendingDel, setPendingDel] = useState<{ id: string; username: string } | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -271,7 +273,7 @@ function Drafts() {
                   <RotateCcw className="w-3.5 h-3.5" /> Сбросить
                 </button>
                 <div className="flex-1" />
-                <Button variant="danger" size="icon" onClick={() => handleDelete(a.id)}>
+                <Button variant="danger" size="icon" onClick={() => setPendingDel({ id: a.id, username: a.username })}>
                   <Trash2 className="w-4 h-4" />
                 </Button>
               </div>
@@ -279,6 +281,15 @@ function Drafts() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={Boolean(pendingDel)}
+        title="Удалить черновой аккаунт?"
+        message={`@${pendingDel?.username ?? ''} будет удалён. Парсинг для основных аккаунтов может остановиться, если это последний черновой.`}
+        confirmLabel="Удалить"
+        onConfirm={() => { const p = pendingDel; setPendingDel(null); if (p) handleDelete(p.id) }}
+        onCancel={() => setPendingDel(null)}
+      />
 
       {showAdd && <AddHelperModal onClose={() => setShowAdd(false)} onAdded={load} />}
     </div>

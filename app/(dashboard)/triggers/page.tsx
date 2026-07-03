@@ -6,7 +6,7 @@ import {
   Heart, MessageCircle, UserPlus, Clapperboard, RefreshCw,
   Plus, ChevronDown, ChevronUp, ToggleLeft, ToggleRight,
   Link2, Bookmark, FileText, X, UserCheck, Eye,
-  Image as ImageIcon, Sparkles, HelpCircle, ChevronRight, ArrowLeft,
+  Image as ImageIcon, Sparkles, HelpCircle, ChevronRight, ArrowLeft, Settings, Power, PauseCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/Tooltip'
@@ -17,6 +17,7 @@ import { AddAccountModal } from '@/components/accounts/AddAccountModal'
 import { SectionBar, type SectionItem } from '@/components/accounts/SectionBar'
 import { cn } from '@/lib/utils'
 import { readStat } from '@/lib/stats'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 
 // Маленькая «?»-подсказка
 function Hint({ text }: { text: string }) {
@@ -246,6 +247,53 @@ function buildActions(d: Draft): any[] {
   if (d.actFollow) actions.push({ type: 'FOLLOW_BACK', enabled: true })
   if (d.actStories && (d.storyView || d.storyLike)) actions.push(stories())
   return actions
+}
+
+// Обратное преобразование: сохранённая кампания → черновик для формы (редактирование).
+function draftFromTrigger(t: DbTrigger): Draft {
+  const on = (a: any) => a && a.enabled !== false
+  const acts = (t.actions ?? []) as any[]
+  const type = (META_BY_DB[t.triggerType]?.key ?? 'FOLLOW') as TriggerType
+  const isComment = type === 'COMMENT'
+  const msg = acts.find((a) => a.type === 'SEND_MESSAGE' && on(a))
+  const reply = acts.find((a) => a.type === 'REPLY_COMMENT' && on(a))
+  const legacyGate = acts.find((a) => a.type === 'COMMENT_GATE' && on(a))
+  const likeMedia = acts.some((a) => a.type === 'LIKE_MEDIA' && on(a))
+  const follow = acts.some((a) => a.type === 'FOLLOW_BACK' && on(a))
+  const story = acts.find((a) => a.type === 'VIEW_STORIES' && on(a))
+  const gate = msg?.gate ?? (legacyGate ? { mode: 'followed_by', inviteText: legacyGate.text ?? '' } : null)
+  const cond = (t.conditions ?? {}) as any
+  const replies: string[] = (reply?.replies ?? []).filter(Boolean)
+  while (replies.length < 5) replies.push('')
+
+  return {
+    ...DEFAULT_DRAFT,
+    type,
+    actDM: Boolean(msg),
+    actLike: !isComment && likeMedia,
+    actLikeComment: isComment && likeMedia,
+    actFollow: follow,
+    actCommentReply: Boolean(reply),
+    actStories: Boolean(story),
+    storyView: story ? true : DEFAULT_DRAFT.storyView,
+    storyLike: Boolean(story?.like),
+    dmGate: Boolean(gate),
+    dmGateMode: (gate?.mode === 'mutual' ? 'mutual' : 'followed_by'),
+    cmtGateText: gate?.inviteText || DEFAULT_DRAFT.cmtGateText,
+    name: t.name,
+    message: msg?.templates?.[0] ?? DEFAULT_DRAFT.message,
+    customOn: Boolean(msg?.link?.enabled),
+    linkOn: Boolean(msg?.link?.enabled),
+    linkText: msg?.link?.text ?? '',
+    linkUrl: msg?.link?.url ?? '',
+    image: msg?.image?.enabled ? (msg.image.url ?? '') : '',
+    delayMin: msg?.delayMin ?? DEFAULT_DRAFT.delayMin,
+    delayMax: msg?.delayMax ?? DEFAULT_DRAFT.delayMax,
+    dmMatchMode: cond.mode === 'specific' ? 'specific' : 'all',
+    dmPhrases: Array.isArray(cond.phrases) ? cond.phrases.join('\n') : '',
+    dmExact: Boolean(cond.exact),
+    commentReplies: replies,
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -544,19 +592,21 @@ function StoriesBlock({ d, set }: { d: Draft; set: <K extends keyof Draft>(k: K,
 // ════════════════════════════════════════════════════════════════════════════
 // Форма создания триггера
 // ════════════════════════════════════════════════════════════════════════════
-interface FormApi { open: () => void; load: (d: Draft) => void; openFor: (id: string) => void }
+interface FormApi { open: () => void; load: (d: Draft) => void; openFor: (id: string) => void; edit: (t: DbTrigger) => void }
 
 function CreateForm({
-  dbAccounts, dbTriggers, loadingAccounts, onCreated, formRef, lockedAccountId,
+  dbAccounts, dbTriggers, loadingAccounts, onCreated, onEdited, formRef, lockedAccountId,
 }: {
   dbAccounts: DbAccount[]
   dbTriggers: DbTrigger[]
   loadingAccounts: boolean
   onCreated: () => void
+  onEdited?: (id: string) => void
   formRef: React.MutableRefObject<FormApi | null>
   lockedAccountId?: string
 }) {
   const [open, setOpen] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
   const [selected, setSelected] = useState<string[]>(lockedAccountId ? [lockedAccountId] : [])
   const [search, setSearch] = useState('')
   const [d, setD] = useState<Draft>(DEFAULT_DRAFT)
@@ -583,11 +633,14 @@ function CreateForm({
 
   useEffect(() => {
     formRef.current = {
-      open: () => setOpen(true),
-      load: (draft: Draft) => { setD({ ...DEFAULT_DRAFT, ...draft }); setOpen(true); setSaveMsg(null) },
-      openFor: (id: string) => { setSelected([id]); setD({ ...DEFAULT_DRAFT }); setOpen(true); setSaveMsg(null) },
+      open: () => { setEditId(null); setOpen(true) },
+      load: (draft: Draft) => { setEditId(null); setD({ ...DEFAULT_DRAFT, ...draft }); setOpen(true); setSaveMsg(null) },
+      openFor: (id: string) => { setEditId(null); setSelected([id]); setD({ ...DEFAULT_DRAFT }); setOpen(true); setSaveMsg(null) },
+      edit: (t: DbTrigger) => { setEditId(t.id); setSelected([t.responder.id]); setD(draftFromTrigger(t)); setOpen(true); setSaveMsg(null) },
     }
   }, [formRef])
+
+  const hideAccounts = Boolean(lockedAccountId) || Boolean(editId)
 
   const filtered = useMemo(
     () => dbAccounts.filter((a) => a.username.toLowerCase().includes(search.toLowerCase())),
@@ -627,16 +680,32 @@ function CreateForm({
     setSaving(true); setSaveMsg(null)
     try {
       const conditions = isComment ? buildSignal(d) : []
-      const res = await fetch('/api/triggers', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: d.name.trim(), accountIds: selected, type: d.type, conditions, actions: buildActions(d) }),
-      })
-      const data = await res.json()
-      if (res.ok) {
-        setSaveMsg({ text: `Создано кампаний: ${data.count}`, ok: true })
-        setSelected([]); setD({ ...DEFAULT_DRAFT }); onCreated()
+      if (editId) {
+        // Редактирование: кампания уже остановлена (гейт §D1). isActive:false — на всякий случай.
+        const res = await fetch(`/api/triggers/${editId}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: d.name.trim(), conditions, actions: buildActions(d), isActive: false }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (res.ok) {
+          const savedId = editId
+          setOpen(false); setEditId(null)
+          onEdited?.(savedId)   // родитель спросит: включить/пауза + обнулить/сохранить статистику
+        } else {
+          setSaveMsg({ text: data.error ?? 'Ошибка', ok: false })
+        }
       } else {
-        setSaveMsg({ text: data.error ?? 'Ошибка', ok: false })
+        const res = await fetch('/api/triggers', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: d.name.trim(), accountIds: selected, type: d.type, conditions, actions: buildActions(d) }),
+        })
+        const data = await res.json()
+        if (res.ok) {
+          setSaveMsg({ text: `Создано кампаний: ${data.count}`, ok: true })
+          setSelected([]); setD({ ...DEFAULT_DRAFT }); onCreated()
+        } else {
+          setSaveMsg({ text: data.error ?? 'Ошибка', ok: false })
+        }
       }
     } catch {
       setSaveMsg({ text: 'Ошибка сети', ok: false })
@@ -686,18 +755,20 @@ function CreateForm({
     <div className="card overflow-hidden">
       <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between px-5 py-4 hover:bg-black/[0.02] transition-colors">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-xl bg-brand/10 flex items-center justify-center"><Plus className="w-4 h-4 text-brand" /></div>
-          <span className="font-semibold text-[15px]">Создать кампанию</span>
+          <div className="w-8 h-8 rounded-xl bg-brand/10 flex items-center justify-center">
+            {editId ? <Settings className="w-4 h-4 text-brand" /> : <Plus className="w-4 h-4 text-brand" />}
+          </div>
+          <span className="font-semibold text-[15px]">{editId ? 'Редактирование кампании' : 'Создать кампанию'}</span>
         </div>
         {open ? <ChevronUp className="w-4 h-4 text-subt" /> : <ChevronDown className="w-4 h-4 text-subt" />}
       </button>
 
       {open && (
         <div className="border-t border-black/[0.05] p-5">
-          <div className={cn('grid gap-5', lockedAccountId ? 'lg:grid-cols-2' : 'lg:grid-cols-3')}>
+          <div className={cn('grid gap-5', hideAccounts ? 'lg:grid-cols-2' : 'lg:grid-cols-3')}>
 
-            {/* ── Шаг 1 — аккаунты (скрыт, если создаём для конкретного аккаунта) ── */}
-            {!lockedAccountId && (
+            {/* ── Шаг 1 — аккаунты (скрыт при редактировании и при создании для конкретного аккаунта) ── */}
+            {!hideAccounts && (
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <span className="text-[13px] font-semibold flex items-center gap-1.5">
@@ -762,8 +833,9 @@ function CreateForm({
                 <span className="w-5 h-5 rounded-full bg-brand text-white text-[11px] font-bold flex items-center justify-center">2</span>
                 Событие
               </span>
+              {editId && <div className="text-[11px] text-subt -mt-1">Тип события нельзя менять при редактировании — создайте новую кампанию.</div>}
               <div className="space-y-2">
-                {TRIG_META.map((m) => {
+                {TRIG_META.filter((m) => !editId || d.type === m.key).map((m) => {
                   const on = d.type === m.key
                   if (m.soon) {
                     return (
@@ -780,7 +852,7 @@ function CreateForm({
                   }
                   return (
                     <Tilt key={m.key} max={6}>
-                      <button onClick={() => set('type', m.key)}
+                      <button onClick={() => { if (editId) return; set('type', m.key) }}
                         className={cn('w-full flex items-center gap-3 p-3 rounded-2xl border text-left transition-all duration-200 neon',
                           on ? 'bg-white neon-on' : 'border-line/60 hover:border-line hover:bg-white/60')}
                         style={on ? { borderColor: m.color, boxShadow: `0 10px 26px ${hexA(m.color, 0.28)}, 0 0 0 3px ${hexA(m.color, 0.14)}, inset 0 1px 0 rgba(255,255,255,0.7)` } : undefined}>
@@ -927,6 +999,7 @@ function CreateForm({
                   : !gateOk ? 'Заполните текст для неподписанных'
                   : !crOk ? 'Нужно минимум 5 вариантов ответа'
                   : !storiesOk ? 'Отметьте действие со сторис'
+                  : editId ? 'Сохранить изменения'
                   : `Создать для ${selected.length} акк.`}
               </Button>
             </div>
@@ -1118,8 +1191,8 @@ function ActionDetail({ trigger, k }: { trigger: DbTrigger; k: string }) {
 }
 
 // ── Компактная карточка кампании (триггера) ─────────────────────────────────
-function CampaignCard({ trigger, onToggle, onDelete, index = 0 }: {
-  trigger: DbTrigger; onToggle: () => void; onDelete: () => void; index?: number
+function CampaignCard({ trigger, onToggle, onEdit, onDelete, index = 0 }: {
+  trigger: DbTrigger; onToggle: () => void; onEdit: () => void; onDelete: () => void; index?: number
 }) {
   const [openKey, setOpenKey] = useState<string | null>(null)
   const meta = META_BY_DB[trigger.triggerType]
@@ -1212,7 +1285,10 @@ function CampaignCard({ trigger, onToggle, onDelete, index = 0 }: {
         })}
       </div>
 
-      <div className="flex items-center justify-end pt-1 border-t border-black/[0.04]">
+      <div className="flex items-center justify-between pt-1 border-t border-black/[0.04]">
+        <button onClick={onEdit} className="flex items-center gap-1 text-[11.5px] text-subt hover:text-brand transition-colors">
+          <Settings className="w-3.5 h-3.5" /> Изменить
+        </button>
         <button onClick={onDelete} className="flex items-center gap-1 text-[11.5px] text-subt hover:text-bad transition-colors">
           <Trash2 className="w-3.5 h-3.5" /> Удалить
         </button>
@@ -1283,6 +1359,43 @@ function AccountCard({ acc, campaigns, activeTypes, onOpen, index = 0 }: {
   )
 }
 
+// Диалог после сохранения правок (§D1): 1) включить/пауза → 2) обнулить/сохранить статистику.
+// Закрытие окна (по фону) → статистика сохраняется по умолчанию.
+function PostEditDialog({ name, onFinish }: { name: string; onFinish: (opts: { resume: boolean; reset: boolean }) => void }) {
+  const [step, setStep] = useState<'power' | 'stats'>('power')
+  const [resume, setResume] = useState(false)   // при закрытии на шаге power — остаётся на паузе (безопасно)
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"
+      onClick={() => onFinish({ resume, reset: false })}>
+      <div className="card w-full max-w-sm p-6 animate-scale-in" onClick={(e) => e.stopPropagation()}>
+        {step === 'power' ? (
+          <>
+            <div className="font-semibold text-[16px] tracking-tight">Изменения сохранены</div>
+            <div className="text-[13px] text-subt mt-1 leading-relaxed">Кампания «{name}» сейчас на паузе. Включить её обратно или оставить на паузе?</div>
+            <div className="flex gap-2 mt-5">
+              <Button variant="secondary" className="flex-1" onClick={() => { setResume(false); setStep('stats') }}>
+                <PauseCircle className="w-4 h-4" /> На паузе
+              </Button>
+              <Button className="flex-1" onClick={() => { setResume(true); setStep('stats') }}>
+                <Power className="w-4 h-4" /> Включить
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="font-semibold text-[16px] tracking-tight">Статистика кампании</div>
+            <div className="text-[13px] text-subt mt-1 leading-relaxed">Обнулить статистику (срабатывания и счётчики действий) или продолжить накопленную? Закроете окно — статистика сохранится.</div>
+            <div className="flex gap-2 mt-5">
+              <Button variant="secondary" className="flex-1" onClick={() => onFinish({ resume, reset: false })}>Продолжить</Button>
+              <Button variant="danger" className="flex-1" onClick={() => onFinish({ resume, reset: true })}>Обнулить</Button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Главный экран
 // ════════════════════════════════════════════════════════════════════════════
@@ -1329,6 +1442,11 @@ function TriggersScreen() {
     if (p) setSelId(p)
   }, [])
 
+  // Редактирование кампании (§D1) и подтверждения удаления (§D2)
+  const [stopGate, setStopGate] = useState<DbTrigger | null>(null)   // «останови перед правкой»
+  const [postEdit, setPostEdit] = useState<DbTrigger | null>(null)   // «включить/пауза + обнулить/сохранить»
+  const [confirmDel, setConfirmDel] = useState<DbTrigger | null>(null)
+
   const deleteTrigger = async (id: string) => {
     await fetch(`/api/triggers/${id}`, { method: 'DELETE' })
     setDbTriggers((prev) => prev.filter((t) => t.id !== id))
@@ -1339,6 +1457,43 @@ function TriggersScreen() {
       body: JSON.stringify({ isActive: !isActive }),
     })
     setDbTriggers((prev) => prev.map((t) => t.id === id ? { ...t, isActive: !isActive } : t))
+  }
+
+  // Клик по «шестерёнке»: запущенную кампанию сначала просим остановить.
+  const requestEditCampaign = (t: DbTrigger) => {
+    if (t.isActive) setStopGate(t)
+    else formApi.current?.edit(t)
+  }
+  const confirmStopAndEdit = async () => {
+    const t = stopGate
+    if (!t) return
+    await fetch(`/api/triggers/${t.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isActive: false }),
+    }).catch(() => null)
+    setDbTriggers((prev) => prev.map((x) => x.id === t.id ? { ...x, isActive: false } : x))
+    setStopGate(null)
+    formApi.current?.edit({ ...t, isActive: false })
+  }
+  // После сохранения правок — родитель спрашивает включить/пауза + обнулить/сохранить статистику.
+  const onCampaignEdited = (id: string) => {
+    setPostEdit(dbTriggers.find((t) => t.id === id) ?? null)
+    loadTriggers()
+  }
+  const finishPostEdit = async ({ resume, reset }: { resume: boolean; reset: boolean }) => {
+    const t = postEdit
+    setPostEdit(null)
+    if (!t) return
+    await fetch(`/api/triggers/${t.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isActive: resume, ...(reset ? { resetStats: true } : {}) }),
+    }).catch(() => null)
+    loadTriggers()
+  }
+  const doDeleteCampaign = async () => {
+    const t = confirmDel
+    setConfirmDel(null)
+    if (t) await deleteTrigger(t.id)
   }
   const deleteTemplate = async (id: string) => {
     await fetch(`/api/templates/${id}`, { method: 'DELETE' })
@@ -1434,7 +1589,9 @@ function TriggersScreen() {
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {selCampaigns.map((t, i) => (
               <CampaignCard key={t.id} trigger={t} index={i}
-                onToggle={() => toggleTrigger(t.id, t.isActive)} onDelete={() => deleteTrigger(t.id)} />
+                onToggle={() => toggleTrigger(t.id, t.isActive)}
+                onEdit={() => requestEditCampaign(t)}
+                onDelete={() => setConfirmDel(t)} />
             ))}
           </div>
         )}
@@ -1444,6 +1601,7 @@ function TriggersScreen() {
           dbTriggers={dbTriggers}
           loadingAccounts={loadingAccounts}
           onCreated={() => { loadTriggers(); loadTemplates() }}
+          onEdited={onCampaignEdited}
           formRef={formApi}
           lockedAccountId={selAcc.id}
         />
@@ -1453,6 +1611,26 @@ function TriggersScreen() {
             onClose={() => setShowTemplates(false)} onApply={(d) => formApi.current?.load(d)}
             onDelete={deleteTemplate} onReload={loadTemplates} />
         )}
+
+        <ConfirmDialog
+          open={Boolean(stopGate)}
+          danger={false}
+          title="Сначала остановить кампанию"
+          message={`«${stopGate?.name ?? ''}» сейчас запущена. Редактировать можно только остановленную кампанию — остановить и открыть редактирование?`}
+          confirmLabel="Остановить и редактировать"
+          cancelLabel="Отмена"
+          onConfirm={confirmStopAndEdit}
+          onCancel={() => setStopGate(null)}
+        />
+        {postEdit && <PostEditDialog name={postEdit.name} onFinish={finishPostEdit} />}
+        <ConfirmDialog
+          open={Boolean(confirmDel)}
+          title="Удалить кампанию?"
+          message={`«${confirmDel?.name ?? ''}» и её статистика будут удалены безвозвратно.`}
+          confirmLabel="Удалить"
+          onConfirm={doDeleteCampaign}
+          onCancel={() => setConfirmDel(null)}
+        />
       </div>
     )
   }
@@ -1467,6 +1645,7 @@ function TriggersScreen() {
         dbTriggers={dbTriggers}
         loadingAccounts={loadingAccounts}
         onCreated={() => { loadTriggers(); loadTemplates() }}
+        onEdited={onCampaignEdited}
         formRef={formApi}
       />
 
