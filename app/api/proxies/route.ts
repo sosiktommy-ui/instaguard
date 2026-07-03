@@ -1,0 +1,40 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+import { getUserOrFirst } from '@/lib/auth'
+
+// GET — список прокси пользователя (с числом привязанных аккаунтов) + настройка «аккаунтов на прокси».
+export async function GET() {
+  try {
+    const user = await getUserOrFirst()
+    if (!user) return NextResponse.json({ accountsPerProxy: 3, proxies: [] })
+    const [settings, proxies] = await Promise.all([
+      prisma.userSettings.findUnique({ where: { userId: user.id } }),
+      prisma.proxy.findMany({
+        where: { userId: user.id },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, url: true, kind: true, label: true, _count: { select: { accounts: true } } },
+      }),
+    ])
+    return NextResponse.json({
+      accountsPerProxy: settings?.accountsPerProxy ?? 3,
+      proxies: proxies.map((p) => ({ id: p.id, url: p.url, kind: p.kind, label: p.label, accountCount: p._count.accounts })),
+    })
+  } catch {
+    return NextResponse.json({ accountsPerProxy: 3, proxies: [] })
+  }
+}
+
+// POST — добавить пуловые прокси (по одному на строку/через запятую). { url }
+export async function POST(req: NextRequest) {
+  try {
+    const user = await getUserOrFirst()
+    if (!user) return NextResponse.json({ error: 'Нет пользователя' }, { status: 500 })
+    const { url } = await req.json().catch(() => ({}))
+    const urls = String(url ?? '').split(/[\n,]/).map((u) => u.trim()).filter(Boolean)
+    if (!urls.length) return NextResponse.json({ error: 'Введите адрес прокси' }, { status: 400 })
+    await prisma.proxy.createMany({ data: urls.map((u) => ({ userId: user.id, url: u, kind: 'pool' })) })
+    return NextResponse.json({ ok: true, added: urls.length })
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? 'Ошибка сервера' }, { status: 500 })
+  }
+}

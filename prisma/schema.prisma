@@ -20,6 +20,31 @@ model User {
   triggers  TriggerRule[]
   templates Template[]
   sections  Section[]
+  proxies   Proxy[]
+  settings  UserSettings?
+}
+
+// Настройки пользователя (пока — только авто-привязка прокси; задел под этап 9)
+model UserSettings {
+  userId           String @id
+  accountsPerProxy Int    @default(3)  // сколько аккаунтов авто-вешать на один пуловый прокси
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+// Прокси: пуловые (авто-привязка) и индивидуальные (вводятся вручную при создании аккаунта)
+model Proxy {
+  id        String   @id @default(cuid())
+  userId    String
+  url       String
+  kind      String   @default("pool")   // pool | individual
+  label     String?
+  createdAt DateTime @default(now())
+
+  user     User               @relation(fields: [userId], references: [id])
+  accounts InstagramAccount[]
+
+  @@index([userId])
 }
 
 // Пользовательские папки для аккаунтов: раздел → подраздел (двухуровневая иерархия).
@@ -54,9 +79,11 @@ model InstagramAccount {
   followers   Int?          // реальное число подписчиков (из account_info)
   followersHistory Json?    // история [{d:'YYYY-MM-DD', n}] для спарклайна прироста
   sectionId   String?       // раздел/подраздел (папка пользователя)
+  proxyId     String?       // ссылка на прокси (пуловый/индивидуальный); строковый proxy оставлен для воркеров
 
   user                User           @relation(fields: [userId], references: [id])
   section             Section?       @relation(fields: [sectionId], references: [id])
+  proxyRef            Proxy?         @relation(fields: [proxyId], references: [id])
   triggersAsResponder TriggerRule[]  @relation("ResponderRules")
   triggersAsHelper    TriggerRule[]  @relation("HelperRules")
   snapshots           Snapshot[]

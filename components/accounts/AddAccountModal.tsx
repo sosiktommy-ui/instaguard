@@ -30,16 +30,62 @@ export function AddAccountModal({ onClose, onAdded }: { onClose: () => void; onA
   const [secId, setSecId]       = useState('')  // корневой раздел
   const [subId, setSubId]       = useState('')  // подраздел
 
+  // Прокси: авто (из пула) или уникальный (вручную)
+  const [proxyMode, setProxyMode] = useState<'auto' | 'unique'>('unique')
+  const [poolFree, setPoolFree]   = useState(0)   // сколько пуловых прокси со свободной ёмкостью
+
   useEffect(() => {
     fetch('/api/sections').then((r) => r.ok ? r.json() : []).then(setSections).catch(() => {})
+    fetch('/api/proxies').then((r) => r.ok ? r.json() : null).then((d) => {
+      if (!d) return
+      const cap = d.accountsPerProxy ?? 3
+      setPoolFree((d.proxies ?? []).filter((p: any) => p.kind === 'pool' && (p.accountCount ?? 0) < cap).length)
+    }).catch(() => {})
   }, [])
 
   const roots = useMemo(() => sections.filter((s) => !s.parentId), [sections])
   const subs = useMemo(() => sections.filter((s) => s.parentId === secId), [sections, secId])
 
-  const canSubmit = mode === 'password'
-    ? username.trim() && password.trim()
-    : cookies.trim()
+  const credsOk = mode === 'password' ? Boolean(username.trim() && password.trim()) : Boolean(cookies.trim())
+  const proxyOk = proxyMode !== 'auto' || poolFree > 0
+  const canSubmit = credsOk && proxyOk
+
+  // Общий блок выбора прокси (одинаков для логина и куки)
+  const proxyBlock = (
+    <div>
+      <label className="text-[13px] text-subt font-medium block mb-2">Прокси</label>
+      <div className="flex gap-1 p-1 bg-canvas rounded-2xl mb-2.5">
+        <button type="button" onClick={() => setProxyMode('auto')}
+          className={cn('flex-1 py-1.5 text-[12.5px] font-medium rounded-xl transition-all', proxyMode === 'auto' ? 'bg-card shadow text-ink' : 'text-subt hover:text-ink')}>
+          Авто (из пула)
+        </button>
+        <button type="button" onClick={() => setProxyMode('unique')}
+          className={cn('flex-1 py-1.5 text-[12.5px] font-medium rounded-xl transition-all', proxyMode === 'unique' ? 'bg-card shadow text-ink' : 'text-subt hover:text-ink')}>
+          Уникальный (вручную)
+        </button>
+      </div>
+      {proxyMode === 'auto' ? (
+        poolFree > 0 ? (
+          <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3 leading-relaxed">
+            Прокси возьмётся автоматически из общего пула (свободно: {poolFree}). Пул и число аккаунтов на один прокси настраиваются на вкладке «Прокси».
+          </div>
+        ) : (
+          <div className="text-[12px] text-warn bg-warn/10 rounded-2xl p-3 leading-relaxed">
+            В пуле нет свободных прокси. Добавьте их на вкладке «Прокси» или выберите «Уникальный».
+          </div>
+        )
+      ) : (
+        <>
+          <div className="relative">
+            <Globe className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
+            <input value={proxy} onChange={(e) => setProxy(e.target.value)}
+              className="field pl-10 font-mono text-[13px]" placeholder="user:pass@host:port" />
+          </div>
+          <p className="text-[11px] text-subt mt-1.5 pl-1">Индивидуальный прокси только для этого аккаунта. Можно оставить пустым — тогда без прокси.</p>
+        </>
+      )}
+    </div>
+  )
 
   const save = async () => {
     setLoading(true)
@@ -48,9 +94,10 @@ export function AddAccountModal({ onClose, onAdded }: { onClose: () => void; onA
 
     try {
       const sectionId = subId || secId || undefined
+      const proxyVal = proxyMode === 'unique' ? (proxy.trim() || undefined) : undefined
       const body = mode === 'cookies'
-        ? { authMethod: 'cookies', cookies: cookies.trim(), proxy: proxy.trim() || undefined, sectionId }
-        : { username: username.replace(/^@/, '').trim(), password, proxy: proxy.trim() || undefined, sectionId }
+        ? { authMethod: 'cookies', cookies: cookies.trim(), proxy: proxyVal, proxyMode, sectionId }
+        : { username: username.replace(/^@/, '').trim(), password, proxy: proxyVal, proxyMode, sectionId }
 
       const res = await fetch('/api/accounts/auth', {
         method: 'POST',
@@ -136,15 +183,7 @@ export function AddAccountModal({ onClose, onAdded }: { onClose: () => void; onA
                   className="field pl-10" placeholder="••••••••" />
               </div>
             </div>
-            <div>
-              <label className="text-[13px] text-subt font-medium block mb-2">Прокси (необязательно)</label>
-              <div className="relative">
-                <Globe className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
-                <input value={proxy} onChange={(e) => setProxy(e.target.value)}
-                  className="field pl-10 font-mono text-[13px]" placeholder="user:pass@host:port" />
-              </div>
-              <p className="text-[11px] text-subt mt-1.5 pl-1">Форматы: <code className="font-mono">user:pass@host:port</code> или <code className="font-mono">http://user:pass@host:port</code></p>
-            </div>
+            {proxyBlock}
             {error && <p className="text-bad text-[13px] text-center">{error}</p>}
             <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed">
               Пароль не хранится — только сессия Instagram.
@@ -165,15 +204,7 @@ export function AddAccountModal({ onClose, onAdded }: { onClose: () => void; onA
                 placeholder={'{"sessionid": "abc123...", "ds_user_id": "12345", "csrftoken": "..."}\n\nИли просто sessionid:\nabc123...'}
               />
             </div>
-            <div>
-              <label className="text-[13px] text-subt font-medium block mb-2">Прокси (необязательно)</label>
-              <div className="relative">
-                <Globe className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
-                <input value={proxy} onChange={(e) => setProxy(e.target.value)}
-                  className="field pl-10 font-mono text-[13px]" placeholder="user:pass@host:port" />
-              </div>
-              <p className="text-[11px] text-subt mt-1.5 pl-1">Форматы: <code className="font-mono">user:pass@host:port</code> или <code className="font-mono">http://user:pass@host:port</code></p>
-            </div>
+            {proxyBlock}
             {error && <p className="text-bad text-[13px] text-center">{error}</p>}
             <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed">
               Экспортируйте куки с instagram.com через расширение браузера (например, Cookie-Editor). Нужен как минимум <code className="font-mono bg-black/5 px-1 rounded">sessionid</code>.

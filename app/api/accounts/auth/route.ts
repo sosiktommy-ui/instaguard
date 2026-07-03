@@ -5,7 +5,7 @@ import { getCurrentUser } from '@/lib/auth'
 
 export async function POST(req: NextRequest) {
   try {
-    const { username, password, proxy, authMethod, cookies, role, sectionId } = await req.json()
+    const { username, password, proxy, authMethod, cookies, role, sectionId, proxyMode } = await req.json()
     const accountRole: 'RESPONDER' | 'HELPER' | 'BOTH' = role === 'HELPER' ? 'HELPER' : 'RESPONDER'
     const section = typeof sectionId === 'string' && sectionId ? sectionId : null
 
@@ -64,12 +64,37 @@ export async function POST(req: NextRequest) {
       validSection = sec ? sec.id : null
     }
 
+    // Прокси: авто (взять из пула по свободной ёмкости) или уникальный (введён вручную).
+    // Строковый account.proxy оставляем — им пользуются воркеры; proxyId — для управления/пула.
+    let proxyUrl: string | null = typeof proxy === 'string' && proxy.trim() ? proxy.trim() : null
+    let proxyId: string | null = null
+    if (proxyMode === 'auto') {
+      const settings = await prisma.userSettings.findUnique({ where: { userId: user.id } })
+      const cap = settings?.accountsPerProxy ?? 3
+      const pool = await prisma.proxy.findMany({
+        where: { userId: user.id, kind: 'pool' },
+        select: { id: true, url: true, _count: { select: { accounts: true } } },
+        orderBy: { createdAt: 'asc' },
+      })
+      const free = pool.filter((p) => p._count.accounts < cap).sort((a, b) => a._count.accounts - b._count.accounts)[0]
+      if (!free) {
+        return NextResponse.json({ error: 'В пуле нет свободных прокси. Добавьте на вкладке «Прокси» или выберите «Уникальный».' }, { status: 400 })
+      }
+      proxyUrl = free.url
+      proxyId = free.id
+    } else if (proxyUrl) {
+      // Уникальный (ручной) — заводим/переиспользуем индивидуальный прокси
+      const found = await prisma.proxy.findFirst({ where: { userId: user.id, url: proxyUrl } })
+      const p = found ?? await prisma.proxy.create({ data: { userId: user.id, url: proxyUrl, kind: 'individual' } })
+      proxyId = p.id
+    }
+
     const existing = await prisma.instagramAccount.findFirst({ where: { username: clean, userId: user.id } })
 
     const account = existing
       ? await prisma.instagramAccount.update({
           where: { id: existing.id },
-          data: { sessionData, status: 'ACTIVE', lastChecked: new Date(), proxy: proxy || null, role: accountRole, sectionId: validSection },
+          data: { sessionData, status: 'ACTIVE', lastChecked: new Date(), proxy: proxyUrl, proxyId, role: accountRole, sectionId: validSection },
         })
       : await prisma.instagramAccount.create({
           data: {
@@ -77,7 +102,8 @@ export async function POST(req: NextRequest) {
             username: clean,
             role: accountRole,
             sessionData,
-            proxy: proxy || null,
+            proxy: proxyUrl,
+            proxyId,
             status: 'ACTIVE',
             sectionId: validSection,
           },
