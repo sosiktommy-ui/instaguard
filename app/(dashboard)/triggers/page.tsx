@@ -1028,7 +1028,7 @@ function CreateForm({
   // Создание — раскрывающаяся карточка снизу.
   return (
     <div className="card overflow-hidden">
-      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between px-5 py-4 hover:bg-black/[0.02] transition-colors">
+      <button data-tour="create" onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between px-5 py-4 hover:bg-black/[0.02] transition-colors">
         <div className="flex items-center gap-3 text-left">
           <div className="w-8 h-8 rounded-xl bg-brand/10 flex items-center justify-center shrink-0"><Plus className="w-4 h-4 text-brand" /></div>
           <div>
@@ -1709,7 +1709,7 @@ function TriggersScreen() {
   return (
     <div className="space-y-5 pb-24">
       {/* 1. Создание кампании — главное действие (раскрыто по умолчанию) */}
-      <div data-tour="create">
+      <div>
         <CreateForm
           dbAccounts={dbAccounts}
           dbTriggers={dbTriggers}

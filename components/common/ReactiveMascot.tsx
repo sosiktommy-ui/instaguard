@@ -1,93 +1,85 @@
 /**
- * Reactive — маскот сервиса. Неоновое «энергетическое» существо в фирменных
- * фиолетово-синих цветах (свечение, светящиеся глаза, языки-пламя, искры).
- * Используется в игровом обучении. Чтобы заменить на реальный арт —
- * положите PNG в /public/Foto и отрендерьте <img> вместо этого SVG.
+ * Reactive — маскот сервиса: милое неоновое существо в фирменных фиолетово-синих
+ * цветах (мягкое свечение, большие дружелюбные светящиеся глаза, ушки, улыбка).
+ * Симметричный SVG. Чтобы заменить на реальный арт — положите PNG в /public/Foto
+ * и отрендерьте <img> вместо этого компонента.
  */
 export function ReactiveMascot({ size = 120, className, animated = true }: { size?: number; className?: string; animated?: boolean }) {
   return (
-    <svg width={size} height={size * 1.1} viewBox="0 0 220 240" className={cnAnim(className, animated)} xmlns="http://www.w3.org/2000/svg">
+    <svg width={size} height={size} viewBox="0 0 200 200" className={[className, animated ? 'rm-bob' : ''].filter(Boolean).join(' ')} xmlns="http://www.w3.org/2000/svg">
       <defs>
-        <radialGradient id="rm-aura" cx="50%" cy="45%" r="55%">
-          <stop offset="0" stopColor="#9b66ff" stopOpacity="0.55" />
-          <stop offset="0.5" stopColor="#6a7df9" stopOpacity="0.22" />
+        <radialGradient id="rm-aura" cx="50%" cy="48%" r="52%">
+          <stop offset="0" stopColor="#9b66ff" stopOpacity="0.5" />
+          <stop offset="0.55" stopColor="#6a7df9" stopOpacity="0.16" />
           <stop offset="1" stopColor="#6a7df9" stopOpacity="0" />
         </radialGradient>
-        <linearGradient id="rm-body" x1="0" y1="0" x2="1" y2="1">
+        <linearGradient id="rm-body" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0" stopColor="#8b5cff" />
-          <stop offset="0.55" stopColor="#663af1" />
-          <stop offset="1" stopColor="#3aa0ff" />
+          <stop offset="0.55" stopColor="#6f45f0" />
+          <stop offset="1" stopColor="#4f7bf7" />
         </linearGradient>
-        <linearGradient id="rm-flame" x1="0" y1="1" x2="0" y2="0">
-          <stop offset="0" stopColor="#6a7df9" />
-          <stop offset="0.5" stopColor="#9b66ff" />
-          <stop offset="1" stopColor="#22d3ee" />
-        </linearGradient>
-        <filter id="rm-glow" x="-60%" y="-60%" width="220%" height="220%">
-          <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="b1" />
-          <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="b2" />
-          <feMerge>
-            <feMergeNode in="b2" /><feMergeNode in="b1" /><feMergeNode in="SourceGraphic" />
-          </feMerge>
+        <radialGradient id="rm-eye" cx="50%" cy="42%" r="60%">
+          <stop offset="0" stopColor="#ffffff" />
+          <stop offset="0.7" stopColor="#eaf3ff" />
+          <stop offset="1" stopColor="#bcd8ff" />
+        </radialGradient>
+        <filter id="rm-soft" x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="3.4" result="b1" />
+          <feGaussianBlur in="SourceGraphic" stdDeviation="9" result="b2" />
+          <feMerge><feMergeNode in="b2" /><feMergeNode in="b1" /><feMergeNode in="SourceGraphic" /></feMerge>
         </filter>
-        <filter id="rm-eye" x="-120%" y="-120%" width="340%" height="340%">
-          <feGaussianBlur in="SourceGraphic" stdDeviation="3" />
+        <filter id="rm-eyeglow" x="-120%" y="-120%" width="340%" height="340%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="2.4" />
         </filter>
       </defs>
 
       {/* аура */}
-      <ellipse cx="110" cy="112" rx="100" ry="110" fill="url(#rm-aura)" />
+      <circle cx="100" cy="98" r="92" fill="url(#rm-aura)" />
 
-      {/* искры */}
-      <g fill="#ffd7a1" opacity="0.9">
-        <circle cx="40" cy="80" r="2.4" /><circle cx="52" cy="70" r="1.6" />
-        <circle cx="182" cy="96" r="2.6" /><circle cx="192" cy="120" r="1.6" />
-        <circle cx="60" cy="150" r="1.6" />
+      {/* искры (симметрично) */}
+      <g fill="#ffd7a1" opacity="0.85">
+        <circle cx="46" cy="70" r="2" /><circle cx="156" cy="72" r="2.2" /><circle cx="150" cy="120" r="1.5" /><circle cx="52" cy="120" r="1.5" />
       </g>
 
-      <g filter="url(#rm-glow)">
-        {/* языки-пламя на голове */}
-        <path d="M78 58 C70 30 96 26 98 44 C104 20 128 26 122 52 C140 34 150 58 132 70 Z"
-          fill="url(#rm-flame)" opacity="0.95" />
+      <g filter="url(#rm-soft)">
+        {/* ушки (симметричные, скруглённые) */}
+        <path d="M64 62 C60 40 78 40 84 58 C74 56 68 58 64 62 Z" fill="url(#rm-body)" />
+        <path d="M136 62 C140 40 122 40 116 58 C126 56 132 58 136 62 Z" fill="url(#rm-body)" />
 
-        {/* уши */}
-        <path d="M70 76 L58 44 L92 66 Z" fill="url(#rm-body)" />
-        <path d="M150 76 L162 44 L128 66 Z" fill="url(#rm-body)" />
+        {/* тело-капля (симметричное) */}
+        <path d="M100 46
+                 C132 46 152 70 152 104
+                 C152 140 130 160 100 160
+                 C70 160 48 140 48 104
+                 C48 70 68 46 100 46 Z" fill="url(#rm-body)" />
 
-        {/* голова */}
-        <ellipse cx="110" cy="96" rx="52" ry="46" fill="url(#rm-body)" />
-
-        {/* тело */}
-        <path d="M74 128 C74 118 146 118 146 128 C150 168 138 196 110 196 C82 196 70 168 74 128 Z" fill="url(#rm-body)" />
-
-        {/* руки */}
-        <path d="M74 138 C56 146 48 164 54 178 C60 168 70 160 82 156 Z" fill="url(#rm-body)" />
-        <path d="M146 138 C164 146 172 164 166 178 C160 168 150 160 138 156 Z" fill="url(#rm-body)" />
-
-        {/* ноги */}
-        <ellipse cx="94" cy="204" rx="14" ry="10" fill="url(#rm-body)" />
-        <ellipse cx="126" cy="204" rx="14" ry="10" fill="url(#rm-body)" />
+        {/* ножки */}
+        <ellipse cx="82" cy="162" rx="13" ry="9" fill="url(#rm-body)" />
+        <ellipse cx="118" cy="162" rx="13" ry="9" fill="url(#rm-body)" />
       </g>
 
-      {/* блики на теле */}
-      <ellipse cx="92" cy="80" rx="14" ry="18" fill="#ffffff" opacity="0.18" />
+      {/* верхний мягкий блик */}
+      <ellipse cx="100" cy="74" rx="40" ry="22" fill="#ffffff" opacity="0.14" />
 
-      {/* светящиеся глаза */}
-      <g>
-        <g filter="url(#rm-eye)" fill="#eaf6ff">
-          <path d="M84 92 q14 -12 26 -2 q-14 8 -26 2 Z" />
-          <path d="M136 90 q-14 -12 -26 -2 q14 8 26 2 Z" />
-        </g>
-        <path d="M84 92 q14 -12 26 -2 q-14 8 -26 2 Z" fill="#ffffff" />
-        <path d="M136 90 q-14 -12 -26 -2 q14 8 26 2 Z" fill="#ffffff" />
+      {/* глаза (большие, дружелюбные, светящиеся, симметричные) */}
+      <g filter="url(#rm-eyeglow)" opacity="0.9">
+        <circle cx="80" cy="100" r="16" fill="#daf0ff" />
+        <circle cx="120" cy="100" r="16" fill="#daf0ff" />
       </g>
+      <circle cx="80" cy="100" r="14" fill="url(#rm-eye)" />
+      <circle cx="120" cy="100" r="14" fill="url(#rm-eye)" />
+      {/* зрачки-блики */}
+      <circle cx="84" cy="104" r="4.2" fill="#3a2a7a" opacity="0.55" />
+      <circle cx="116" cy="104" r="4.2" fill="#3a2a7a" opacity="0.55" />
+      <circle cx="76" cy="94" r="3" fill="#ffffff" />
+      <circle cx="112" cy="94" r="3" fill="#ffffff" />
 
-      {/* рот */}
-      <path d="M104 112 q6 6 12 0" stroke="#0b1030" strokeWidth="2.4" fill="none" strokeLinecap="round" />
+      {/* румянец */}
+      <ellipse cx="66" cy="120" rx="7" ry="4" fill="#ff8ad4" opacity="0.35" />
+      <ellipse cx="134" cy="120" rx="7" ry="4" fill="#ff8ad4" opacity="0.35" />
+
+      {/* улыбка */}
+      <path d="M90 124 Q100 133 110 124" stroke="#f3e9ff" strokeWidth="3" fill="none" strokeLinecap="round" />
     </svg>
   )
-}
-
-function cnAnim(className?: string, animated?: boolean) {
-  return [className, animated ? 'rm-bob' : ''].filter(Boolean).join(' ')
 }

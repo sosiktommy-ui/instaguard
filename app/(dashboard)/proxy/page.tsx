@@ -97,10 +97,10 @@ function Proxies() {
   )
 
   return (
-    <div className="space-y-5" data-tour="page">
+    <div className="space-y-5">
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-[26px] font-semibold tracking-tighter leading-none">Прокси</h1>
+          <h1 data-tour="page" className="text-[26px] font-semibold tracking-tighter leading-none">Прокси</h1>
           <p className="text-subt mt-1.5 text-[14px]">Пуловые (общие, авто-привязка) и уникальные (для одного аккаунта)</p>
         </div>
         <button onClick={load} className="p-2 text-subt hover:text-ink transition-colors" title="Обновить">

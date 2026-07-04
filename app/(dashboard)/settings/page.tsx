@@ -61,9 +61,9 @@ function SettingsScreen() {
   const rowCls = 'card p-5 flex items-start gap-4'
 
   return (
-    <div className="space-y-6 max-w-2xl" data-tour="page">
+    <div className="space-y-6 max-w-2xl">
       <div>
-        <h1 className="text-[26px] font-semibold tracking-tighter leading-none">Настройки</h1>
+        <h1 data-tour="page" className="text-[26px] font-semibold tracking-tighter leading-none">Настройки</h1>
         <p className="text-subt mt-1.5 text-[14px]">Правила безопасности и автоматизации аккаунтов</p>
       </div>
 

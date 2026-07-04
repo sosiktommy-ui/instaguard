@@ -188,12 +188,12 @@ function Drafts() {
   }
 
   return (
-    <div className="space-y-6" data-tour="page">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-[26px] font-semibold tracking-tighter leading-none">Черновые аккаунты</h1>
+              <h1 data-tour="page" className="text-[26px] font-semibold tracking-tighter leading-none">Черновые аккаунты</h1>
             </div>
             <p className="text-subt mt-1 text-[14px]">Парсят подписчиков — основные только отправляют</p>
           </div>
