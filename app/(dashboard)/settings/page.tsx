@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { ShieldAlert, Layers, Globe } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import ClientOnly from '@/components/common/ClientOnly'
 import { cn } from '@/lib/utils'
 
@@ -22,10 +23,11 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void 
 
 function SettingsScreen() {
   const [s, setS] = useState<Settings>({ accountsPerProxy: 3, allowNoProxy: false, allowNoDrafts: false })
+  const [capInput, setCapInput] = useState('3')
   const [msg, setMsg] = useState('')
 
   const load = useCallback(async () => {
-    try { const r = await fetch('/api/settings'); if (r.ok) setS(await r.json()) } catch {}
+    try { const r = await fetch('/api/settings'); if (r.ok) { const d = await r.json(); setS(d); setCapInput(String(d.accountsPerProxy ?? 3)) } } catch {}
   }, [])
   useEffect(() => { load() }, [load])
 
@@ -78,10 +80,15 @@ function SettingsScreen() {
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-[15px]">Аккаунтов на один прокси</div>
           <div className="text-[13px] text-subt mt-1 leading-relaxed">
-            Сколько аккаунтов авто-режим вешает на один пуловый прокси. Настраивается на вкладке «Прокси».
+            Сколько аккаунтов авто-режим вешает на один пуловый прокси, прежде чем взять следующий.
+            Меньше — безопаснее. То же значение доступно на вкладке «Прокси».
           </div>
         </div>
-        <a href="/proxy" className="text-[13px] font-medium text-brand hover:underline shrink-0 mt-1">Открыть →</a>
+        <div className="flex items-center gap-2 shrink-0">
+          <input type="number" min={1} max={100} value={capInput} onChange={(e) => setCapInput(e.target.value)}
+            className="field w-20 py-2 text-[14px] text-center" />
+          <Button variant="secondary" onClick={() => patch({ accountsPerProxy: Math.max(1, Math.min(100, Math.round(Number(capInput) || s.accountsPerProxy))) })}>Сохранить</Button>
+        </div>
       </div>
     </div>
   )

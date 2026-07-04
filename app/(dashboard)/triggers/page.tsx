@@ -1240,47 +1240,48 @@ function CampaignCard({ trigger, onToggle, onEdit, onDelete, index = 0 }: {
 
   return (
     <div className={cn('card card-3d rise p-3.5 flex flex-col gap-3', !trigger.isActive && 'opacity-55')} style={{ animationDelay: `${index * 60}ms` }}>
-      {/* Шапка */}
+      {/* Шапка: только название кампании + вкл/выкл (без аватарки и дубля типа) */}
       <div className="flex items-center gap-2.5">
-        {meta ? <TrigBadge meta={meta} active={trigger.isActive} size={34} tip={false} /> : <div className="w-8 h-8 rounded-xl bg-black/5" />}
-        <div className="flex-1 min-w-0">
-          <div className="font-semibold text-[13.5px] truncate">{trigger.name}</div>
-          <div className="text-[11px] text-subt">{meta?.label ?? trigger.triggerType}</div>
-        </div>
+        <div className="font-semibold text-[14.5px] truncate flex-1 min-w-0">{trigger.name}</div>
         <button onClick={onToggle} className={cn('flex items-center gap-1 text-[11.5px] font-medium px-2.5 py-1 rounded-lg shrink-0 transition-colors',
           trigger.isActive ? 'bg-ok/10 text-ok hover:bg-ok/20' : 'bg-black/[0.05] text-subt hover:bg-black/[0.08]')}>
           {trigger.isActive ? <><ToggleRight className="w-3.5 h-3.5" /> Вкл</> : <><ToggleLeft className="w-3.5 h-3.5" /> Выкл</>}
         </button>
       </div>
 
-      {/* ── БЛОК «ТРИГГЕР» — что запускает кампанию ── */}
-      <div className="rounded-xl border border-[#6a7df9]/30 overflow-hidden">
-        <div className="px-2.5 py-1 bg-[#6a7df9]/10 text-[10px] font-semibold uppercase tracking-wider text-[#4b46c9] flex items-center gap-1">
-          Триггер <Hint text="Событие, которое запускает кампанию, и на что она реагирует." />
-        </div>
-        <div className="px-2.5 py-2 space-y-1.5">
-          <div className="flex items-center gap-1.5">
-            {meta && <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: hexA(meta.color, 0.12) }}><meta.Icon className="w-3 h-3" style={{ color: meta.color }} /></span>}
-            <span className="text-[12.5px] font-medium">{meta?.label ?? trigger.triggerType}</span>
-            <span className="ml-auto text-[11px] text-subt whitespace-nowrap">сработал <span className="font-semibold text-ink tabular-nums">{firedTotal.toLocaleString('ru')}</span> раз</span>
-          </div>
-          {signal && (
-            <>
-              <button onClick={() => signalExpandable && setOpenKey(signalOpen ? null : 'signal')}
-                className={cn('w-full flex items-center gap-1.5 text-[11px] text-subt px-2 py-1 rounded-lg text-left', signalExpandable && (signalOpen ? 'bg-black/[0.04]' : 'hover:bg-black/[0.03]'))}>
-                <Filter className="w-3.5 h-3.5 text-[#6a7df9] shrink-0" />
-                <span className="font-medium text-ink/70">Сигнал:</span> <span className="flex-1 truncate">{signal}</span>
-                {signalExpandable && <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', signalOpen && 'rotate-180')} />}
-              </button>
-              {signalOpen && (
-                <div className="text-[11.5px] text-subt bg-canvas rounded-lg px-3 py-2.5 space-y-0.5 animate-fade-in">
-                  <div className="font-medium text-ink/70">Реагирует на фразы{cond.exact ? ' (точное совпадение)' : ' (с опечатками)'}:</div>
-                  <ul className="list-disc ml-4">{signalPhrases.map((p, i) => <li key={i}>{p}</li>)}</ul>
-                </div>
-              )}
-            </>
+      {/* Панель «Триггер» — крупный блок: что запускает кампанию (без верхнего ярлыка) */}
+      <div className="rounded-2xl border p-3" style={{ borderColor: hexA(meta?.color ?? '#8e8e93', 0.35), background: hexA(meta?.color ?? '#8e8e93', 0.06) }}>
+        <div className="flex items-center gap-3">
+          {meta && (
+            <span className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0"
+              style={{ background: `linear-gradient(145deg, ${meta.color}, ${darken(meta.color)})`, boxShadow: `0 4px 12px ${hexA(meta.color, 0.4)}` }}>
+              <meta.Icon className="w-5 h-5 text-white" />
+            </span>
           )}
+          <div className="min-w-0 flex-1">
+            <div className="text-[16px] font-semibold leading-tight truncate flex items-center gap-1">
+              {meta?.label ?? trigger.triggerType}
+              <Hint text="Событие, которое запускает кампанию (новая подписка / комментарий / лайк / сторис)." />
+            </div>
+            <div className="text-[11.5px] text-subt mt-0.5">сработал <span className="font-semibold text-ink tabular-nums">{firedTotal.toLocaleString('ru')}</span> раз</div>
+          </div>
         </div>
+        {signal && (
+          <div className="mt-2">
+            <button onClick={() => signalExpandable && setOpenKey(signalOpen ? null : 'signal')}
+              className={cn('w-full flex items-center gap-1.5 text-[11.5px] text-subt px-2 py-1.5 rounded-lg text-left bg-white/60', signalExpandable && (signalOpen ? 'bg-white' : 'hover:bg-white'))}>
+              <Filter className="w-3.5 h-3.5 text-[#6a7df9] shrink-0" />
+              <span className="font-medium text-ink/70">Сигнал:</span> <span className="flex-1 truncate">{signal}</span>
+              {signalExpandable && <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', signalOpen && 'rotate-180')} />}
+            </button>
+            {signalOpen && (
+              <div className="text-[11.5px] text-subt bg-white/70 rounded-lg px-3 py-2.5 space-y-0.5 animate-fade-in mt-1">
+                <div className="font-medium text-ink/70">Реагирует на фразы{cond.exact ? ' (точное совпадение)' : ' (с опечатками)'}:</div>
+                <ul className="list-disc ml-4">{signalPhrases.map((p, i) => <li key={i}>{p}</li>)}</ul>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── БЛОК «ДЕЙСТВИЯ» — таблица: что делает + сработало/выполнено ── */}

@@ -12,12 +12,19 @@ export async function GET() {
       prisma.proxy.findMany({
         where: { userId: user.id },
         orderBy: { createdAt: 'asc' },
-        select: { id: true, url: true, kind: true, label: true, _count: { select: { accounts: true } } },
+        select: {
+          id: true, url: true, kind: true, label: true,
+          accounts: { select: { username: true, role: true, status: true }, orderBy: { username: 'asc' } },
+        },
       }),
     ])
     return NextResponse.json({
       accountsPerProxy: settings?.accountsPerProxy ?? 3,
-      proxies: proxies.map((p) => ({ id: p.id, url: p.url, kind: p.kind, label: p.label, accountCount: p._count.accounts })),
+      proxies: proxies.map((p) => ({
+        id: p.id, url: p.url, kind: p.kind, label: p.label,
+        accountCount: p.accounts.length,
+        accounts: p.accounts.map((a) => ({ username: a.username, role: a.role, status: a.status })),
+      })),
     })
   } catch {
     return NextResponse.json({ accountsPerProxy: 3, proxies: [] })
