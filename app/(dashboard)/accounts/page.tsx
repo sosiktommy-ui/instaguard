@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Plus, Play, Pause, Trash2, X, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp, Info } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
+import { DraftsStatus } from '@/components/accounts/DraftsStatus'
 import { type SectionItem } from '@/components/accounts/SectionBar'
 import { FolderTree } from 'lucide-react'
 import { Tilt } from '@/components/ui/Tilt'
@@ -515,6 +516,8 @@ function Accounts() {
       {pollMsg && (
         <div className="text-[13px] text-subt bg-canvas rounded-2xl px-4 py-3">{pollMsg}</div>
       )}
+
+      <DraftsStatus />
 
       {realAccounts.length > 0 && mergedAccounts.length === 0 && (
         <div className="card p-5 text-[14px] text-subt">

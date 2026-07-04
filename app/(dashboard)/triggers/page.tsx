@@ -15,6 +15,7 @@ import { TriggerType } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
 import { SectionBar, type SectionItem } from '@/components/accounts/SectionBar'
+import { DraftsStatus } from '@/components/accounts/DraftsStatus'
 import { cn } from '@/lib/utils'
 import { readStat } from '@/lib/stats'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
@@ -1707,6 +1708,9 @@ function TriggersScreen() {
           </button>
         </div>
       </div>
+
+      {/* Статистика черновых + баннер «нет черновых» — план §G4 */}
+      <DraftsStatus />
 
       {/* Разделы/подразделы (папки) + фильтр — план §C2 */}
       <SectionBar sections={sections} selSection={selSection} selSub={selSub}
