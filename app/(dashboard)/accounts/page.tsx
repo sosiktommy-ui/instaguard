@@ -5,6 +5,7 @@ import { Plus, Play, Pause, Trash2, X, Globe, Users, Zap, Send, UserPlus, Refres
 import { Button } from '@/components/ui/button'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
 import { DraftsStatus } from '@/components/accounts/DraftsStatus'
+import { SecurityBadge } from '@/components/accounts/SecurityBadge'
 import { type SectionItem } from '@/components/accounts/SectionBar'
 import { FolderTree } from 'lucide-react'
 import { Tilt } from '@/components/ui/Tilt'
@@ -204,6 +205,7 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], onChanged, onCl
                 <span className={cn('flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-0.5 rounded-full', st.pill)}>
                   <span className={cn('w-1.5 h-1.5 rounded-full', st.dot)} /> {st.t}
                 </span>
+                {ra && <SecurityBadge acc={ra} size="lg" />}
                 {ra?.lastChecked && (
                   <span className="flex items-center gap-1 text-[11px] text-subt">
                     <Calendar className="w-3 h-3" /> {new Date(ra.lastChecked).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
@@ -563,12 +565,15 @@ function Accounts() {
                         {!ra && <div className="text-[11px] text-warn">Не в БД</div>}
                       </div>
                     </div>
-                    <span className={cn('flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-1 rounded-full',
-                      status === 'ACTIVE' ? 'bg-ok/10 text-ok' : status === 'BLOCKED' ? 'bg-bad/10 text-bad' : 'bg-warn/10 text-warn')}>
-                      <span className={cn('w-1.5 h-1.5 rounded-full',
-                        status === 'ACTIVE' ? 'bg-ok' : status === 'BLOCKED' ? 'bg-bad' : 'bg-warn')} />
-                      {status === 'ACTIVE' ? 'Активен' : status === 'BLOCKED' ? 'Заблокирован' : 'Пауза'}
-                    </span>
+                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                      <span className={cn('flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-1 rounded-full',
+                        status === 'ACTIVE' ? 'bg-ok/10 text-ok' : status === 'BLOCKED' ? 'bg-bad/10 text-bad' : 'bg-warn/10 text-warn')}>
+                        <span className={cn('w-1.5 h-1.5 rounded-full',
+                          status === 'ACTIVE' ? 'bg-ok' : status === 'BLOCKED' ? 'bg-bad' : 'bg-warn')} />
+                        {status === 'ACTIVE' ? 'Активен' : status === 'BLOCKED' ? 'Заблокирован' : 'Пауза'}
+                      </span>
+                      {ra && <SecurityBadge acc={ra} />}
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 mt-5 relative">

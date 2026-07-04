@@ -24,6 +24,13 @@ export function SectionBar({
   const roots = sections.filter((s) => !s.parentId)
   const subs = sections.filter((s) => s.parentId === selSection)
 
+  // Счётчик раздела = свои аккаунты + аккаунты во всех его подразделах (иначе «Польша 0» при «Варшава 1»)
+  const countFor = (s: SectionItem) => {
+    const own = s.accountCount ?? 0
+    if (s.parentId) return own
+    return own + sections.filter((c) => c.parentId === s.id).reduce((sum, c) => sum + (c.accountCount ?? 0), 0)
+  }
+
   // Создание раздела/подраздела: parentId=null → корневой; parentId=<id> → подраздел
   const [creating, setCreating] = useState<{ parentId: string | null } | null>(null)
   const [name, setName] = useState('')
@@ -98,7 +105,7 @@ export function SectionBar({
           <FolderTree className="w-3.5 h-3.5" /> Разделы:
         </span>
         {chip(!selSection, 'Все', undefined, () => onSelect('', ''))}
-        {roots.map((s) => chip(selSection === s.id && !selSub, s.name, s.accountCount, () => onSelect(s.id, ''), () => setConfirmDel(s)))}
+        {roots.map((s) => chip(selSection === s.id && !selSub, s.name, countFor(s), () => onSelect(s.id, ''), () => setConfirmDel(s)))}
         {creating && creating.parentId === null ? inlineCreate : addBtn(null, 'Раздел')}
       </div>
 

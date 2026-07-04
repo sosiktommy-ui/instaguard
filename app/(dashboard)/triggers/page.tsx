@@ -16,6 +16,7 @@ import ClientOnly from '@/components/common/ClientOnly'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
 import { SectionBar, type SectionItem } from '@/components/accounts/SectionBar'
 import { DraftsStatus } from '@/components/accounts/DraftsStatus'
+import { SecurityBadge } from '@/components/accounts/SecurityBadge'
 import { cn } from '@/lib/utils'
 import { readStat } from '@/lib/stats'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
@@ -137,6 +138,8 @@ interface DbAccount {
   followers?: number | null      // реальное число подписчиков
   followerCount?: number         // отслеживается в базе
   sectionId?: string | null      // раздел/подраздел (папка)
+  limits?: unknown               // дневные счётчики (для индекса безопасности)
+  proxy?: string | null          // прокси (для индекса безопасности)
 }
 interface DbTrigger {
   id: string
@@ -1356,6 +1359,7 @@ function AccountCard({ acc, campaigns, activeTypes, onOpen, index = 0 }: {
           <div className="flex items-center gap-1.5 mt-0.5">
             <span className={cn('w-1.5 h-1.5 rounded-full', PLATE_DOT[ps])} />
             <span className="text-[10.5px] text-subt">{PLATE_LABEL[ps]}</span>
+            <SecurityBadge acc={acc} />
           </div>
         </div>
         <ChevronRight className="w-5 h-5 text-subt shrink-0" />
