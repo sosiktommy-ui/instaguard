@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
  * Статистика черновых аккаунтов + баннер «нет черновых» (план §G4).
  * Самодостаточен: сам грузит аккаунты и настройки. Ставится на «Аккаунты» и на главную.
  */
-export function DraftsStatus() {
+export function DraftsStatus({ showBanner = true }: { showBanner?: boolean }) {
   const router = useRouter()
   const [total, setTotal] = useState<number | null>(null)
   const [active, setActive] = useState(0)
@@ -29,7 +29,7 @@ export function DraftsStatus() {
   }, [])
 
   if (total === null) return null
-  const showBanner = total === 0 && !allowNoDrafts && !dismissed
+  const banner = showBanner && total === 0 && !allowNoDrafts && !dismissed
 
   return (
     <div className="space-y-3">
@@ -40,7 +40,7 @@ export function DraftsStatus() {
         {total > 0 && allowNoDrafts && <span className="text-subt">· «без черновых» включено</span>}
       </div>
 
-      {showBanner && (
+      {banner && (
         <div className="card p-4 border border-warn/40 bg-warn/[0.06]">
           <div className="flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-warn shrink-0 mt-0.5" />

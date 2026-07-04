@@ -10,7 +10,6 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/Tooltip'
-import { Tilt } from '@/components/ui/Tilt'
 import { TriggerType } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
@@ -62,7 +61,7 @@ function TrigBadge({ meta, active, size = 30, title, tip = true }: {
   const Icon = meta.Icon
   const node = (
     <span
-      className={cn('rounded-xl flex items-center justify-center transition-transform duration-200 shrink-0 hover:scale-110 hover:-rotate-3', active && 'pulse-glow')}
+      className="rounded-xl flex items-center justify-center transition-transform duration-200 shrink-0 hover:scale-105"
       style={
         active
           ? {
@@ -116,7 +115,7 @@ function StatCard({ icon: Icon, color, value, label, tip, delay = 0 }: {
   return (
     <div className="card card-3d gloss rise px-5 py-4 flex items-center gap-3 relative overflow-hidden" style={{ animationDelay: `${delay}ms` }}>
       <div className="absolute right-3 top-3 z-10"><Hint text={tip} /></div>
-      <div className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 float-y"
+      <div className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0"
         style={{ background: `linear-gradient(145deg, ${color}, ${darken(color)})`, boxShadow: `0 5px 16px ${hexA(color, 0.5)}, inset 0 1.5px 1px rgba(255,255,255,0.5), inset 0 -2px 4px ${hexA(darken(color, 0.6), 0.5)}` }}>
         <Icon className="w-5 h-5 text-white" />
       </div>
@@ -845,18 +844,16 @@ function CreateForm({
                     )
                   }
                   return (
-                    <Tilt key={m.key} max={6}>
-                      <button onClick={() => { if (editId) return; set('type', m.key) }}
-                        className={cn('w-full flex items-center gap-3 p-3 rounded-2xl border text-left transition-all duration-200 neon',
-                          on ? 'bg-white neon-on' : 'border-line/60 hover:border-line hover:bg-white/60')}
-                        style={on ? { borderColor: m.color, boxShadow: `0 10px 26px ${hexA(m.color, 0.28)}, 0 0 0 3px ${hexA(m.color, 0.14)}, inset 0 1px 0 rgba(255,255,255,0.7)` } : undefined}>
-                        <TrigBadge meta={m} active={on} size={38} tip={false} />
-                        <span className="min-w-0">
-                          <span className="block font-medium text-[13px]">{m.label}</span>
-                          <span className="block text-[11px] text-subt">{m.desc}</span>
-                        </span>
-                      </button>
-                    </Tilt>
+                    <button key={m.key} onClick={() => { if (editId) return; set('type', m.key) }}
+                      className={cn('w-full flex items-center gap-3 p-3 rounded-2xl border text-left transition-all duration-200',
+                        on ? 'bg-white' : 'border-line/60 hover:border-line hover:bg-white/60')}
+                      style={on ? { borderColor: m.color, boxShadow: `0 8px 20px ${hexA(m.color, 0.18)}, inset 0 1px 0 rgba(255,255,255,0.7)` } : undefined}>
+                      <TrigBadge meta={m} active={on} size={38} tip={false} />
+                      <span className="min-w-0">
+                        <span className="block font-medium text-[13px]">{m.label}</span>
+                        <span className="block text-[11px] text-subt">{m.desc}</span>
+                      </span>
+                    </button>
                   )
                 })}
               </div>
@@ -878,9 +875,9 @@ function CreateForm({
                     return (
                       <Tooltip key={k} content={tip} className="flex">
                         <button onClick={() => set(k, !on)}
-                          className={cn('w-full flex flex-col items-center gap-1.5 py-2.5 rounded-2xl border transition-all duration-200 active:scale-95 neon',
-                            on ? 'bg-white -translate-y-0.5 neon-on' : 'border-line/60 text-subt hover:border-line hover:-translate-y-0.5')}
-                          style={on ? { borderColor: color, boxShadow: `0 6px 16px ${hexA(color, 0.3)}, 0 0 0 3px ${hexA(color, 0.12)}, inset 0 1px 0 rgba(255,255,255,0.7)` } : undefined}>
+                          className={cn('w-full flex flex-col items-center gap-1.5 py-2.5 rounded-2xl border transition-all duration-200 active:scale-95',
+                            on ? 'bg-white' : 'border-line/60 text-subt hover:border-line')}
+                          style={on ? { borderColor: color, boxShadow: `0 5px 14px ${hexA(color, 0.2)}, inset 0 1px 0 rgba(255,255,255,0.7)` } : undefined}>
                           <span className="rounded-xl flex items-center justify-center transition-transform" style={on ? { width: 30, height: 30, background: `linear-gradient(145deg, ${color}, ${darken(color)})`, boxShadow: `0 3px 9px ${hexA(color, 0.5)}, inset 0 1px 1px rgba(255,255,255,0.5)`, color: '#fff' } : { width: 30, height: 30 }}>
                             <Icon className="w-4 h-4" style={on ? undefined : { color: '#9ca3af' }} />
                           </span>
@@ -982,7 +979,7 @@ function CreateForm({
                 </button>
               )}
 
-              <Button className="w-full mt-1 sheen grad-anim bg-gradient-to-r from-brand via-[#9b66ff] to-brand text-white hover:brightness-105" onClick={save} disabled={!canSave || saving}>
+              <Button className="w-full mt-1 bg-gradient-to-r from-brand via-[#9b66ff] to-brand text-white hover:brightness-105" onClick={save} disabled={!canSave || saving}>
                 <Zap className="w-3.5 h-3.5" fill="white" />
                 {saving ? 'Сохранение…'
                   : selected.length === 0 ? 'Выберите аккаунты'
@@ -1249,39 +1246,39 @@ function CampaignCard({ trigger, onToggle, onEdit, onDelete, index = 0 }: {
         </button>
       </div>
 
-      {/* Панель «Триггер» — крупный блок: что запускает кампанию (без верхнего ярлыка) */}
-      <div className="rounded-2xl border p-3" style={{ borderColor: hexA(meta?.color ?? '#8e8e93', 0.35), background: hexA(meta?.color ?? '#8e8e93', 0.06) }}>
-        <div className="flex items-center gap-3">
-          {meta && (
-            <span className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0"
-              style={{ background: `linear-gradient(145deg, ${meta.color}, ${darken(meta.color)})`, boxShadow: `0 4px 12px ${hexA(meta.color, 0.4)}` }}>
-              <meta.Icon className="w-5 h-5 text-white" />
-            </span>
-          )}
-          <div className="min-w-0 flex-1">
-            <div className="text-[16px] font-semibold leading-tight truncate flex items-center gap-1">
-              {meta?.label ?? trigger.triggerType}
-              <Hint text="Событие, которое запускает кампанию (новая подписка / комментарий / лайк / сторис)." />
-            </div>
-            <div className="text-[11.5px] text-subt mt-0.5">сработал <span className="font-semibold text-ink tabular-nums">{firedTotal.toLocaleString('ru')}</span> раз</div>
-          </div>
+      {/* ── БЛОК «ТРИГГЕР» — что запускает кампанию (ярлык-шапка как у «ДЕЙСТВИЯ», без аватарки) ── */}
+      <div className="rounded-xl border overflow-hidden" style={{ borderColor: hexA(meta?.color ?? '#8e8e93', 0.3) }}>
+        <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider flex items-center gap-1"
+          style={{ background: hexA(meta?.color ?? '#8e8e93', 0.12), color: meta?.color ?? '#8e8e93' }}>
+          Триггер <Hint text="Событие, которое запускает кампанию (новая подписка / комментарий / лайк / сторис)." />
         </div>
-        {signal && (
-          <div className="mt-2">
-            <button onClick={() => signalExpandable && setOpenKey(signalOpen ? null : 'signal')}
-              className={cn('w-full flex items-center gap-1.5 text-[11.5px] text-subt px-2 py-1.5 rounded-lg text-left bg-white/60', signalExpandable && (signalOpen ? 'bg-white' : 'hover:bg-white'))}>
-              <Filter className="w-3.5 h-3.5 text-[#6a7df9] shrink-0" />
-              <span className="font-medium text-ink/70">Сигнал:</span> <span className="flex-1 truncate">{signal}</span>
-              {signalExpandable && <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', signalOpen && 'rotate-180')} />}
-            </button>
-            {signalOpen && (
-              <div className="text-[11.5px] text-subt bg-white/70 rounded-lg px-3 py-2.5 space-y-0.5 animate-fade-in mt-1">
-                <div className="font-medium text-ink/70">Реагирует на фразы{cond.exact ? ' (точное совпадение)' : ' (с опечатками)'}:</div>
-                <ul className="list-disc ml-4">{signalPhrases.map((p, i) => <li key={i}>{p}</li>)}</ul>
-              </div>
+        <div className="px-2.5 py-2">
+          <div className="flex items-center gap-2">
+            {meta && (
+              <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: hexA(meta.color, 0.12) }}>
+                <meta.Icon className="w-3 h-3" style={{ color: meta.color }} strokeWidth={2.4} />
+              </span>
             )}
+            <span className="text-[13px] font-semibold truncate flex-1 min-w-0">{meta?.label ?? trigger.triggerType}</span>
+            <span className="text-[11px] text-subt shrink-0">сработал <span className="font-semibold text-ink tabular-nums">{firedTotal.toLocaleString('ru')}</span> раз</span>
           </div>
-        )}
+          {signal && (
+            <div className="mt-2">
+              <button onClick={() => signalExpandable && setOpenKey(signalOpen ? null : 'signal')}
+                className={cn('w-full flex items-center gap-1.5 text-[11.5px] text-subt px-2 py-1.5 rounded-lg text-left bg-black/[0.03]', signalExpandable && (signalOpen ? 'bg-black/[0.05]' : 'hover:bg-black/[0.05]'))}>
+                <Filter className="w-3.5 h-3.5 text-[#6a7df9] shrink-0" />
+                <span className="font-medium text-ink/70">Сигнал:</span> <span className="flex-1 truncate">{signal}</span>
+                {signalExpandable && <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', signalOpen && 'rotate-180')} />}
+              </button>
+              {signalOpen && (
+                <div className="text-[11.5px] text-subt bg-black/[0.03] rounded-lg px-3 py-2.5 space-y-0.5 animate-fade-in mt-1">
+                  <div className="font-medium text-ink/70">Реагирует на фразы{cond.exact ? ' (точное совпадение)' : ' (с опечатками)'}:</div>
+                  <ul className="list-disc ml-4">{signalPhrases.map((p, i) => <li key={i}>{p}</li>)}</ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── БЛОК «ДЕЙСТВИЯ» — таблица: что делает + сработало/выполнено ── */}
@@ -1706,8 +1703,8 @@ function TriggersScreen() {
         </div>
       </div>
 
-      {/* Статистика черновых + баннер «нет черновых» — план §G4 */}
-      <DraftsStatus />
+      {/* Статистика черновых (без баннера — предупреждение живёт на вкладке «Аккаунты») */}
+      <DraftsStatus showBanner={false} />
 
       {/* Разделы/подразделы (папки) + фильтр — план §C2 */}
       <SectionBar sections={sections} selSection={selSection} selSub={selSub}

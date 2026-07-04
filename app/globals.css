@@ -127,59 +127,15 @@
 }
 .animate-tip { animation: tip-in 0.14s cubic-bezier(0.16, 1, 0.3, 1); }
 
-/* Пульсация свечения активных иконок */
-@keyframes pulse-glow {
-  0%, 100% { filter: brightness(1) saturate(1); }
-  50%      { filter: brightness(1.12) saturate(1.18); }
-}
-.pulse-glow { animation: pulse-glow 2.6s ease-in-out infinite; }
-
-/* Блик, бегущий по кнопке (как в играх) */
-@keyframes sheen {
-  0%   { transform: translateX(-130%) skewX(-18deg); }
-  60%, 100% { transform: translateX(260%) skewX(-18deg); }
-}
-.sheen { position: relative; overflow: hidden; }
-.sheen::after {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; bottom: 0;
-  width: 45%;
-  background: linear-gradient(100deg, transparent, rgba(255,255,255,0.55), transparent);
-  transform: translateX(-130%) skewX(-18deg);
-  pointer-events: none;
-}
-.sheen:hover::after { animation: sheen 0.9s ease; }
-
-/* Лёгкое всплывание */
-@keyframes float-y {
-  0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-5px); }
-}
-.float-y { animation: float-y 5s ease-in-out infinite; }
-
-/* Дрейф цветных орбов для живого фона */
-@keyframes drift-a {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33%      { transform: translate(8%, -6%) scale(1.12); }
-  66%      { transform: translate(-6%, 7%) scale(0.92); }
-}
-@keyframes drift-b {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33%      { transform: translate(-9%, 5%) scale(0.9); }
-  66%      { transform: translate(7%, -8%) scale(1.15); }
-}
-.orb { position: absolute; border-radius: 9999px; filter: blur(90px); will-change: transform; }
-
-/* Объёмная карточка с приподнятием и цветным свечением при наведении */
+/* Объёмная карточка с лёгким приподнятием и мягкой тенью при наведении */
 .card-3d {
   transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
               box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   will-change: transform;
 }
 .card-3d:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05), 0 18px 44px rgba(0,0,0,0.12);
+  transform: translateY(-3px);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05), 0 16px 40px rgba(0,0,0,0.10);
 }
 
 /* Глянцевый верхний блик на «стеклянных» поверхностях */
@@ -194,47 +150,15 @@
   pointer-events: none;
 }
 
-/* Каскадное появление */
+/* Каскадное появление (мягкое, оставляем) */
 @keyframes rise {
   from { opacity: 0; transform: translateY(16px) scale(0.97); }
   to   { opacity: 1; transform: none; }
 }
 .rise { animation: rise 0.55s cubic-bezier(0.16, 1, 0.3, 1) both; }
 
-/* Живой градиент (кнопки/текст) */
-@keyframes gradient-pan { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
-.grad-anim { background-size: 200% auto; animation: gradient-pan 3.5s linear infinite; }
-
-/* Вращающаяся неоновая рамка вокруг элемента (game-style) */
-@keyframes spin-border { to { transform: rotate(360deg); } }
-.neon { position: relative; }
-.neon::before {
-  content: '';
-  position: absolute;
-  inset: -1.5px;
-  border-radius: inherit;
-  padding: 1.5px;
-  background: conic-gradient(from 0deg, #663af1, #9b66ff, #6a7df9, #22d3ee, #663af1);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  opacity: 0;
-  transition: opacity 0.25s;
-  animation: spin-border 4s linear infinite;
-  pointer-events: none;
-}
-.neon-on::before { opacity: 1; }
-
-/* Пульсирующее кольцо-свечение */
-@keyframes halo {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(102,58,241,0.0); }
-  50%      { box-shadow: 0 0 22px 2px rgba(102,58,241,0.35); }
-}
-.halo { animation: halo 3s ease-in-out infinite; }
-
 @media (prefers-reduced-motion: reduce) {
-  .pulse-glow, .float-y, .sheen::after, .grad-anim, .neon::before, .halo, .rise { animation: none !important; }
-  .rise { opacity: 1 !important; transform: none !important; }
+  .rise { animation: none !important; opacity: 1 !important; transform: none !important; }
 }
 
 /* Slim, unobtrusive scrollbars */
