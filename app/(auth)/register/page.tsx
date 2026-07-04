@@ -32,6 +32,8 @@ export default function RegisterPage() {
         setLoading(false)
         return
       }
+      // Новый пользователь — показываем обучение (сбрасываем флаг прошлого показа в этом браузере)
+      try { localStorage.removeItem('rg-onboarded') } catch {}
       // Кука выставлена сервером — переходим в приложение
       router.push('/')
       router.refresh()

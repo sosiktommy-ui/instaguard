@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { Layers, AlertTriangle, X } from 'lucide-react'
+import { Layers, AlertTriangle, X, Search, Send, Heart } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -45,14 +45,22 @@ export function DraftsStatus({ showBanner = true }: { showBanner?: boolean }) {
           <div className="flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-warn shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
-              <div className="font-semibold text-[14px]">Нет черновых аккаунтов</div>
+              <div className="font-semibold text-[14px]">Нет черновых аккаунтов — автоматизация не работает</div>
               <div className="text-[13px] text-subt mt-1 leading-relaxed">
-                Без черновых парсинг подписчиков, комментариев и лайков не запускается — так основные аккаунты защищены от бана.
-                Добавьте черновой аккаунт или разрешите основным работать без черновых.
+                Черновые аккаунты «разведывают» события (кто подписался, кто оставил комментарий или лайк), а основной
+                аккаунт при этом не рискует баном. Пока нет ни одного чернового, <span className="text-ink font-medium">кампании не срабатывают вообще</span>:
               </div>
+              <ul className="text-[12.5px] text-subt mt-2 space-y-1">
+                <li className="flex items-start gap-2"><Search className="w-3.5 h-3.5 text-warn shrink-0 mt-0.5" /> не ищутся новые подписчики, комментарии и лайки — <span className="text-ink font-medium">триггеры не запускаются</span></li>
+                <li className="flex items-start gap-2"><Send className="w-3.5 h-3.5 text-warn shrink-0 mt-0.5" /> действие «Директ» новым подписчикам <span className="text-ink font-medium">не отправляется</span> (некому — событий нет)</li>
+                <li className="flex items-start gap-2"><Heart className="w-3.5 h-3.5 text-warn shrink-0 mt-0.5" /> действия «Лайк», «Подписка», «Ответ на сторис» <span className="text-ink font-medium">не выполняются</span></li>
+              </ul>
               <div className="flex flex-wrap gap-2 mt-3">
                 <Button size="sm" onClick={() => router.push('/drafts')}>Добавить черновой</Button>
-                <Button size="sm" variant="secondary" onClick={() => router.push('/settings')}>Всё равно использовать →</Button>
+                <Button size="sm" variant="secondary" onClick={() => router.push('/settings')}>Разрешить без черновых →</Button>
+              </div>
+              <div className="text-[11.5px] text-subt mt-2">
+                «Разрешить без черновых» — основной аккаунт сам начнёт «разведку» (выше риск бана). Включается в «Настройках».
               </div>
               <label className="flex items-center gap-2 mt-3 text-[12px] text-subt cursor-pointer">
                 <input type="checkbox" className="accent-brand" onChange={(e) => { if (e.target.checked) setDismissed(true) }} />
