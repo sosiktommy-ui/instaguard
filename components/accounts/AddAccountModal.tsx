@@ -5,6 +5,7 @@ import { X, AtSign, Lock, Globe, Loader2, FolderTree } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useStore } from '@/lib/store'
 import { cn } from '@/lib/utils'
+import { Hint } from '@/components/common/Hint'
 
 type AuthMode = 'password' | 'cookies'
 
@@ -127,6 +128,10 @@ export function AddAccountModal({ onClose, onAdded }: { onClose: () => void; onA
         </div>
 
         {/* Mode toggle */}
+        <div className="flex items-center gap-1.5 mb-2">
+          <span className="text-[11px] text-subt">Способ подключения</span>
+          <Hint text="Логин/Пароль — стандартный вход, Instagram может запросить подтверждение с нового IP. Куки — вход по уже действующей сессии браузера (sessionid), без пароля." />
+        </div>
         <div className="flex gap-1 p-1 bg-canvas rounded-2xl mb-5">
           {(['password', 'cookies'] as AuthMode[]).map((m) => (
             <button key={m} onClick={() => { setMode(m); setError('') }}

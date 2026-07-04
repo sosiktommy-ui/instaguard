@@ -9,7 +9,7 @@ const JWT_SECRET = new TextEncoder().encode(
 const INTERNAL_SECRET = process.env.INTERNAL_SECRET ?? 'instaguard-internal-cron'
 
 // Пути, доступные без входа
-const PUBLIC_PATHS = new Set<string>(['/login', '/register', '/api/auth/login', '/api/auth/register'])
+const PUBLIC_PATHS = new Set<string>(['/login', '/register', '/api/auth/login', '/api/auth/register', '/design-preview'])
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl

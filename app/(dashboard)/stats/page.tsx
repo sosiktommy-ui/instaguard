@@ -1,11 +1,14 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Users, Zap, Send, AlertCircle, Eye, CheckCircle2, Info, RefreshCw } from 'lucide-react'
+import { Users, Zap, Send, AlertCircle, Eye, CheckCircle2, Info, RefreshCw, BarChart3 } from 'lucide-react'
 import { formatFollowers } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { cn } from '@/lib/utils'
 import { readStat, ACTION_KEYS } from '@/lib/stats'
+import { PageHeader } from '@/components/common/PageHeader'
+import { StatCard } from '@/components/common/StatCard'
+import { TONE } from '@/lib/colors'
 
 interface DbAccount { id: string; username: string; status: string; errorCount?: number; followerCount?: number; followers?: number | null }
 interface DbTrigger { id: string; triggerType: string; isActive: boolean; fireCount?: number; stats?: any }
@@ -61,40 +64,30 @@ function Stats() {
   const topAccounts = [...accounts].sort((a, b) => followersOf(b) - followersOf(a)).slice(0, 5)
 
   const cards = [
-    { icon: Users, label: 'Аккаунтов', value: accounts.length, tone: 'bg-brand/10 text-brand' },
-    { icon: Eye, label: 'Подписчиков', value: formatFollowers(totalReach), tone: 'bg-[#6a7df9]/10 text-[#6a7df9]' },
-    { icon: Zap, label: 'Активных кампаний', value: activeCampaigns, tone: 'bg-warn/10 text-warn' },
-    { icon: Send, label: 'Сработало', value: totalRuns.toLocaleString('ru'), tone: 'bg-brand/10 text-brand' },
-    { icon: CheckCircle2, label: 'Выполнено действий', value: totalDone.toLocaleString('ru'), tone: 'bg-ok/10 text-ok' },
-    { icon: AlertCircle, label: 'Ошибок', value: totalErrors, tone: 'bg-bad/10 text-bad' },
+    { icon: Users, label: 'Аккаунтов', value: accounts.length, color: TONE.brand },
+    { icon: Eye, label: 'Подписчиков', value: formatFollowers(totalReach), color: TONE.alt, tip: 'Сумма подписчиков по всем аккаунтам (реальное число из Instagram, если известно, иначе — по последнему отслеженному значению).' },
+    { icon: Zap, label: 'Активных кампаний', value: activeCampaigns, color: TONE.warn, tip: 'Кампании со статусом «Вкл» прямо сейчас (из всех созданных, включая поставленные на паузу).' },
+    { icon: Send, label: 'Сработало', value: totalRuns, color: TONE.pink, tip: 'Сколько раз кампании поймали событие (новый подписчик/комментарий/лайк/сторис) — попыток, а не обязательно успешных действий.' },
+    { icon: CheckCircle2, label: 'Выполнено действий', value: totalDone, color: TONE.ok, tip: 'Сколько действий (DM, лайк, подписка, сторис, коммент) реально выполнилось. Может быть меньше «Сработало» — например, если личка закрыта или не прошла проверка подписки.' },
+    { icon: AlertCircle, label: 'Ошибок', value: totalErrors, color: TONE.bad, tip: 'Ошибки подряд по аккаунтам (сбрасываются при успешной проверке). Много ошибок — повод проверить прокси или сессию аккаунта.' },
   ]
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 data-tour="page" className="text-[26px] font-semibold tracking-tighter leading-none">Статистика</h1>
-          <p className="text-subt mt-1.5 text-[14px]">Сводка по всем аккаунтам и кампаниям</p>
-        </div>
+      <PageHeader icon={BarChart3} color={TONE.warn} title="Статистика" subtitle="Сводка по всем аккаунтам и кампаниям" tourId="page">
         <button onClick={load} className="p-2 text-subt hover:text-ink transition-colors" title="Обновить">
           <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
         </button>
-      </div>
+      </PageHeader>
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        {cards.map(({ icon: Icon, label, value, tone }) => (
-          <div key={label} className="card p-5">
-            <div className={cn('w-10 h-10 rounded-2xl flex items-center justify-center mb-3', tone)}>
-              <Icon className="w-5 h-5" />
-            </div>
-            <div className="text-[24px] font-semibold tracking-tighter leading-none">{value}</div>
-            <div className="text-[12px] text-subt mt-1.5">{label}</div>
-          </div>
+        {cards.map(({ icon, label, value, color, tip }, i) => (
+          <StatCard key={label} icon={icon} color={color} value={value} label={label} tip={tip} delay={i * 60} />
         ))}
       </div>
 
       <div className="grid lg:grid-cols-2 gap-5">
-        <div className="card p-6">
+        <div className="card card-3d gloss p-6">
           <div className="font-semibold text-[15px] mb-5">Срабатывания по типу кампании</div>
           <div className="space-y-4">
             {byType.map((b) => (
@@ -112,7 +105,7 @@ function Stats() {
           </div>
         </div>
 
-        <div className="card p-6">
+        <div className="card card-3d gloss p-6">
           <div className="font-semibold text-[15px] mb-5">Топ аккаунтов по подписчикам</div>
           <div className="space-y-3">
             {topAccounts.map((a, i) => (
@@ -130,7 +123,7 @@ function Stats() {
         </div>
       </div>
 
-      <div className="card p-6">
+      <div className="card card-3d gloss p-6">
         <div className="font-semibold text-[15px] mb-4">Журнал событий</div>
         <div className="space-y-1">
           {logs.length === 0 && <div className="py-6 text-center text-subt text-[13px]">Пусто</div>}

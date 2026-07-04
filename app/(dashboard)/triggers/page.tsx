@@ -6,7 +6,7 @@ import {
   Heart, MessageCircle, UserPlus, Clapperboard, RefreshCw,
   Plus, ChevronDown, ChevronUp, ToggleLeft, ToggleRight,
   Link2, Bookmark, FileText, X, UserCheck, Eye,
-  Image as ImageIcon, Sparkles, HelpCircle, ChevronRight, ArrowLeft, Settings, Power, PauseCircle,
+  Image as ImageIcon, Sparkles, ChevronRight, ArrowLeft, Settings, Power, PauseCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/Tooltip'
@@ -20,15 +20,7 @@ import { useBreadcrumbs } from '@/lib/breadcrumbs'
 import { cn } from '@/lib/utils'
 import { readStat } from '@/lib/stats'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
-
-// Маленькая «?»-подсказка
-function Hint({ text }: { text: string }) {
-  return (
-    <Tooltip content={text}>
-      <HelpCircle className="w-3.5 h-3.5 text-subt/60 hover:text-brand transition-colors cursor-help" />
-    </Tooltip>
-  )
-}
+import { Hint } from '@/components/common/Hint'
 
 // ── Метаданные типов триггеров (цвет, иконка, подпись) ────────────────────────
 const TRIG_META = [

@@ -1,20 +1,22 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { ShieldAlert, Layers, Globe, GraduationCap, Play, ChevronDown, List, Users, BarChart3, Settings as SettingsIcon } from 'lucide-react'
+import { ShieldAlert, Layers, Globe, ChevronDown, List, Users, BarChart3, Settings as SettingsIcon, HelpCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import ClientOnly from '@/components/common/ClientOnly'
-import { ReactiveMascot } from '@/components/common/ReactiveMascot'
+import { PageHeader } from '@/components/common/PageHeader'
+import { IconTile } from '@/components/common/IconTile'
+import { TONE } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 
 // Краткая справка по разделам приложения (раскрывается в «Настройках»)
-const HELP: { icon: any; title: string; text: string }[] = [
-  { icon: List, title: 'Рекламные кампании (главная)', text: 'Здесь создаются кампании: выбираете аккаунт → событие (новая подписка, комментарий, лайк, сторис) → действия (директ, лайк, подписка, сторис) и текст. Ниже — список аккаунтов, папки-разделы для фильтра и сводка.' },
-  { icon: Users, title: 'Аккаунты', text: 'Подключённые Instagram-аккаунты: статус, дневная загрузка лимитов, «Индекс безопасности» (риск бана), смена раздела и прокси, детальная статистика по каждому.' },
-  { icon: Layers, title: 'Черновые аккаунты', text: 'Аккаунты-«разведчики». Они парсят подписчиков, комментарии и лайки, чтобы основной аккаунт не рисковал баном. Без хотя бы одного чернового автоматизация не запускается.' },
-  { icon: Globe, title: 'Прокси', text: 'Пуловые прокси (бот сам раздаёт их аккаунтам в режиме «Авто») и уникальные (закреплены за одним аккаунтом). Здесь же — лимит «аккаунтов на один прокси».' },
-  { icon: BarChart3, title: 'Статистика', text: 'Сводные цифры по всем аккаунтам и кампаниям: срабатывания, выполненные действия, прирост подписчиков.' },
-  { icon: SettingsIcon, title: 'Настройки', text: 'Тумблеры «работать без прокси» и «без черновых», лимит аккаунтов на прокси, а также запуск этого обучения.' },
+const HELP: { icon: any; color: string; title: string; text: string }[] = [
+  { icon: List, color: TONE.brand, title: 'Рекламные кампании (главная)', text: 'Здесь создаются кампании: выбираете аккаунт → событие (новая подписка, комментарий, лайк, сторис) → действия (директ, лайк, подписка, сторис) и текст. Ниже — список аккаунтов, папки-разделы для фильтра и сводка.' },
+  { icon: Users, color: TONE.alt, title: 'Аккаунты', text: 'Подключённые Instagram-аккаунты: статус, дневная загрузка лимитов, «Индекс безопасности» (риск бана), смена раздела и прокси, детальная статистика по каждому.' },
+  { icon: Layers, color: TONE.pink, title: 'Черновые аккаунты', text: 'Аккаунты-«разведчики». Они парсят подписчиков, комментарии и лайки, чтобы основной аккаунт не рисковал баном. Без хотя бы одного чернового автоматизация не запускается.' },
+  { icon: Globe, color: TONE.ok, title: 'Прокси', text: 'Пуловые прокси (бот сам раздаёт их аккаунтам в режиме «Авто») и уникальные (закреплены за одним аккаунтом). Здесь же — лимит «аккаунтов на один прокси».' },
+  { icon: BarChart3, color: TONE.warn, title: 'Статистика', text: 'Сводные цифры по всем аккаунтам и кампаниям: срабатывания, выполненные действия, прирост подписчиков.' },
+  { icon: SettingsIcon, color: TONE.brand, title: 'Настройки', text: 'Тумблеры «работать без прокси» и «без черновых», а также лимит аккаунтов на один прокси.' },
 ]
 
 interface Settings { accountsPerProxy: number; allowNoProxy: boolean; allowNoDrafts: boolean }
@@ -39,12 +41,6 @@ function SettingsScreen() {
   const [openHelp, setOpenHelp] = useState<number | null>(null)
   const [showHelp, setShowHelp] = useState(false)   // весь блок «Что где находится» — свёрнут по умолчанию
 
-  // Запустить интерактивное обучение заново (сброс флага + переход на главную)
-  const startTour = () => {
-    try { localStorage.removeItem('rg-onboarded') } catch {}
-    window.location.assign('/triggers')
-  }
-
   const load = useCallback(async () => {
     try { const r = await fetch('/api/settings'); if (r.ok) { const d = await r.json(); setS(d); setCapInput(String(d.accountsPerProxy ?? 3)) } } catch {}
   }, [])
@@ -59,60 +55,16 @@ function SettingsScreen() {
     } catch { setMsg('Ошибка сети') }
   }
 
-  const rowCls = 'card p-5 flex items-start gap-4'
+  const rowCls = 'card card-3d gloss p-5 flex items-start gap-4'
 
   return (
     <div className="space-y-6 max-w-2xl">
-      <div>
-        <h1 data-tour="page" className="text-[26px] font-semibold tracking-tighter leading-none">Настройки</h1>
-        <p className="text-subt mt-1.5 text-[14px]">Правила безопасности и автоматизации аккаунтов</p>
-      </div>
+      <PageHeader icon={SettingsIcon} color={TONE.brand} title="Настройки" subtitle="Правила безопасности и автоматизации аккаунтов" tourId="page" />
 
       {msg && <div className="text-[13px] text-subt bg-canvas rounded-2xl px-4 py-3">{msg}</div>}
 
-      {/* Обучение и справка по разделам */}
-      <div className="card p-5">
-        <div className="flex items-start gap-4">
-          <ReactiveMascot size={64} className="shrink-0 -mt-1" />
-          <div className="flex-1 min-w-0">
-            <div className="font-semibold text-[15px]">Обучение и справка</div>
-            <div className="text-[13px] text-subt mt-1 leading-relaxed">
-              Пройдите интерактивный тур с Reactive — он проведёт по всем экранам и покажет, что где находится.
-              Или раскройте краткое описание любого раздела ниже.
-            </div>
-            <Button className="mt-3" onClick={startTour}><Play className="w-4 h-4" /> Пройти обучение</Button>
-          </div>
-        </div>
-
-        <div className="mt-4 pt-4 border-t border-black/[0.06]">
-          <button onClick={() => setShowHelp((v) => !v)}
-            className="w-full flex items-center gap-2 text-left hover:opacity-80 transition-opacity">
-            <span className="flex-1 text-[12px] font-semibold text-subt uppercase tracking-wider">Что где находится</span>
-            <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', showHelp && 'rotate-180')} />
-          </button>
-          {showHelp && (
-            <div className="mt-2 space-y-1.5 animate-fade-in">
-              {HELP.map((h, idx) => {
-                const open = openHelp === idx
-                return (
-                  <div key={idx} className="rounded-2xl bg-canvas overflow-hidden">
-                    <button onClick={() => setOpenHelp(open ? null : idx)}
-                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-black/[0.02] transition-colors">
-                      <span className="w-7 h-7 rounded-xl bg-brand/10 flex items-center justify-center shrink-0"><h.icon className="w-3.5 h-3.5 text-brand" /></span>
-                      <span className="flex-1 text-[13.5px] font-medium">{h.title}</span>
-                      <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', open && 'rotate-180')} />
-                    </button>
-                    {open && <div className="px-3.5 pb-3 pl-[52px] text-[12.5px] text-subt leading-relaxed animate-fade-in">{h.text}</div>}
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-
       <div className={rowCls}>
-        <div className="w-10 h-10 rounded-2xl bg-warn/10 text-warn flex items-center justify-center shrink-0"><ShieldAlert className="w-5 h-5" /></div>
+        <IconTile icon={ShieldAlert} color={TONE.warn} size={40} />
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-[15px]">Работать без прокси</div>
           <div className="text-[13px] text-subt mt-1 leading-relaxed">
@@ -124,7 +76,7 @@ function SettingsScreen() {
       </div>
 
       <div className={rowCls}>
-        <div className="w-10 h-10 rounded-2xl bg-brand/10 text-brand flex items-center justify-center shrink-0"><Layers className="w-5 h-5" /></div>
+        <IconTile icon={Layers} color={TONE.brand} size={40} />
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-[15px]">Работать без черновых аккаунтов</div>
           <div className="text-[13px] text-subt mt-1 leading-relaxed">
@@ -136,7 +88,7 @@ function SettingsScreen() {
       </div>
 
       <div className={rowCls}>
-        <div className="w-10 h-10 rounded-2xl bg-ok/10 text-ok flex items-center justify-center shrink-0"><Globe className="w-5 h-5" /></div>
+        <IconTile icon={Globe} color={TONE.ok} size={40} />
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-[15px]">Аккаунтов на один прокси</div>
           <div className="text-[13px] text-subt mt-1 leading-relaxed">
@@ -149,6 +101,37 @@ function SettingsScreen() {
             className="field w-20 py-2 text-[14px] text-center" />
           <Button variant="secondary" onClick={() => patch({ accountsPerProxy: Math.max(1, Math.min(100, Math.round(Number(capInput) || s.accountsPerProxy))) })}>Сохранить</Button>
         </div>
+      </div>
+
+      {/* Справка по разделам — что где находится */}
+      <div className="card card-3d gloss p-5">
+        <button onClick={() => setShowHelp((v) => !v)}
+          className="w-full flex items-center gap-3.5 text-left">
+          <IconTile icon={HelpCircle} color={TONE.alt} size={40} />
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-[15px]">Что где находится</div>
+            <div className="text-[13px] text-subt mt-0.5">Краткое описание каждого раздела приложения</div>
+          </div>
+          <ChevronDown className={cn('w-5 h-5 text-subt shrink-0 transition-transform', showHelp && 'rotate-180')} />
+        </button>
+        {showHelp && (
+          <div className="mt-4 pt-4 border-t border-black/[0.06] space-y-1.5 animate-fade-in">
+            {HELP.map((h, idx) => {
+              const open = openHelp === idx
+              return (
+                <div key={idx} className="rounded-2xl bg-canvas overflow-hidden">
+                  <button onClick={() => setOpenHelp(open ? null : idx)}
+                    className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-black/[0.02] transition-colors">
+                    <IconTile icon={h.icon} color={h.color} size={30} />
+                    <span className="flex-1 text-[13.5px] font-medium">{h.title}</span>
+                    <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', open && 'rotate-180')} />
+                  </button>
+                  {open && <div className="px-3.5 pb-3 pl-[54px] text-[12.5px] text-subt leading-relaxed animate-fade-in">{h.text}</div>}
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
     </div>
   )

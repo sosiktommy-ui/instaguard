@@ -1,11 +1,15 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Trash2, Globe, Zap, ShieldCheck, Loader2, AlertTriangle, Link2, X, AtSign, Lock, RotateCcw, Pencil, Check } from 'lucide-react'
+import { Plus, Trash2, Globe, Zap, ShieldCheck, Loader2, AlertTriangle, Link2, X, AtSign, Lock, RotateCcw, Pencil, Check, Layers } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import ClientOnly from '@/components/common/ClientOnly'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { Hint } from '@/components/common/Hint'
+import { PageHeader } from '@/components/common/PageHeader'
+import { IconTile } from '@/components/common/IconTile'
+import { TONE } from '@/lib/colors'
 
 interface HelperAccount {
   id: string
@@ -65,6 +69,10 @@ function AddHelperModal({ onClose, onAdded }: { onClose: () => void; onAdded: ()
         </div>
 
         {/* Mode toggle — куки первые */}
+        <div className="flex items-center gap-1.5 mb-2">
+          <span className="text-[11px] text-subt">Способ подключения</span>
+          <Hint text="Куки — вход без пароля по уже действующей сессии браузера, реже вызывает проверку/бан у Instagram. Логин/пароль надёжен, но выше риск запроса подтверждения входа." />
+        </div>
         <div className="flex gap-1 p-1 bg-canvas rounded-2xl mb-5">
           {(['cookies', 'password'] as AuthMode[]).map((m) => (
             <button key={m} onClick={() => { setMode(m); setError('') }}
@@ -189,25 +197,15 @@ function Drafts() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 data-tour="page" className="text-[26px] font-semibold tracking-tighter leading-none">Черновые аккаунты</h1>
-            </div>
-            <p className="text-subt mt-1 text-[14px]">Парсят подписчиков — основные только отправляют</p>
-          </div>
-        </div>
+      <PageHeader icon={Layers} color={TONE.alt} title="Черновые аккаунты" subtitle="Парсят подписчиков — основные только отправляют" tourId="page">
         <Button onClick={() => setShowAdd(true)}><Plus className="w-4 h-4" /> Добавить</Button>
-      </div>
+      </PageHeader>
 
       {msg && <div className="text-[13px] text-subt bg-canvas rounded-2xl px-4 py-3">{msg}</div>}
 
       {accounts.length === 0 ? (
-        <div className="card p-14 text-center flex flex-col items-center">
-          <div className="w-14 h-14 rounded-3xl bg-[#6a7df9]/10 flex items-center justify-center mb-4">
-            <Zap className="w-7 h-7 text-[#6a7df9]" />
-          </div>
+        <div className="card card-3d gloss p-14 text-center flex flex-col items-center">
+          <IconTile icon={Zap} color={TONE.alt} size={56} className="mb-4 rounded-3xl" />
           <h3 className="text-[18px] font-semibold tracking-tight">Нет черновых аккаунтов</h3>
           <p className="text-subt text-[13px] mt-1.5 max-w-xs">
             Черновые аккаунты парсят подписчиков и комментарии — основные аккаунты остаются чистыми.
@@ -217,7 +215,7 @@ function Drafts() {
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {accounts.map((a) => (
-            <div key={a.id} className="card p-5 relative overflow-hidden">
+            <div key={a.id} className="card card-3d gloss p-5 relative overflow-hidden">
               <div className="absolute -top-10 -right-10 w-32 h-32 rounded-full bg-[#6a7df9]/10 blur-2xl pointer-events-none" />
               <div className="flex items-start justify-between relative">
                 <div className="flex items-center gap-3">
@@ -269,6 +267,7 @@ function Drafts() {
 
               <div className="flex gap-2 mt-4 pt-4 border-t border-black/[0.05] relative">
                 <button onClick={() => handleResetSnapshot(a.id)}
+                  title="Сбросить снапшот — при следующем парсинге все подписчики/комментарии снова будут считаться новыми"
                   className="flex items-center gap-1.5 text-[12px] text-subt hover:text-ink transition-colors px-2">
                   <RotateCcw className="w-3.5 h-3.5" /> Сбросить
                 </button>

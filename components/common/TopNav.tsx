@@ -3,9 +3,10 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LogOut, Menu, X, List, Users, Layers, BarChart3, Globe, Settings, GraduationCap } from 'lucide-react'
+import { LogOut, Menu, X, List, Users, Layers, BarChart3, Globe, Settings } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AppLogo } from '@/components/common/AppLogo'
+import { ReactiveMascot } from '@/components/common/ReactiveMascot'
 import { useBreadcrumbs } from '@/lib/breadcrumbs'
 
 // Единственный уровень навигации — разделы приложения (супертаб-переключатель «режимов» убран)
@@ -130,8 +131,9 @@ export default function TopNav() {
             </nav>
             <div className="mt-auto p-3 border-t border-black/[0.06] space-y-1">
               <button onClick={replayTour}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[15px] font-medium text-subt hover:bg-black/[0.04] hover:text-brand transition-all">
-                <GraduationCap className="w-[18px] h-[18px]" /> Обучение Reactive
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[15px] font-medium text-subt hover:bg-brand/[0.06] hover:text-brand transition-all">
+                <ReactiveMascot size={30} animated={false} className="shrink-0 -my-0.5" />
+                <span className="flex-1 text-left">Обучение Reactive</span>
               </button>
               <button onClick={handleLogout}
                 className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[15px] font-medium text-subt hover:bg-black/[0.04] hover:text-bad transition-all">

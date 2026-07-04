@@ -14,6 +14,10 @@ import ClientOnly from '@/components/common/ClientOnly'
 import { cn } from '@/lib/utils'
 import { readStat, ACTION_KEYS } from '@/lib/stats'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { Hint } from '@/components/common/Hint'
+import { PageHeader } from '@/components/common/PageHeader'
+import { IconTile } from '@/components/common/IconTile'
+import { TONE } from '@/lib/colors'
 
 interface RealAccount {
   id: string
@@ -176,10 +180,11 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], onChanged, onCl
   })
   const aggEntries = Object.keys(ACT_META).filter((k) => (aggFired[k] ?? 0) > 0)
 
-  const tile = (icon: any, val: string | number, label: string, color: string) => {
+  const tile = (icon: any, val: string | number, label: string, color: string, tip?: string) => {
     const Icon = icon
     return (
-      <div className="rounded-2xl bg-canvas p-3.5 text-center">
+      <div className="rounded-2xl bg-canvas p-3.5 text-center relative">
+        {tip && <div className="absolute right-2 top-2"><Hint text={tip} /></div>}
         <div className="flex items-center justify-center gap-1.5 text-[18px] font-semibold tabular-nums">
           <Icon className="w-4 h-4" style={{ color }} />{val}
         </div>
@@ -221,8 +226,8 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], onChanged, onCl
           {/* Ключевые цифры */}
           <div className="grid grid-cols-3 gap-3">
             {tile(Users, formatFollowers(ra?.followers ?? ra?.followerCount ?? acc.followers ?? 0), 'подписчики', '#8e8e93')}
-            {tile(Zap, `${activeCount}/${campaigns.length}`, 'кампаний активно', '#663af1')}
-            {tile(Send, totalFires.toLocaleString('ru'), 'срабатываний', '#34c759')}
+            {tile(Zap, `${activeCount}/${campaigns.length}`, 'кампаний активно', '#663af1', 'Слева — сколько кампаний сейчас включено, справа — сколько всего создано на этом аккаунте (включая поставленные на паузу).')}
+            {tile(Send, totalFires.toLocaleString('ru'), 'срабатываний', '#34c759', 'Сколько раз кампании этого аккаунта поймали событие. Это попытки — не то же самое, что реально выполненные действия (см. ниже, «выполнено / сработало»).')}
           </div>
 
           {/* Раздел / подраздел (папка) — редактирование, план §C2 */}
@@ -501,19 +506,13 @@ function Accounts() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-start">
-        <div>
-          <h1 className="text-[26px] font-semibold tracking-tighter leading-none">Основные аккаунты</h1>
-          <p className="text-subt mt-1.5 text-[14px]">Аккаунты подключены через Instagram API</p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={handlePoll} disabled={polling}>
-            {polling ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-            {polling ? 'Проверка…' : 'Проверить подписчиков'}
-          </Button>
-          <Button onClick={() => setShowAdd(true)}><Plus className="w-4 h-4" /> Добавить</Button>
-        </div>
-      </div>
+      <PageHeader icon={Users} color={TONE.brand} title="Основные аккаунты" subtitle="Аккаунты подключены через Instagram API">
+        <Button variant="secondary" onClick={handlePoll} disabled={polling}>
+          {polling ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+          {polling ? 'Проверка…' : 'Проверить подписчиков'}
+        </Button>
+        <Button onClick={() => setShowAdd(true)}><Plus className="w-4 h-4" /> Добавить</Button>
+      </PageHeader>
 
       {pollMsg && (
         <div className="text-[13px] text-subt bg-canvas rounded-2xl px-4 py-3">{pollMsg}</div>
@@ -528,10 +527,8 @@ function Accounts() {
       )}
 
       {mergedAccounts.length === 0 && realAccounts.length === 0 ? (
-        <div className="card p-16 text-center flex flex-col items-center">
-          <div className="w-16 h-16 rounded-3xl bg-brand/10 flex items-center justify-center mb-5">
-            <UserPlus className="w-8 h-8 text-brand" />
-          </div>
+        <div className="card card-3d gloss p-16 text-center flex flex-col items-center">
+          <IconTile icon={UserPlus} color={TONE.brand} size={64} className="mb-5 rounded-3xl" />
           <h3 className="text-[19px] font-semibold tracking-tight">Добавьте первый аккаунт</h3>
           <p className="text-subt text-[14px] mt-1.5 max-w-sm">
             Введите логин и пароль Instagram — бот авторизуется и начнёт отслеживать подписчиков.
@@ -547,7 +544,7 @@ function Accounts() {
             const isLoading = loadingIds.has(ra?.id ?? '')
             return (
               <Tilt key={acc.id}>
-                <div className="card p-5 relative overflow-hidden">
+                <div className="card card-3d gloss p-5 relative overflow-hidden">
                   <div className="absolute -top-10 -right-10 w-32 h-32 rounded-full bg-gradient-to-br from-brand/10 to-transparent blur-2xl pointer-events-none" />
                   <div onClick={() => setDetail({ acc, ra })} className="group cursor-pointer rounded-2xl -m-1 p-1 hover:bg-black/[0.015] transition-colors" title="Открыть подробности аккаунта">
                   <div className="flex items-start justify-between relative">

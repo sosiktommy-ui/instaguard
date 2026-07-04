@@ -5,6 +5,11 @@ import { Globe, Plus, Trash2, RefreshCw, Info, Users, ChevronDown, ChevronUp, Sl
 import { Button } from '@/components/ui/button'
 import ClientOnly from '@/components/common/ClientOnly'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { Hint } from '@/components/common/Hint'
+import { PageHeader } from '@/components/common/PageHeader'
+import { StatCard } from '@/components/common/StatCard'
+import { IconTile } from '@/components/common/IconTile'
+import { TONE } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 
 interface AccRef { username: string; role: string; status: string }
@@ -80,14 +85,15 @@ function Proxies() {
   )
 
   const proxyRow = (p: ProxyItem, showCap: boolean) => (
-    <div key={p.id} className="card p-4">
+    <div key={p.id} className="card card-3d gloss p-4">
       <div className="flex items-center gap-3">
-        <div className="w-9 h-9 rounded-2xl bg-brand/10 flex items-center justify-center shrink-0"><Globe className="w-4 h-4 text-brand" /></div>
+        <IconTile icon={Globe} color={TONE.brand} size={36} />
         <div className="flex-1 min-w-0">
           <div className="font-mono text-[13px] truncate">{p.url}</div>
           <div className="text-[11px] text-subt mt-0.5 flex items-center gap-1">
             <Users className="w-3 h-3" />
             привязано: <span className={cn('font-semibold tabular-nums', showCap ? usageColor(p.accountCount) : 'text-ink')}>{p.accountCount}{showCap ? `/${cap}` : ''}</span>
+            {showCap && <Hint text="Сколько аккаунтов уже на этом прокси / лимит из настройки «Аккаунтов на один пуловый прокси». Зелёный — есть место, жёлтый — почти заполнен, красный — лимит достигнут, новые аккаунты пойдут на другой прокси." />}
           </div>
         </div>
         <button onClick={() => setPendingDel(p)} className="text-subt hover:text-bad p-2 shrink-0" title="Удалить прокси"><Trash2 className="w-4 h-4" /></button>
@@ -98,37 +104,25 @@ function Proxies() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 data-tour="page" className="text-[26px] font-semibold tracking-tighter leading-none">Прокси</h1>
-          <p className="text-subt mt-1.5 text-[14px]">Пуловые (общие, авто-привязка) и уникальные (для одного аккаунта)</p>
-        </div>
+      <PageHeader icon={Globe} color={TONE.brand} title="Прокси" subtitle="Пуловые (общие, авто-привязка) и уникальные (для одного аккаунта)" tourId="page">
         <button onClick={load} className="p-2 text-subt hover:text-ink transition-colors" title="Обновить">
           <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
         </button>
-      </div>
+      </PageHeader>
 
       {/* Сводка */}
       <div className="grid grid-cols-3 gap-3">
         {[
-          { icon: Layers, label: 'Пуловые', value: pool.length, color: '#663af1' },
-          { icon: Link2, label: 'Уникальные', value: individual.length, color: '#6a7df9' },
-          { icon: Globe, label: 'Свободно в пуле', value: poolFree, color: '#34c759' },
-        ].map((s) => (
-          <div key={s.label} className="card px-4 py-3.5 flex items-center gap-3">
-            <div className="w-9 h-9 rounded-2xl flex items-center justify-center shrink-0" style={{ background: `${s.color}1a` }}>
-              <s.icon className="w-4 h-4" style={{ color: s.color }} />
-            </div>
-            <div>
-              <div className="text-[20px] font-semibold tracking-tighter leading-none tabular-nums">{s.value}</div>
-              <div className="text-[11.5px] text-subt mt-0.5">{s.label}</div>
-            </div>
-          </div>
+          { icon: Layers, label: 'Пуловые', value: pool.length, color: TONE.brand, tip: 'Общие прокси — бот сам раздаёт их аккаунтам в режиме «Авто», по несколько аккаунтов на один.' },
+          { icon: Link2, label: 'Уникальные', value: individual.length, color: TONE.alt, tip: 'Прокси, закреплённые вручную за одним конкретным аккаунтом.' },
+          { icon: Globe, label: 'Свободно в пуле', value: poolFree, color: TONE.ok, tip: 'Сколько пуловых прокси ещё не достигли лимита «Аккаунтов на один прокси» и могут принять новый аккаунт в режиме «Авто».' },
+        ].map((s, i) => (
+          <StatCard key={s.label} icon={s.icon} color={s.color} value={s.value} label={s.label} tip={s.tip} delay={i * 60} />
         ))}
       </div>
 
       {/* Подробное описание */}
-      <div className="card p-4 flex gap-3 text-[13px] text-subt leading-relaxed">
+      <div className="card card-3d gloss p-4 flex gap-3 text-[13px] text-subt leading-relaxed">
         <Info className="w-4 h-4 text-brand shrink-0 mt-0.5" />
         <div className="space-y-1">
           <div><span className="text-ink font-medium">Пуловый прокси</span> — общий: при добавлении аккаунта в режиме «Авто» бот сам берёт из пула свободный (у которого меньше аккаунтов, чем задано). Один прокси может обслуживать несколько аккаунтов.</div>
