@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Globe, Plus, Trash2, RefreshCw, Info, Users } from 'lucide-react'
+import { Globe, Plus, Trash2, RefreshCw, Info, Users, ChevronDown, ChevronUp, Sliders, Layers, Link2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import ClientOnly from '@/components/common/ClientOnly'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
@@ -21,6 +21,8 @@ function Proxies() {
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState('')
   const [pendingDel, setPendingDel] = useState<ProxyItem | null>(null)
+  const [addOpen, setAddOpen] = useState(false)   // блок «Добавить в пул» — свёрнут
+  const [capOpen, setCapOpen] = useState(false)   // настройка «аккаунтов на прокси» — свёрнута
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -95,7 +97,7 @@ function Proxies() {
   )
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-[26px] font-semibold tracking-tighter leading-none">Прокси</h1>
@@ -106,11 +108,30 @@ function Proxies() {
         </button>
       </div>
 
+      {/* Сводка */}
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          { icon: Layers, label: 'Пуловые', value: pool.length, color: '#663af1' },
+          { icon: Link2, label: 'Уникальные', value: individual.length, color: '#6a7df9' },
+          { icon: Globe, label: 'Свободно в пуле', value: poolFree, color: '#34c759' },
+        ].map((s) => (
+          <div key={s.label} className="card px-4 py-3.5 flex items-center gap-3">
+            <div className="w-9 h-9 rounded-2xl flex items-center justify-center shrink-0" style={{ background: `${s.color}1a` }}>
+              <s.icon className="w-4 h-4" style={{ color: s.color }} />
+            </div>
+            <div>
+              <div className="text-[20px] font-semibold tracking-tighter leading-none tabular-nums">{s.value}</div>
+              <div className="text-[11.5px] text-subt mt-0.5">{s.label}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
       {/* Подробное описание */}
       <div className="card p-4 flex gap-3 text-[13px] text-subt leading-relaxed">
         <Info className="w-4 h-4 text-brand shrink-0 mt-0.5" />
         <div className="space-y-1">
-          <div><span className="text-ink font-medium">Пуловый прокси</span> — общий: при добавлении аккаунта в режиме «Авто» бот сам берёт из пула свободный (у которого меньше аккаунтов, чем задано ниже). Один прокси может обслуживать несколько аккаунтов.</div>
+          <div><span className="text-ink font-medium">Пуловый прокси</span> — общий: при добавлении аккаунта в режиме «Авто» бот сам берёт из пула свободный (у которого меньше аккаунтов, чем задано). Один прокси может обслуживать несколько аккаунтов.</div>
           <div><span className="text-ink font-medium">Уникальный прокси</span> — вводится вручную при добавлении аккаунта и закреплён только за ним.</div>
           <div>У каждого прокси показаны привязанные аккаунты: <span className="text-ok font-medium">●</span> статус и роль — <span className="text-brand font-medium">основной</span> (шлёт действия) или <span className="text-[#6a7df9] font-medium">черновой</span> (парсит).</div>
         </div>
@@ -118,26 +139,31 @@ function Proxies() {
 
       {msg && <div className="text-[13px] text-subt bg-canvas rounded-2xl px-4 py-3">{msg}</div>}
 
-      {/* Настройка «аккаунтов на прокси» */}
-      <div className="card p-5">
-        <div className="text-[15px] font-semibold mb-1">Аккаунтов на один пуловый прокси</div>
-        <div className="text-[12px] text-subt mb-3">Сколько аккаунтов авто-режим повесит на один прокси, прежде чем взять следующий. То же значение есть в «Настройках».</div>
-        <div className="flex items-center gap-2">
-          <input type="number" min={1} max={100} value={capInput} onChange={(e) => setCapInput(e.target.value)} className="field w-24 py-2 text-[14px] text-center" />
-          <Button variant="secondary" onClick={saveCap}>Сохранить</Button>
-          <span className="text-[12px] text-subt ml-2">Свободных в пуле: <span className="font-semibold text-ink tabular-nums">{poolFree}</span></span>
-        </div>
-      </div>
-
-      {/* Добавление пуловых прокси */}
-      <div className="card p-5">
-        <div className="text-[15px] font-semibold mb-1">Добавить прокси в пул</div>
-        <div className="text-[12px] text-subt mb-3">По одному на строку. Форматы: <code className="font-mono">user:pass@host:port</code> или <code className="font-mono">http://user:pass@host:port</code>.</div>
-        <textarea value={addVal} onChange={(e) => setAddVal(e.target.value)} rows={3}
-          className="field font-mono text-[12px] resize-none leading-relaxed" placeholder={'user:pass@host:port\nuser2:pass2@host2:port2'} />
-        <div className="flex justify-end mt-3">
-          <Button onClick={addProxy} disabled={!addVal.trim()}><Plus className="w-4 h-4" /> Добавить в пул</Button>
-        </div>
+      {/* Добавление пуловых прокси — свёрнутый блок с «+» (как «Создать кампанию») */}
+      <div className="card overflow-hidden">
+        <button onClick={() => setAddOpen((v) => !v)} className="w-full flex items-center justify-between px-5 py-4 hover:bg-black/[0.02] transition-colors">
+          <div className="flex items-center gap-3 text-left">
+            <div className="w-8 h-8 rounded-xl bg-brand/10 flex items-center justify-center shrink-0"><Plus className="w-4 h-4 text-brand" /></div>
+            <div>
+              <span className="font-semibold text-[15px] block">Добавить прокси в пул</span>
+              <span className="text-[12px] text-subt">Общие прокси для авто-привязки к аккаунтам</span>
+            </div>
+          </div>
+          <span className="flex items-center gap-2 shrink-0">
+            {!addOpen && <span className="hidden sm:inline text-[12px] font-medium text-brand">Нажмите, чтобы добавить</span>}
+            {addOpen ? <ChevronUp className="w-4 h-4 text-subt" /> : <ChevronDown className="w-4 h-4 text-brand" />}
+          </span>
+        </button>
+        {addOpen && (
+          <div className="border-t border-black/[0.05] p-5">
+            <div className="text-[12px] text-subt mb-3">По одному на строку. Форматы: <code className="font-mono">user:pass@host:port</code> или <code className="font-mono">http://user:pass@host:port</code>.</div>
+            <textarea value={addVal} onChange={(e) => setAddVal(e.target.value)} rows={3}
+              className="field font-mono text-[12px] resize-none leading-relaxed" placeholder={'user:pass@host:port\nuser2:pass2@host2:port2'} />
+            <div className="flex justify-end mt-3">
+              <Button onClick={addProxy} disabled={!addVal.trim()}><Plus className="w-4 h-4" /> Добавить в пул</Button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Таблица 1 — Пуловые */}
@@ -147,7 +173,7 @@ function Proxies() {
           <span className="text-[12px] text-subt">({pool.length})</span>
         </div>
         {pool.length === 0 ? (
-          <div className="card p-10 text-center text-[13px] text-subt">Пул пуст. Добавьте прокси выше — тогда при создании аккаунта появится режим «Авто».</div>
+          <div className="card p-10 text-center text-[13px] text-subt">Пул пуст. Добавьте прокси через блок выше — тогда при создании аккаунта появится режим «Авто».</div>
         ) : (
           <div className="grid sm:grid-cols-2 gap-3">{pool.map((p) => proxyRow(p, true))}</div>
         )}
@@ -163,6 +189,30 @@ function Proxies() {
           <div className="card p-10 text-center text-[13px] text-subt">Уникальных прокси нет. Они появляются, когда при добавлении аккаунта выбирают «Уникальный» и вводят прокси вручную.</div>
         ) : (
           <div className="grid sm:grid-cols-2 gap-3">{individual.map((p) => proxyRow(p, false))}</div>
+        )}
+      </div>
+
+      {/* Настройка «аккаунтов на прокси» — компактная, свёрнутая, внизу (дублирует «Настройки») */}
+      <div className="card overflow-hidden">
+        <button onClick={() => setCapOpen((v) => !v)} className="w-full flex items-center justify-between px-4 py-3 hover:bg-black/[0.02] transition-colors">
+          <div className="flex items-center gap-2.5 text-left">
+            <Sliders className="w-4 h-4 text-subt shrink-0" />
+            <div>
+              <span className="font-medium text-[13.5px] block">Аккаунтов на один пуловый прокси: <b className="text-ink tabular-nums">{cap}</b></span>
+              <span className="text-[11.5px] text-subt">Дублирует настройку из «Настроек»</span>
+            </div>
+          </div>
+          {capOpen ? <ChevronUp className="w-4 h-4 text-subt shrink-0" /> : <ChevronDown className="w-4 h-4 text-subt shrink-0" />}
+        </button>
+        {capOpen && (
+          <div className="border-t border-black/[0.05] px-4 py-3.5">
+            <div className="text-[12px] text-subt mb-3">Сколько аккаунтов авто-режим повесит на один прокси, прежде чем взять следующий.</div>
+            <div className="flex items-center gap-2">
+              <input type="number" min={1} max={100} value={capInput} onChange={(e) => setCapInput(e.target.value)} className="field w-24 py-2 text-[14px] text-center" />
+              <Button variant="secondary" onClick={saveCap}>Сохранить</Button>
+              <span className="text-[12px] text-subt ml-2">Свободных в пуле: <span className="font-semibold text-ink tabular-nums">{poolFree}</span></span>
+            </div>
+          </div>
         )}
       </div>
 
