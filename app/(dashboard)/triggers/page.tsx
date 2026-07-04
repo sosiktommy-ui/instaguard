@@ -768,7 +768,7 @@ function CreateForm({
 
   // Тело формы (шаги) — переиспользуется в двух оболочках: попап (редактирование) и карточка снизу (создание).
   const body = (
-          <div className={cn('grid gap-5', hideAccounts ? 'lg:grid-cols-2' : 'lg:grid-cols-3')}>
+          <div className={cn('grid gap-5', hideAccounts ? 'lg:grid-cols-[0.6fr_1.4fr]' : 'lg:grid-cols-[0.65fr_0.65fr_1.7fr]')}>
 
             {/* ── Шаг 1 — аккаунты (скрыт при редактировании и при создании для конкретного аккаунта) ── */}
             {!hideAccounts && (

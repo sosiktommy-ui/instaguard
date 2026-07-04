@@ -37,6 +37,7 @@ function SettingsScreen() {
   const [capInput, setCapInput] = useState('3')
   const [msg, setMsg] = useState('')
   const [openHelp, setOpenHelp] = useState<number | null>(null)
+  const [showHelp, setShowHelp] = useState(false)   // весь блок «Что где находится» — свёрнут по умолчанию
 
   // Запустить интерактивное обучение заново (сброс флага + переход на главную)
   const startTour = () => {
@@ -83,22 +84,30 @@ function SettingsScreen() {
           </div>
         </div>
 
-        <div className="mt-4 pt-4 border-t border-black/[0.06] space-y-1.5">
-          <div className="text-[12px] font-semibold text-subt uppercase tracking-wider mb-1">Что где находится</div>
-          {HELP.map((h, idx) => {
-            const open = openHelp === idx
-            return (
-              <div key={idx} className="rounded-2xl bg-canvas overflow-hidden">
-                <button onClick={() => setOpenHelp(open ? null : idx)}
-                  className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-black/[0.02] transition-colors">
-                  <span className="w-7 h-7 rounded-xl bg-brand/10 flex items-center justify-center shrink-0"><h.icon className="w-3.5 h-3.5 text-brand" /></span>
-                  <span className="flex-1 text-[13.5px] font-medium">{h.title}</span>
-                  <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', open && 'rotate-180')} />
-                </button>
-                {open && <div className="px-3.5 pb-3 pl-[52px] text-[12.5px] text-subt leading-relaxed animate-fade-in">{h.text}</div>}
-              </div>
-            )
-          })}
+        <div className="mt-4 pt-4 border-t border-black/[0.06]">
+          <button onClick={() => setShowHelp((v) => !v)}
+            className="w-full flex items-center gap-2 text-left hover:opacity-80 transition-opacity">
+            <span className="flex-1 text-[12px] font-semibold text-subt uppercase tracking-wider">Что где находится</span>
+            <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', showHelp && 'rotate-180')} />
+          </button>
+          {showHelp && (
+            <div className="mt-2 space-y-1.5 animate-fade-in">
+              {HELP.map((h, idx) => {
+                const open = openHelp === idx
+                return (
+                  <div key={idx} className="rounded-2xl bg-canvas overflow-hidden">
+                    <button onClick={() => setOpenHelp(open ? null : idx)}
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-black/[0.02] transition-colors">
+                      <span className="w-7 h-7 rounded-xl bg-brand/10 flex items-center justify-center shrink-0"><h.icon className="w-3.5 h-3.5 text-brand" /></span>
+                      <span className="flex-1 text-[13.5px] font-medium">{h.title}</span>
+                      <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', open && 'rotate-180')} />
+                    </button>
+                    {open && <div className="px-3.5 pb-3 pl-[52px] text-[12.5px] text-subt leading-relaxed animate-fade-in">{h.text}</div>}
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       </div>
 
