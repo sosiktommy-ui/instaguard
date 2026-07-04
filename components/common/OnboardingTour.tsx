@@ -3,7 +3,7 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, type CSSProperties } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { ChevronLeft, ChevronRight, X, Check, MousePointerClick, Sparkles } from 'lucide-react'
-import { ReactiveMascot } from './ReactiveMascot'
+import { Mascot3D } from './Mascot3D'
 
 const KEY = 'rg-onboarded'
 
@@ -189,7 +189,7 @@ export function OnboardingTour() {
     <>
       <button onClick={finish} className="absolute top-3 right-3 text-subt hover:text-ink" title="Пропустить"><X className="w-4 h-4" /></button>
       <div className="flex items-start gap-3">
-        <ReactiveMascot size={68} className="shrink-0 -mt-1" />
+        <Mascot3D size={84} className="shrink-0 -mt-1 -ml-1" />
         <div className="min-w-0">
           <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand bg-brand/10 rounded-full px-2 py-0.5 mb-1.5">
             <Sparkles className="w-3 h-3" /> Reactive · {i + 1}/{total}

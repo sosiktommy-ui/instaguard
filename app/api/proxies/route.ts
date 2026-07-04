@@ -14,7 +14,7 @@ export async function GET() {
         orderBy: { createdAt: 'asc' },
         select: {
           id: true, url: true, kind: true, label: true,
-          accounts: { select: { username: true, role: true, status: true }, orderBy: { username: 'asc' } },
+          accounts: { select: { id: true, username: true, role: true, status: true }, orderBy: { username: 'asc' } },
         },
       }),
     ])
@@ -23,7 +23,7 @@ export async function GET() {
       proxies: proxies.map((p) => ({
         id: p.id, url: p.url, kind: p.kind, label: p.label,
         accountCount: p.accounts.length,
-        accounts: p.accounts.map((a) => ({ username: a.username, role: a.role, status: a.status })),
+        accounts: p.accounts.map((a) => ({ id: a.id, username: a.username, role: a.role, status: a.status })),
       })),
     })
   } catch {
@@ -31,15 +31,17 @@ export async function GET() {
   }
 }
 
-// POST — добавить пуловые прокси (по одному на строку/через запятую). { url }
+// POST — добавить прокси (по одному на строку/через запятую).
+// { url, kind } — kind: 'pool' (общий, авто-привязка) | 'individual' (приватный, для одного аккаунта)
 export async function POST(req: NextRequest) {
   try {
     const user = await getUserOrFirst()
     if (!user) return NextResponse.json({ error: 'Нет пользователя' }, { status: 500 })
-    const { url } = await req.json().catch(() => ({}))
+    const { url, kind } = await req.json().catch(() => ({}))
+    const k = kind === 'individual' ? 'individual' : 'pool'
     const urls = String(url ?? '').split(/[\n,]/).map((u) => u.trim()).filter(Boolean)
     if (!urls.length) return NextResponse.json({ error: 'Введите адрес прокси' }, { status: 400 })
-    await prisma.proxy.createMany({ data: urls.map((u) => ({ userId: user.id, url: u, kind: 'pool' })) })
+    await prisma.proxy.createMany({ data: urls.map((u) => ({ userId: user.id, url: u, kind: k })) })
     return NextResponse.json({ ok: true, added: urls.length })
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? 'Ошибка сервера' }, { status: 500 })

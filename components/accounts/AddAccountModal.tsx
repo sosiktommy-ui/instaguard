@@ -15,13 +15,13 @@ interface SectionItem { id: string; parentId: string | null; name: string }
  * Единый переиспользуемый попап подключения Instagram-аккаунта.
  * Используется и на вкладке «Аккаунты», и на главном экране (кнопка «+ Аккаунт»).
  */
-export function AddAccountModal({ onClose, onAdded }: { onClose: () => void; onAdded: (username: string) => void }) {
+export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: () => void; onAdded: (username: string) => void; presetProxy?: string }) {
   const addAccount = useStore((s) => s.addAccount)
   const [mode, setMode]         = useState<AuthMode>('password')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [cookies, setCookies]   = useState('')
-  const [proxy, setProxy]       = useState('')
+  const [proxy, setProxy]       = useState(presetProxy ?? '')
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState('')
   const [step, setStep]         = useState<'form' | 'auth'>('form')
@@ -31,7 +31,7 @@ export function AddAccountModal({ onClose, onAdded }: { onClose: () => void; onA
   const [secId, setSecId]       = useState('')  // корневой раздел
   const [subId, setSubId]       = useState('')  // подраздел
 
-  // Прокси: авто (из пула) или уникальный (вручную)
+  // Прокси: авто (из пула) или уникальный (вручную). Если задан presetProxy — сразу «уникальный».
   const [proxyMode, setProxyMode] = useState<'auto' | 'unique'>('unique')
   const [poolFree, setPoolFree]   = useState(0)   // сколько пуловых прокси со свободной ёмкостью
 
@@ -51,8 +51,19 @@ export function AddAccountModal({ onClose, onAdded }: { onClose: () => void; onA
   const proxyOk = proxyMode !== 'auto' || poolFree > 0
   const canSubmit = credsOk && proxyOk
 
-  // Общий блок выбора прокси (одинаков для логина и куки)
-  const proxyBlock = (
+  // Общий блок выбора прокси (одинаков для логина и куки).
+  // Если задан presetProxy (открыли с вкладки «Прокси» → «+ аккаунт на этот прокси») —
+  // прокси зафиксирован, переключатель не показываем.
+  const proxyBlock = presetProxy ? (
+    <div>
+      <label className="text-[13px] text-subt font-medium block mb-2">Приватный прокси</label>
+      <div className="relative">
+        <Globe className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
+        <input value={proxy} readOnly className="field pl-10 font-mono text-[13px] bg-canvas text-subt cursor-default" />
+      </div>
+      <p className="text-[11px] text-subt mt-1.5 pl-1">Аккаунт будет закреплён за этим прокси.</p>
+    </div>
+  ) : (
     <div>
       <label className="text-[13px] text-subt font-medium block mb-2">Прокси</label>
       <div className="flex gap-1 p-1 bg-canvas rounded-2xl mb-2.5">

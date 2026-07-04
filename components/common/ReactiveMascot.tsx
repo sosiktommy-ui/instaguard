@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 
 /**
  * Reactive — маскот сервиса.
@@ -11,13 +11,24 @@ import { useState } from 'react'
  */
 export function ReactiveMascot({ size = 120, className, animated = true }: { size?: number; className?: string; animated?: boolean }) {
   const [imgOk, setImgOk] = useState(true)
+  const ref = useRef<HTMLImageElement>(null)
   const cls = [className, animated ? 'rm-bob' : ''].filter(Boolean).join(' ')
+
+  // Событие error у <img> при SSR/гидрации может выстрелить раньше, чем навесится
+  // React-обработчик, — тогда бы висела «сломанная» картинка. Проверяем состояние
+  // картинки после монтирования и надёжно переключаемся на SVG-фолбэк.
+  useEffect(() => {
+    const img = ref.current
+    if (img && img.complete && img.naturalWidth === 0) setImgOk(false)
+  }, [])
 
   if (imgOk) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src="/Foto/reactive-mascot.png" alt="Reactive" width={size} height={size} draggable={false}
-        className={cls} style={{ objectFit: 'contain', display: 'block' }} onError={() => setImgOk(false)} />
+      <img ref={ref} src="/Foto/reactive-mascot.png" alt="Reactive" width={size} height={size} draggable={false}
+        className={cls} style={{ objectFit: 'contain', display: 'block' }}
+        onError={() => setImgOk(false)}
+        onLoad={(e) => { if ((e.currentTarget as HTMLImageElement).naturalWidth === 0) setImgOk(false) }} />
     )
   }
 

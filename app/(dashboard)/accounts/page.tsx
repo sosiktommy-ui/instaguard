@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
 import { DraftsStatus } from '@/components/accounts/DraftsStatus'
 import { SecurityBadge } from '@/components/accounts/SecurityBadge'
-import { type SectionItem } from '@/components/accounts/SectionBar'
+import { SectionBar, type SectionItem } from '@/components/accounts/SectionBar'
 import { FolderTree } from 'lucide-react'
 import { Tilt } from '@/components/ui/Tilt'
 import { useStore, formatFollowers } from '@/lib/store'
@@ -395,6 +395,12 @@ function Accounts() {
 
   const [dbTriggers, setDbTriggers] = useState<any[]>([])
   const [sections, setSections] = useState<SectionItem[]>([])
+  const [selSection, setSelSection] = useState('')   // фильтр по разделу
+  const [selSub, setSelSub] = useState('')            // фильтр по подразделу
+
+  const loadSections = useCallback(async () => {
+    try { const r = await fetch('/api/sections'); if (r.ok) setSections(await r.json()) } catch {}
+  }, [])
 
   const loadRealAccounts = useCallback(async () => {
     try {
@@ -504,6 +510,23 @@ function Accounts() {
     .map((a) => ({ ...a, real: realAccounts.find((r) => r.username === a.username) }))
     .filter((a) => a.real?.role !== 'HELPER')
 
+  // Счётчик аккаунтов по разделам (для чипов): раздел = свои + все его подразделы
+  const sectionsWithCount: SectionItem[] = sections.map((s) => ({
+    ...s,
+    accountCount: mergedAccounts.filter((a) => a.real?.sectionId === s.id).length,
+  }))
+
+  // Фильтр по выбранному разделу/подразделу (раздел включает свои подразделы)
+  const visibleAccounts = mergedAccounts.filter((a) => {
+    const sid = a.real?.sectionId ?? null
+    if (selSub) return sid === selSub
+    if (selSection) {
+      const subIds = sections.filter((s) => s.parentId === selSection).map((s) => s.id)
+      return sid === selSection || subIds.includes(sid ?? '')
+    }
+    return true
+  })
+
   return (
     <div className="space-y-6">
       <PageHeader icon={Users} color={TONE.brand} title="Основные аккаунты" subtitle="Аккаунты подключены через Instagram API">
@@ -520,6 +543,12 @@ function Accounts() {
 
       <DraftsStatus />
 
+      {/* Разделы/подразделы (папки) + фильтр. Создание — кнопкой «+ Раздел». */}
+      {mergedAccounts.length > 0 && (
+        <SectionBar sections={sectionsWithCount} selSection={selSection} selSub={selSub}
+          onSelect={(sec, sub) => { setSelSection(sec); setSelSub(sub) }} onReload={loadSections} />
+      )}
+
       {realAccounts.length > 0 && mergedAccounts.length === 0 && (
         <div className="card p-5 text-[14px] text-subt">
           В БД есть {realAccounts.length} аккаунтов — перезагрузите страницу чтобы увидеть их в UI.
@@ -535,9 +564,14 @@ function Accounts() {
           </p>
           <Button className="mt-6" onClick={() => setShowAdd(true)}><Plus className="w-4 h-4" /> Подключить аккаунт</Button>
         </div>
+      ) : visibleAccounts.length === 0 ? (
+        <div className="card p-12 flex flex-col items-center gap-2 text-center">
+          <div className="text-[13px] text-subt">В этом разделе пока нет аккаунтов</div>
+          <button onClick={() => { setSelSection(''); setSelSub('') }} className="text-[12.5px] text-brand hover:underline">Показать все</button>
+        </div>
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {mergedAccounts.map((acc) => {
+          {visibleAccounts.map((acc) => {
             const st = statsFor(acc.id)
             const ra = acc.real
             const status = ra?.status ?? acc.status
