@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { LogOut, Menu, X, List, Users, Layers, BarChart3, Globe, Settings } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AppLogo } from '@/components/common/AppLogo'
+import { useBreadcrumbs } from '@/lib/breadcrumbs'
 
 // Единственный уровень навигации — разделы приложения (супертаб-переключатель «режимов» убран)
 const SUBTABS = [
@@ -35,6 +36,7 @@ export default function TopNav() {
 
   const activeSub = SUBTABS.find((t) => t.href === pathname)
   const crumb = activeSub?.label ?? 'Рекламные кампании'
+  const { crumbs } = useBreadcrumbs()
 
   return (
     <>
@@ -54,10 +56,28 @@ export default function TopNav() {
             <span className="font-semibold text-[16px] tracking-tighter hidden md:block">ReactiveGram</span>
           </div>
 
-          {/* Текущий раздел */}
-          <div className="flex items-center gap-2 text-[14px] text-subt ml-1">
+          {/* Хлебные крошки: раздел + путь провала (задаётся страницей) */}
+          <div className="flex items-center gap-2 text-[14px] text-subt ml-1 min-w-0">
             <span className="text-line hidden sm:inline">/</span>
-            <span className="font-medium text-ink">{crumb}</span>
+            {crumbs.length === 0 ? (
+              <span className="font-medium text-ink truncate">{crumb}</span>
+            ) : (
+              <span className="flex items-center gap-2 min-w-0">
+                {crumbs.map((c, i) => {
+                  const last = i === crumbs.length - 1
+                  return (
+                    <span key={i} className="flex items-center gap-2 min-w-0">
+                      {i > 0 && <span className="text-line">/</span>}
+                      {c.onClick && !last ? (
+                        <button onClick={c.onClick} className="font-medium text-subt hover:text-brand transition-colors truncate">{c.label}</button>
+                      ) : (
+                        <span className={cn('font-medium truncate', last ? 'text-ink' : 'text-subt')}>{c.label}</span>
+                      )}
+                    </span>
+                  )
+                })}
+              </span>
+            )}
           </div>
 
           <div className="flex-1" />

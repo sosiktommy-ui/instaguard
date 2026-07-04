@@ -16,6 +16,7 @@ import { AddAccountModal } from '@/components/accounts/AddAccountModal'
 import { SectionBar, type SectionItem } from '@/components/accounts/SectionBar'
 import { DraftsStatus } from '@/components/accounts/DraftsStatus'
 import { SecurityBadge } from '@/components/accounts/SecurityBadge'
+import { useBreadcrumbs } from '@/lib/breadcrumbs'
 import { cn } from '@/lib/utils'
 import { readStat } from '@/lib/stats'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
@@ -598,7 +599,7 @@ function StoriesBlock({ d, set }: { d: Draft; set: <K extends keyof Draft>(k: K,
 interface FormApi { open: () => void; load: (d: Draft) => void; openFor: (id: string) => void; edit: (t: DbTrigger) => void }
 
 function CreateForm({
-  dbAccounts, dbTriggers, loadingAccounts, onCreated, onEdited, formRef, lockedAccountId,
+  dbAccounts, dbTriggers, loadingAccounts, onCreated, onEdited, formRef, lockedAccountId, startOpen = false,
 }: {
   dbAccounts: DbAccount[]
   dbTriggers: DbTrigger[]
@@ -607,8 +608,9 @@ function CreateForm({
   onEdited?: (id: string) => void
   formRef: React.MutableRefObject<FormApi | null>
   lockedAccountId?: string
+  startOpen?: boolean
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(startOpen)
   const [editId, setEditId] = useState<string | null>(null)
   const [selected, setSelected] = useState<string[]>(lockedAccountId ? [lockedAccountId] : [])
   const [search, setSearch] = useState('')
@@ -642,6 +644,13 @@ function CreateForm({
       edit: (t: DbTrigger) => { setEditId(t.id); setSelected([t.responder.id]); setD(draftFromTrigger(t)); setOpen(true); setSaveMsg(null) },
     }
   }, [formRef])
+
+  // Внутри аккаунта (lockedAccountId) форма всегда работает с этим аккаунтом.
+  // React переиспользует инстанс между уровнями, поэтому синхронизируем выбор явно,
+  // иначе после перехода/сохранения selected пуст → «Выберите аккаунты».
+  useEffect(() => {
+    if (lockedAccountId) setSelected([lockedAccountId])
+  }, [lockedAccountId])
 
   const hideAccounts = Boolean(lockedAccountId) || Boolean(editId)
 
@@ -705,7 +714,8 @@ function CreateForm({
         const data = await res.json()
         if (res.ok) {
           setSaveMsg({ text: `Создано кампаний: ${data.count}`, ok: true })
-          setSelected([]); setD({ ...DEFAULT_DRAFT }); onCreated()
+          // внутри аккаунта оставляем его выбранным, иначе сброс в пусто
+          setSelected(lockedAccountId ? [lockedAccountId] : []); setD({ ...DEFAULT_DRAFT }); onCreated()
         } else {
           setSaveMsg({ text: data.error ?? 'Ошибка', ok: false })
         }
@@ -1019,11 +1029,17 @@ function CreateForm({
   return (
     <div className="card overflow-hidden">
       <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between px-5 py-4 hover:bg-black/[0.02] transition-colors">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-xl bg-brand/10 flex items-center justify-center"><Plus className="w-4 h-4 text-brand" /></div>
-          <span className="font-semibold text-[15px]">Создать кампанию</span>
+        <div className="flex items-center gap-3 text-left">
+          <div className="w-8 h-8 rounded-xl bg-brand/10 flex items-center justify-center shrink-0"><Plus className="w-4 h-4 text-brand" /></div>
+          <div>
+            <span className="font-semibold text-[15px] block">Создать кампанию</span>
+            <span className="text-[12px] text-subt">Выберите аккаунт, событие и что делать — бот запустит автодействия</span>
+          </div>
         </div>
-        {open ? <ChevronUp className="w-4 h-4 text-subt" /> : <ChevronDown className="w-4 h-4 text-subt" />}
+        <span className="flex items-center gap-2 shrink-0">
+          {!open && <span className="hidden sm:inline text-[12px] font-medium text-brand">Нажмите, чтобы настроить</span>}
+          {open ? <ChevronUp className="w-4 h-4 text-subt" /> : <ChevronDown className="w-4 h-4 text-brand" />}
+        </span>
       </button>
       {open && <div className="border-t border-black/[0.05] p-5">{body}</div>}
     </div>
@@ -1553,6 +1569,21 @@ function TriggersScreen() {
   const selAcc = selId ? dbAccounts.find((a) => a.id === selId) : null
   const selCampaigns = selId ? campaignsFor(selId) : []
 
+  // Хлебные крошки в шапке: «Рекламные кампании / @аккаунт» при провале внутрь
+  const { setCrumbs } = useBreadcrumbs()
+  const selUsername = selAcc?.username
+  useEffect(() => {
+    if (selId && selUsername) {
+      setCrumbs([
+        { label: 'Рекламные кампании', onClick: () => setSelId(null) },
+        { label: '@' + selUsername },
+      ])
+    } else {
+      setCrumbs([])
+    }
+    return () => setCrumbs([])
+  }, [selId, selUsername, setCrumbs])
+
   // Фильтр аккаунтов по выбранному разделу/подразделу (план §C2)
   const childIds = useMemo(
     () => new Set(sections.filter((s) => s.parentId === selSection).map((s) => s.id)),
@@ -1677,7 +1708,7 @@ function TriggersScreen() {
   // Порядок (план B2): 1) создание кампании — наверх; 2) аккаунты; 3) «+ Аккаунт» → попап; 4) сводка.
   return (
     <div className="space-y-5 pb-24">
-      {/* 1. Создание кампании — главное действие */}
+      {/* 1. Создание кампании — главное действие (раскрыто по умолчанию) */}
       <CreateForm
         dbAccounts={dbAccounts}
         dbTriggers={dbTriggers}
@@ -1685,6 +1716,7 @@ function TriggersScreen() {
         onCreated={() => { loadTriggers(); loadTemplates() }}
         onEdited={onCampaignEdited}
         formRef={formApi}
+        startOpen
       />
 
       {/* 2. Аккаунты */}
