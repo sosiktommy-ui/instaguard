@@ -164,17 +164,43 @@
 }
 .rm-bob { animation: rm-bob 3.2s ease-in-out infinite; transform-origin: center bottom; }
 
-/* Пульс-подсветка цели в обучении (прожектор) */
+/* Подсветка цели в обучении: яркое кольцо + свечение + ЛЁГКОЕ затемнение фона
+   (фон остаётся читаемым — пользователь видит контекст, а не «чёрный экран») */
 @keyframes tour-pulse {
-  0%, 100% { box-shadow: 0 0 0 3px rgba(155,102,255,0.9), 0 0 0 9999px rgba(10,8,25,0.62); }
-  50%      { box-shadow: 0 0 0 6px rgba(155,102,255,0.55), 0 0 0 9999px rgba(10,8,25,0.62); }
+  0%, 100% { box-shadow: 0 0 0 3px rgba(155,102,255,0.95), 0 0 22px 5px rgba(102,58,241,0.40), 0 0 0 9999px rgba(14,11,34,0.34); }
+  50%      { box-shadow: 0 0 0 7px rgba(155,102,255,0.45), 0 0 34px 10px rgba(102,58,241,0.25), 0 0 0 9999px rgba(14,11,34,0.34); }
 }
-.tour-spot { animation: tour-pulse 1.8s ease-in-out infinite; }
+.tour-spot { animation: tour-pulse 1.7s ease-in-out infinite; }
+
+/* Свечение под маскотом (он «парит» без рамки/фона) */
+.mascot-glow {
+  filter: drop-shadow(0 8px 18px rgba(102,58,241,0.45))
+          drop-shadow(0 0 26px rgba(120,180,255,0.40));
+}
+
+/* Пузырь-реплика маскота: мягкое появление */
+@keyframes tour-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.96); }
+  to   { opacity: 1; transform: none; }
+}
+.tour-in { animation: tour-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+/* Указатель «смотри сюда» — прыгает В СТОРОНУ цели */
+@keyframes tp-up    { 0%,100% { transform: translateY(0) }    50% { transform: translateY(-9px) } }
+@keyframes tp-down  { 0%,100% { transform: translateY(0) }    50% { transform: translateY(9px) } }
+@keyframes tp-left  { 0%,100% { transform: translateX(0) }    50% { transform: translateX(-9px) } }
+@keyframes tp-right { 0%,100% { transform: translateX(0) }    50% { transform: translateX(9px) } }
+.tp-up    { animation: tp-up 0.9s ease-in-out infinite; }
+.tp-down  { animation: tp-down 0.9s ease-in-out infinite; }
+.tp-left  { animation: tp-left 0.9s ease-in-out infinite; }
+.tp-right { animation: tp-right 0.9s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
   .rise { animation: none !important; opacity: 1 !important; transform: none !important; }
   .rm-bob { animation: none !important; }
-  .tour-spot { animation: none !important; box-shadow: 0 0 0 3px rgba(155,102,255,0.9), 0 0 0 9999px rgba(10,8,25,0.62) !important; }
+  .tour-in { animation: none !important; opacity: 1 !important; transform: none !important; }
+  .tp-up, .tp-down, .tp-left, .tp-right { animation: none !important; }
+  .tour-spot { animation: none !important; box-shadow: 0 0 0 3px rgba(155,102,255,0.95), 0 0 24px 6px rgba(102,58,241,0.35), 0 0 0 9999px rgba(14,11,34,0.34) !important; }
 }
 
 /* Slim, unobtrusive scrollbars */

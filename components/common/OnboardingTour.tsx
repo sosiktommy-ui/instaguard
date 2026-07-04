@@ -1,70 +1,72 @@
 'use client'
 
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, type CSSProperties } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
-import { ChevronLeft, ChevronRight, X, Check, MousePointerClick, Sparkles } from 'lucide-react'
+import { ChevronLeft, ChevronRight, X, Check, ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from 'lucide-react'
 import { ReactiveMascot } from './ReactiveMascot'
 
 const KEY = 'rg-onboarded'
 
 interface Step {
   route?: string        // сначала перейти сюда
-  target?: string       // CSS-селектор для подсветки; нет → центр экрана
+  target?: string       // CSS-селектор для подсветки; нет → по центру экрана
   title: string
   text: string
-  cta?: string          // подпись у стрелки, напр. «Нажмите сюда»
+  cta?: string          // подпись у указателя, напр. «Нажмите сюда»
 }
 
 const STEPS: Step[] = [
   {
     title: 'Привет! Я Reactive ⚡',
-    text: 'Я помогу освоить ReactiveGram за минуту. Покажу прямо на экране, где что находится и как запустить автоответы в Instagram. Жми «Далее».',
+    text: 'Твой помощник. За минуту покажу прямо на экране, где что находится и как включить автоответы в Instagram. Погнали — жми «Далее».',
   },
   {
-    route: '/triggers', target: '[data-tour="create"]', cta: 'Здесь создаём',
-    title: 'Создание кампании',
-    text: 'Сердце сервиса. Схема: аккаунт → событие (новая подписка, комментарий, лайк, сторис) → действия (директ, лайк, подписка). Панель уже раскрыта — потом заполните её.',
+    route: '/triggers', target: '[data-tour="create"]', cta: 'Тут создаём',
+    title: 'Здесь рождается магия ✨',
+    text: 'Собираем цепочку: аккаунт → событие (подписка, коммент, лайк, сторис) → действие (директ, лайк, подписка). Панель уже открыта — заполнишь потом.',
   },
   {
-    route: '/triggers', target: '[data-tour="add-account"]', cta: 'Нажмите «+ Аккаунт»',
-    title: 'Подключение аккаунта',
-    text: 'Сначала добавьте аккаунт: логин/пароль или куки, при желании прокси. Без аккаунта кампанию не запустить.',
+    route: '/triggers', target: '[data-tour="add-account"]', cta: 'Жми сюда',
+    title: 'Сначала — аккаунт',
+    text: 'Подключи Instagram: по логину/паролю или по куки, при желании через прокси. Без аккаунта запускать нечего.',
   },
   {
-    route: '/triggers', target: '[data-tour="sections"]',
-    title: 'Папки и фильтр',
-    text: 'Группируйте аккаунты по разделам и подразделам (например, «Польша → Краков») и фильтруйте список одним кликом.',
+    route: '/triggers', target: '[data-tour="sections"]', cta: 'Разделы тут',
+    title: 'Папки для порядка',
+    text: 'Много аккаунтов? Разложи их по разделам (например «Польша → Краков») и фильтруй список одним кликом.',
   },
   {
-    route: '/drafts', target: '[data-tour="page"]',
-    title: 'Черновые аккаунты',
-    text: 'Черновые «разведывают» события (кто подписался, кто оставил коммент), а основной аккаунт при этом не рискует баном. Добавьте хотя бы один — иначе автоматизация не работает.',
+    route: '/drafts', target: '[data-tour="page"]', cta: 'Смотри сюда',
+    title: 'Черновые — моя разведка 🕵️',
+    text: 'Они «смотрят», кто подписался и кто комментит, а основной аккаунт при этом не рискует баном. Добавь хотя бы один — без них автоматизация не работает.',
   },
   {
-    route: '/proxy', target: '[data-tour="page"]',
+    route: '/proxy', target: '[data-tour="page"]', cta: 'Прокси здесь',
     title: 'Прокси',
-    text: 'Пуловые прокси бот сам раздаёт аккаунтам. Добавьте их в блоке «Добавить прокси в пул» — включится режим «Авто».',
+    text: 'Прокси в пуле я сам раздаю аккаунтам. Просто закинь их в блок «Добавить прокси в пул» — включится режим «Авто».',
   },
   {
-    route: '/stats', target: '[data-tour="page"]',
+    route: '/stats', target: '[data-tour="page"]', cta: 'Цифры тут',
     title: 'Статистика',
-    text: 'Здесь общие цифры: срабатывания триггеров, выполненные действия, прирост подписчиков по всем аккаунтам.',
+    text: 'Здесь всё в цифрах: срабатывания триггеров, выполненные действия и прирост подписчиков по всем аккаунтам.',
   },
   {
-    route: '/settings', target: '[data-tour="page"]',
+    route: '/settings', target: '[data-tour="page"]', cta: 'Настройки тут',
     title: 'Настройки и справка',
-    text: 'Тумблеры «работать без прокси / без черновых», лимиты и кнопка «Пройти обучение» с описанием каждого раздела. Загляните сюда, если что-то не запускается.',
+    text: 'Лимиты, режимы «без прокси / без черновых» и повтор обучения. Загляни сюда, если что-то не запускается.',
   },
   {
     route: '/triggers',
     title: 'Готово! 🚀',
-    text: 'Порядок такой: подключите аккаунт → (по желанию черновой и прокси) → создайте кампанию. Повторить обучение можно в «Настройках». Удачи!',
+    text: 'Порядок такой: подключи аккаунт → (по желанию черновой + прокси) → создай кампанию. Позвать меня снова можно в «Настройках». Удачи!',
   },
 ]
 
 const PAD = 8       // отступ подсветки вокруг цели
-const GAP = 16      // зазор между целью и пузырём
-const M = 14        // минимальный отступ пузыря от краёв экрана
+const GAP = 52      // зазор между целью и «репликой» маскота (место под указатель)
+const M = 14        // минимальный отступ от краёв экрана
+
+type Side = 'top' | 'bottom' | 'left' | 'right'
 
 export function OnboardingTour() {
   const router = useRouter()
@@ -72,13 +74,31 @@ export function OnboardingTour() {
   const [show, setShow] = useState(false)
   const [i, setI] = useState(0)
   const [rect, setRect] = useState<DOMRect | null>(null)
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
-  const bubbleRef = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ top: number; left: number; side: Side } | null>(null)
+  const unitRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => { try { if (!localStorage.getItem(KEY)) setShow(true) } catch {} }, [])
 
   const step = STEPS[i]
+  const first = i === 0
+  const last = i === STEPS.length - 1
+  const total = STEPS.length
+
   const finish = useCallback(() => { try { localStorage.setItem(KEY, '1') } catch {}; setShow(false) }, [])
+  const next = useCallback(() => setI((v) => Math.min(v + 1, STEPS.length - 1)), [])
+  const prev = useCallback(() => setI((v) => Math.max(v - 1, 0)), [])
+
+  // Клавиатура: → / Enter — далее, ← — назад, Esc — пропустить
+  useEffect(() => {
+    if (!show) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') finish()
+      else if (e.key === 'ArrowRight' || e.key === 'Enter') { last ? finish() : next() }
+      else if (e.key === 'ArrowLeft') prev()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [show, last, finish, next, prev])
 
   // Переход на нужную страницу перед показом шага
   useEffect(() => {
@@ -98,7 +118,7 @@ export function OnboardingTour() {
       const el = document.querySelector(step.target!) as HTMLElement | null
       if (el) {
         el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-        setTimeout(() => { if (!cancelled) { const e2 = document.querySelector(step.target!) as HTMLElement | null; setRect(e2 ? e2.getBoundingClientRect() : null) } }, 300)
+        setTimeout(() => { if (!cancelled) { const e2 = document.querySelector(step.target!) as HTMLElement | null; setRect(e2 ? e2.getBoundingClientRect() : null) } }, 320)
         return
       }
       if (tries++ < 60) raf = requestAnimationFrame(tick)
@@ -121,11 +141,11 @@ export function OnboardingTour() {
     return () => { window.removeEventListener('resize', on); window.removeEventListener('scroll', on, true) }
   }, [show, step])
 
-  // Позиционирование пузыря: измеряем его размер и выбираем сторону, где он помещается ЦЕЛИКОМ
+  // Позиционирование «реплики» (маскот + пузырь): выбираем сторону, где она помещается ЦЕЛИКОМ
   useLayoutEffect(() => {
-    if (!rect || !bubbleRef.current) { setPos(null); return }
+    if (!rect || !unitRef.current) { setPos(null); return }
     const vw = window.innerWidth, vh = window.innerHeight
-    const b = bubbleRef.current.getBoundingClientRect()
+    const b = unitRef.current.getBoundingClientRect()
     const bw = b.width, bh = b.height
     const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2
     const clampL = (l: number) => Math.min(Math.max(M, l), vw - bw - M)
@@ -136,113 +156,119 @@ export function OnboardingTour() {
     const spaceRight = vw - (rect.right + PAD)
     const spaceLeft = rect.left - PAD
 
-    let top: number, left: number
-    if (spaceBelow >= bh + GAP) { top = rect.bottom + PAD + GAP; left = clampL(cx - bw / 2) }
-    else if (spaceAbove >= bh + GAP) { top = rect.top - PAD - GAP - bh; left = clampL(cx - bw / 2) }
-    else if (spaceRight >= bw + GAP) { left = rect.right + PAD + GAP; top = clampT(cy - bh / 2) }
-    else if (spaceLeft >= bw + GAP) { left = rect.left - PAD - GAP - bw; top = clampT(cy - bh / 2) }
-    else { top = vh - bh - M; left = clampL(cx - bw / 2) }   // не влезает — прижимаем к низу
+    let top: number, left: number, side: Side
+    if (spaceBelow >= bh + GAP) { side = 'bottom'; top = rect.bottom + PAD + GAP; left = clampL(cx - bw / 2) }
+    else if (spaceAbove >= bh + GAP) { side = 'top'; top = rect.top - PAD - GAP - bh; left = clampL(cx - bw / 2) }
+    else if (spaceRight >= bw + GAP) { side = 'right'; left = rect.right + PAD + GAP; top = clampT(cy - bh / 2) }
+    else if (spaceLeft >= bw + GAP) { side = 'left'; left = rect.left - PAD - GAP - bw; top = clampT(cy - bh / 2) }
+    else { side = 'bottom'; top = vh - bh - M; left = clampL(cx - bw / 2) }
 
-    setPos({ top: clampT(top), left: clampL(left) })
+    setPos({ top: clampT(top), left: clampL(left), side })
   }, [rect, i])
 
   if (!show || !step) return null
 
-  const first = i === 0
-  const last = i === STEPS.length - 1
-  const total = STEPS.length
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1200
-  const vh = typeof window !== 'undefined' ? window.innerHeight : 800
-  const BUBBLE_W = Math.min(380, vw - M * 2)
 
-  const controls = (
-    <>
-      <div className="flex items-center gap-1.5 my-4">
-        {STEPS.map((_, idx) => (
-          <button key={idx} onClick={() => setI(idx)} className="h-1.5 rounded-full transition-all"
-            style={{ width: idx === i ? 22 : 7, background: idx === i ? '#663af1' : 'rgba(0,0,0,0.14)' }} />
-        ))}
-      </div>
-      <div className="flex items-center justify-between gap-3">
-        <button onClick={finish} className="text-[13px] text-subt hover:text-ink transition-colors">Пропустить</button>
-        <div className="flex items-center gap-2">
-          {!first && (
-            <button onClick={() => setI(i - 1)} className="flex items-center gap-1 px-3.5 py-2.5 rounded-2xl bg-black/[0.05] text-ink hover:bg-black/[0.08] text-[14px] font-medium transition-colors">
-              <ChevronLeft className="w-4 h-4" /> Назад
-            </button>
-          )}
-          {last ? (
-            <button onClick={finish} className="flex items-center gap-1.5 px-5 py-2.5 rounded-2xl bg-brand text-white hover:bg-brand-hover text-[14px] font-medium transition-colors">
-              <Check className="w-4 h-4" /> Начать
-            </button>
-          ) : (
-            <button onClick={() => setI(i + 1)} className="flex items-center gap-1 px-5 py-2.5 rounded-2xl bg-brand text-white hover:bg-brand-hover text-[14px] font-medium transition-colors">
-              Далее <ChevronRight className="w-4 h-4" />
-            </button>
-          )}
+  // ── Сам блок «реплики»: маскот без рамки + пузырь с хвостиком ──
+  const narrator = (
+    <div className="flex items-end gap-0 tour-in" style={{ maxWidth: 'min(94vw, 430px)' }}>
+      <ReactiveMascot size={112} className="mascot-glow shrink-0 relative z-10 translate-y-1" />
+      <div
+        className="relative -ml-3 bg-white rounded-3xl border border-black/[0.06] px-5 py-4"
+        style={{ boxShadow: '0 10px 40px rgba(31,38,80,0.18), 0 2px 6px rgba(0,0,0,0.06)', minWidth: 220 }}
+      >
+        {/* хвостик пузыря к маскоту */}
+        <span className="absolute left-[-6px] bottom-6 w-3.5 h-3.5 bg-white border-l border-b border-black/[0.06] rotate-45" />
+
+        <button onClick={finish} className="absolute top-2.5 right-2.5 text-subt hover:text-ink transition-colors" title="Пропустить (Esc)">
+          <X className="w-4 h-4" />
+        </button>
+
+        <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand bg-brand/10 rounded-full px-2 py-0.5 mb-1.5">
+          Reactive · {i + 1}/{total}
         </div>
-      </div>
-    </>
-  )
+        <h3 className="text-[16px] font-semibold tracking-tight mb-1 pr-4">{step.title}</h3>
+        <p className="text-[13px] text-subt leading-relaxed">{step.text}</p>
 
-  const bubbleInner = (
-    <>
-      <button onClick={finish} className="absolute top-3 right-3 text-subt hover:text-ink" title="Пропустить"><X className="w-4 h-4" /></button>
-      <div className="flex items-start gap-3">
-        <ReactiveMascot size={72} className="shrink-0 -mt-1" />
-        <div className="min-w-0">
-          <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand bg-brand/10 rounded-full px-2 py-0.5 mb-1.5">
-            <Sparkles className="w-3 h-3" /> Reactive · {i + 1}/{total}
+        {/* прогресс */}
+        <div className="flex items-center gap-1.5 my-3.5">
+          {STEPS.map((_, idx) => (
+            <button key={idx} onClick={() => setI(idx)} className="h-1.5 rounded-full transition-all"
+              style={{ width: idx === i ? 22 : 7, background: idx === i ? '#663af1' : 'rgba(0,0,0,0.14)' }} />
+          ))}
+        </div>
+
+        {/* кнопки */}
+        <div className="flex items-center justify-between gap-3">
+          <button onClick={finish} className="text-[13px] text-subt hover:text-ink transition-colors">Пропустить</button>
+          <div className="flex items-center gap-2">
+            {!first && (
+              <button onClick={prev} className="flex items-center gap-1 px-3.5 py-2.5 rounded-2xl bg-black/[0.05] text-ink hover:bg-black/[0.08] text-[14px] font-medium transition-colors">
+                <ChevronLeft className="w-4 h-4" /> Назад
+              </button>
+            )}
+            {last ? (
+              <button onClick={finish} className="flex items-center gap-1.5 px-5 py-2.5 rounded-2xl bg-brand text-white hover:bg-brand-hover text-[14px] font-medium transition-colors">
+                <Check className="w-4 h-4" /> Начать
+              </button>
+            ) : (
+              <button onClick={next} className="flex items-center gap-1 px-5 py-2.5 rounded-2xl bg-brand text-white hover:bg-brand-hover text-[14px] font-medium transition-colors">
+                Далее <ChevronRight className="w-4 h-4" />
+              </button>
+            )}
           </div>
-          <h3 className="text-[16px] font-semibold tracking-tight mb-1">{step.title}</h3>
-          <p className="text-[13px] text-subt leading-relaxed">{step.text}</p>
         </div>
       </div>
-      {controls}
-    </>
+    </div>
   )
 
-  // Центрированная карточка (welcome / finish / цель не найдена)
+  // ── Приветствие / финал / цель не найдена: по центру, лёгкое затемнение ──
   if (!rect) {
     return (
-      <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" style={{ background: 'rgba(10,8,25,0.6)' }}>
-        <div className="card w-full max-w-lg p-7 animate-scale-in relative">{bubbleInner}</div>
+      <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" style={{ background: 'rgba(14,11,34,0.46)' }}>
+        {narrator}
       </div>
     )
   }
 
-  // Прожектор на цель: 4 затемняющих панели (цель остаётся видимой/кликабельной)
+  // ── Указатель у цели: стрелка прыгает В СТОРОНУ цели с той стороны, где стоит маскот ──
   const hole = { top: rect.top - PAD, left: rect.left - PAD, width: rect.width + PAD * 2, height: rect.height + PAD * 2 }
-  const dim = 'rgba(10,8,25,0.6)'
-  const panel = (style: CSSProperties) => <div style={{ position: 'fixed', background: dim, ...style }} />
+  const side = pos?.side ?? 'bottom'
+  // маскот стоит со стороны `side` → стрелка указывает НА цель (противоположно)
+  const arrowMap = {
+    bottom: { Icon: ArrowUp, cls: 'tp-up' },     // реплика снизу → стрелка вверх
+    top: { Icon: ArrowDown, cls: 'tp-down' },
+    right: { Icon: ArrowLeft, cls: 'tp-left' },
+    left: { Icon: ArrowRight, cls: 'tp-right' },
+  } as const
+  const { Icon, cls } = arrowMap[side]
 
-  // Позиция стрелки-чипа: над целью, если пузырь снизу; иначе под целью
-  const bubbleBelow = pos ? pos.top > hole.top : true
-  const ctaTop = bubbleBelow ? Math.max(M, hole.top - 34) : hole.top + hole.height + 6
-  const ctaLeft = Math.min(Math.max(M, hole.left), vw - 190)
+  // позиция чипа-указателя: между целью и репликой
+  const CHIP_GAP = 8
+  let chipStyle: { top?: number; left?: number; transform?: string } = {}
+  if (side === 'bottom') chipStyle = { top: hole.top + hole.height + CHIP_GAP, left: hole.left + hole.width / 2, transform: 'translateX(-50%)' }
+  else if (side === 'top') chipStyle = { top: Math.max(M, hole.top - 40), left: hole.left + hole.width / 2, transform: 'translateX(-50%)' }
+  else if (side === 'right') chipStyle = { top: hole.top + hole.height / 2, left: hole.left + hole.width + CHIP_GAP, transform: 'translateY(-50%)' }
+  else chipStyle = { top: hole.top + hole.height / 2, left: Math.max(M, hole.left - 150), transform: 'translateY(-50%)' }
 
   return (
     <div className="fixed inset-0 z-[70]">
-      {panel({ top: 0, left: 0, width: vw, height: Math.max(0, hole.top) })}
-      {panel({ top: hole.top + hole.height, left: 0, width: vw, height: Math.max(0, vh - hole.top - hole.height) })}
-      {panel({ top: hole.top, left: 0, width: Math.max(0, hole.left), height: hole.height })}
-      {panel({ top: hole.top, left: hole.left + hole.width, width: Math.max(0, vw - hole.left - hole.width), height: hole.height })}
-
-      {/* рамка-подсветка */}
+      {/* Кольцо-подсветка цели (тень-«прожектор» затемняет фон ЛЕГКО, цель кликабельна) */}
       <div className="tour-spot rounded-2xl" style={{ position: 'fixed', top: hole.top, left: hole.left, width: hole.width, height: hole.height, pointerEvents: 'none' }} />
 
-      {/* стрелка «Нажмите сюда» */}
+      {/* Указатель «смотри сюда» */}
       {step.cta && (
-        <div style={{ position: 'fixed', top: ctaTop, left: ctaLeft }}
-          className="flex items-center gap-1.5 text-[12.5px] font-semibold text-white bg-brand rounded-full px-3 py-1.5 shadow-lg animate-fade-in">
-          <MousePointerClick className="w-3.5 h-3.5" /> {step.cta}
+        <div style={{ position: 'fixed', zIndex: 2, ...chipStyle }}
+          className="flex items-center gap-1.5 text-[13px] font-semibold text-white bg-brand rounded-full pl-2.5 pr-3.5 py-1.5 shadow-lg pointer-events-none">
+          <Icon className={`w-4 h-4 ${cls}`} /> {step.cta}
         </div>
       )}
 
-      {/* пузырь (позиция вычислена; до вычисления — прозрачный, чтобы не мигал) */}
-      <div ref={bubbleRef} className="card"
-        style={{ position: 'fixed', top: pos?.top ?? -9999, left: pos?.left ?? -9999, width: BUBBLE_W, padding: 20, opacity: pos ? 1 : 0, transition: 'opacity .15s' }}>
-        {bubbleInner}
+      {/* Реплика маскота (позиция вычислена; до вычисления — прозрачная, чтобы не мигала) */}
+      <div ref={unitRef}
+        style={{ position: 'fixed', top: pos?.top ?? -9999, left: pos?.left ?? -9999, width: Math.min(430, vw - M * 2), opacity: pos ? 1 : 0, transition: 'top .25s, left .25s, opacity .15s' }}>
+        {narrator}
       </div>
     </div>
   )
