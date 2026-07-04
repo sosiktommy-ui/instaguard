@@ -1787,7 +1787,7 @@ function TriggersScreen() {
       <div className="grid grid-cols-3 gap-3 pt-1">
         <StatCard icon={Users} color="#663af1" value={dbAccounts.length} label="Аккаунтов" tip="Всего подключённых Instagram-аккаунтов" delay={0} />
         <StatCard icon={Zap} color="#6a7df9" value={dbTriggers.length} label="Кампаний" tip="Всего рекламных кампаний по всем аккаунтам" delay={90} />
-        <StatCard icon={Send} color="#34c759" value={totalFires} label="Срабатываний" tip="Суммарно выполнено действий по всем кампаниям" delay={180} />
+        <StatCard icon={Send} color="#34c759" value={totalFires} label="Срабатываний" tip="Сколько раз кампании сработали (поймано событий) по всем аккаунтам. Сколько действий реально выполнено — на вкладке «Статистика» и в деталях кампании." delay={180} />
       </div>
 
       {showTemplates && (
