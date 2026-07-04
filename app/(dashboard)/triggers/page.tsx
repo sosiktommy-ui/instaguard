@@ -586,7 +586,7 @@ function GateBlock({ d, set }: { d: Draft; set: <K extends keyof Draft>(k: K, v:
 // Группа «Сторис»: просмотр + лайк
 function StoriesBlock({ d, set }: { d: Draft; set: <K extends keyof Draft>(k: K, v: Draft[K]) => void }) {
   return (
-    <Group title="Сторис" icon={Clapperboard} accent="#ff9f0a">
+    <Group title="Сторис" icon={Clapperboard} accent="#ff9f0a" defaultOpen={false}>
       <CheckRow on={d.storyView} onChange={(v) => set('storyView', v)} icon={Eye} label="Просмотреть сторис пользователя" />
       <CheckRow on={d.storyLike} onChange={(v) => { set('storyLike', v); if (v) set('storyView', true) }} icon={Heart} label="Пролайкать просмотренные сторис" />
     </Group>
@@ -768,7 +768,7 @@ function CreateForm({
 
   // Тело формы (шаги) — переиспользуется в двух оболочках: попап (редактирование) и карточка снизу (создание).
   const body = (
-          <div className={cn('grid gap-5', hideAccounts ? 'lg:grid-cols-[0.6fr_1.4fr]' : 'lg:grid-cols-[0.65fr_0.65fr_1.7fr]')}>
+          <div className={cn('grid gap-5', hideAccounts ? 'lg:grid-cols-2' : 'lg:grid-cols-3')}>
 
             {/* ── Шаг 1 — аккаунты (скрыт при редактировании и при создании для конкретного аккаунта) ── */}
             {!hideAccounts && (
@@ -910,7 +910,7 @@ function CreateForm({
                   {d.actDM && <GateBlock d={d} set={set} />}
 
                   {/* Группа «Сигнал» — на что реагировать (общая для всего триггера) */}
-                  <Group title="Сигнал — на что реагировать" icon={Filter} accent="#6a7df9">
+                  <Group title="Сигнал — на что реагировать" icon={Filter} accent="#6a7df9" defaultOpen={false}>
                     <MatchConfig
                       mode={d.dmMatchMode} phrases={d.dmPhrases} exact={d.dmExact}
                       onMode={(m) => set('dmMatchMode', m)} onPhrases={(s) => set('dmPhrases', s)} onExact={(b) => set('dmExact', b)}
@@ -931,13 +931,13 @@ function CreateForm({
                       </div>
 
                       {d.actCommentReply && (
-                        <Group title="Комментарии" icon={MessageCircle} accent="#34c759">
+                        <Group title="Комментарии" icon={MessageCircle} accent="#34c759" defaultOpen={false}>
                           <CommentReplies list={d.commentReplies} onChange={(l) => set('commentReplies', l)} />
                         </Group>
                       )}
 
                       {/* Группа «Сообщение» (директ) */}
-                      <Group title="Сообщение (директ)" icon={Send}>
+                      <Group title="Сообщение (директ)" icon={Send} defaultOpen={false}>
                         <MessageBlock d={d} set={set} fileRef={fileRef} onPickImage={onPickImage} />
                       </Group>
                     </>
@@ -951,7 +951,7 @@ function CreateForm({
                   {/* Гейт подписки — для Лайка/Сторис (у подписчика он не нужен: он уже подписан) */}
                   {d.actDM && (d.type === 'LIKE' || d.type === 'STORY_REPLY') && <GateBlock d={d} set={set} />}
                   {d.actDM && (
-                    <Group title="Сообщение" icon={Send}>
+                    <Group title="Сообщение" icon={Send} defaultOpen={false}>
                       <MessageBlock d={d} set={set} fileRef={fileRef} onPickImage={onPickImage} />
                     </Group>
                   )}
