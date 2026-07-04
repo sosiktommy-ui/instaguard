@@ -97,7 +97,7 @@ function Proxies() {
   )
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" data-tour="page">
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-[26px] font-semibold tracking-tighter leading-none">Прокси</h1>

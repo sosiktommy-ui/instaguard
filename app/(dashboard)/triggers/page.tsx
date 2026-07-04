@@ -1709,15 +1709,17 @@ function TriggersScreen() {
   return (
     <div className="space-y-5 pb-24">
       {/* 1. Создание кампании — главное действие (раскрыто по умолчанию) */}
-      <CreateForm
-        dbAccounts={dbAccounts}
-        dbTriggers={dbTriggers}
-        loadingAccounts={loadingAccounts}
-        onCreated={() => { loadTriggers(); loadTemplates() }}
-        onEdited={onCampaignEdited}
-        formRef={formApi}
-        startOpen
-      />
+      <div data-tour="create">
+        <CreateForm
+          dbAccounts={dbAccounts}
+          dbTriggers={dbTriggers}
+          loadingAccounts={loadingAccounts}
+          onCreated={() => { loadTriggers(); loadTemplates() }}
+          onEdited={onCampaignEdited}
+          formRef={formApi}
+          startOpen
+        />
+      </div>
 
       {/* 2. Аккаунты */}
       <div className="flex items-center justify-between px-1 pt-1">
@@ -1739,8 +1741,10 @@ function TriggersScreen() {
       <DraftsStatus showBanner={false} />
 
       {/* Разделы/подразделы (папки) + фильтр — план §C2 */}
-      <SectionBar sections={sections} selSection={selSection} selSub={selSub}
-        onSelect={(sec, sub) => { setSelSection(sec); setSelSub(sub) }} onReload={loadSections} />
+      <div data-tour="sections">
+        <SectionBar sections={sections} selSection={selSection} selSub={selSub}
+          onSelect={(sec, sub) => { setSelSection(sec); setSelSub(sub) }} onReload={loadSections} />
+      </div>
 
       {loadingAccounts ? (
         <div className="card py-12 text-center text-subt text-[13px]">Загрузка…</div>
@@ -1749,9 +1753,11 @@ function TriggersScreen() {
           <div className="w-14 h-14 rounded-3xl bg-brand/8 flex items-center justify-center"><Users className="w-7 h-7 text-brand/50" /></div>
           <div className="font-semibold text-[16px] tracking-tight text-ink/70">Нет аккаунтов</div>
           <div className="text-[13px] text-subt max-w-xs">Подключите первый аккаунт, чтобы запускать по нему кампании</div>
-          <Button size="sm" className="mt-1" onClick={() => setShowAdd(true)}>
-            <Plus className="w-3.5 h-3.5" /> Аккаунт
-          </Button>
+          <span data-tour="add-account">
+            <Button size="sm" className="mt-1" onClick={() => setShowAdd(true)}>
+              <Plus className="w-3.5 h-3.5" /> Аккаунт
+            </Button>
+          </span>
         </div>
       ) : visibleAccounts.length === 0 ? (
         <div className="card py-12 flex flex-col items-center gap-2 text-center px-6">
@@ -1771,7 +1777,7 @@ function TriggersScreen() {
 
       {/* 3. «+ Аккаунт» — под списком, открывает попап (не уводит на вкладку) */}
       {!loadingAccounts && dbAccounts.length > 0 && (
-        <button onClick={() => setShowAdd(true)}
+        <button onClick={() => setShowAdd(true)} data-tour="add-account"
           className="w-full flex items-center justify-center gap-2 py-3.5 rounded-3xl border border-dashed border-line text-subt hover:text-brand hover:border-brand/50 hover:bg-brand/[0.03] transition-colors text-[13.5px] font-medium">
           <Plus className="w-4 h-4" /> Аккаунт
         </button>

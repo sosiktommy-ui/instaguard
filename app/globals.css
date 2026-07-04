@@ -157,8 +157,24 @@
 }
 .rise { animation: rise 0.55s cubic-bezier(0.16, 1, 0.3, 1) both; }
 
+/* Маскот Reactive — мягкое покачивание в обучении */
+@keyframes rm-bob {
+  0%, 100% { transform: translateY(0) rotate(-1.5deg); }
+  50%      { transform: translateY(-8px) rotate(1.5deg); }
+}
+.rm-bob { animation: rm-bob 3.2s ease-in-out infinite; transform-origin: center bottom; }
+
+/* Пульс-подсветка цели в обучении (прожектор) */
+@keyframes tour-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(155,102,255,0.9), 0 0 0 9999px rgba(10,8,25,0.62); }
+  50%      { box-shadow: 0 0 0 6px rgba(155,102,255,0.55), 0 0 0 9999px rgba(10,8,25,0.62); }
+}
+.tour-spot { animation: tour-pulse 1.8s ease-in-out infinite; }
+
 @media (prefers-reduced-motion: reduce) {
   .rise { animation: none !important; opacity: 1 !important; transform: none !important; }
+  .rm-bob { animation: none !important; }
+  .tour-spot { animation: none !important; box-shadow: 0 0 0 3px rgba(155,102,255,0.9), 0 0 0 9999px rgba(10,8,25,0.62) !important; }
 }
 
 /* Slim, unobtrusive scrollbars */

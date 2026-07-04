@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LogOut, Menu, X, List, Users, Layers, BarChart3, Globe, Settings } from 'lucide-react'
+import { LogOut, Menu, X, List, Users, Layers, BarChart3, Globe, Settings, GraduationCap } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AppLogo } from '@/components/common/AppLogo'
 import { useBreadcrumbs } from '@/lib/breadcrumbs'
@@ -25,6 +25,13 @@ export default function TopNav() {
 
   // Close drawer on route change
   useEffect(() => { setOpen(false) }, [pathname])
+
+  // Пройти обучение заново: сбрасываем флаг и открываем главную (тур покажется снова)
+  const replayTour = () => {
+    try { localStorage.removeItem('rg-onboarded') } catch {}
+    setOpen(false)
+    window.location.assign('/triggers')
+  }
 
   // Реальный выход: удаляем куку сессии на сервере + чистим локальный стор (мультитенант)
   const handleLogout = async () => {
@@ -121,7 +128,11 @@ export default function TopNav() {
                 )
               })}
             </nav>
-            <div className="mt-auto p-3 border-t border-black/[0.06]">
+            <div className="mt-auto p-3 border-t border-black/[0.06] space-y-1">
+              <button onClick={replayTour}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[15px] font-medium text-subt hover:bg-black/[0.04] hover:text-brand transition-all">
+                <GraduationCap className="w-[18px] h-[18px]" /> Обучение Reactive
+              </button>
               <button onClick={handleLogout}
                 className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[15px] font-medium text-subt hover:bg-black/[0.04] hover:text-bad transition-all">
                 <LogOut className="w-[18px] h-[18px]" /> Выйти
