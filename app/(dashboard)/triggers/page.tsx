@@ -1228,11 +1228,16 @@ function CampaignCard({ trigger, onToggle, onEdit, onDelete, index = 0 }: {
   const meta = META_BY_DB[trigger.triggerType]
   const rows = describeActions(trigger)
   const signal = describeSignal(trigger)
-  const firedTotal = trigger.fireCount ?? 0                       // сколько раз кампания сработала
-  const doneTotal = rows.reduce((s, r) => s + r.done, 0)         // сколько действий реально выполнено
+  const firedTotal = trigger.fireCount ?? 0   // сколько раз кампания сработала
+
+  const cond = (trigger.conditions ?? {}) as any
+  const signalPhrases: string[] = (cond.phrases ?? []).filter(Boolean)
+  const signalExpandable = Boolean(signal) && cond.mode === 'specific' && signalPhrases.length > 0
+  const signalOpen = openKey === 'signal'
 
   return (
-    <div className={cn('card card-3d rise p-3.5 flex flex-col gap-2.5', !trigger.isActive && 'opacity-55')} style={{ animationDelay: `${index * 60}ms` }}>
+    <div className={cn('card card-3d rise p-3.5 flex flex-col gap-3', !trigger.isActive && 'opacity-55')} style={{ animationDelay: `${index * 60}ms` }}>
+      {/* Шапка */}
       <div className="flex items-center gap-2.5">
         {meta ? <TrigBadge meta={meta} active={trigger.isActive} size={34} tip={false} /> : <div className="w-8 h-8 rounded-xl bg-black/5" />}
         <div className="flex-1 min-w-0">
@@ -1245,90 +1250,77 @@ function CampaignCard({ trigger, onToggle, onEdit, onDelete, index = 0 }: {
         </button>
       </div>
 
-      {/* Итог кампании: сработало (запусков) vs выполнено действий (успехов) */}
-      <div className="grid grid-cols-2 gap-2">
-        <div className="bg-canvas rounded-xl px-2.5 py-2">
-          <div className="flex items-center gap-1 text-[10px] text-subt">
-            Сработало
-            <Hint text="Сколько раз кампания сработала: событие подошло (новая подписка / комментарий / лайк / сторис) и бот начал выполнять действия." />
-          </div>
-          <div className="text-[19px] font-semibold tracking-tighter leading-none tabular-nums mt-1">{firedTotal.toLocaleString('ru')}</div>
+      {/* ── БЛОК «ТРИГГЕР» — что запускает кампанию ── */}
+      <div className="rounded-xl border border-[#6a7df9]/30 overflow-hidden">
+        <div className="px-2.5 py-1 bg-[#6a7df9]/10 text-[10px] font-semibold uppercase tracking-wider text-[#4b46c9] flex items-center gap-1">
+          Триггер <Hint text="Событие, которое запускает кампанию, и на что она реагирует." />
         </div>
-        <div className="bg-canvas rounded-xl px-2.5 py-2">
-          <div className="flex items-center gap-1 text-[10px] text-subt">
-            Выполнено действий
-            <Hint text="Сколько отдельных действий (DM, лайк, подписка, сторис, коммент) реально выполнено за все срабатывания. Меньше «Сработало» — часть действий не прошла (закрытая личка, лимит и т.п.)." />
+        <div className="px-2.5 py-2 space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            {meta && <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: hexA(meta.color, 0.12) }}><meta.Icon className="w-3 h-3" style={{ color: meta.color }} /></span>}
+            <span className="text-[12.5px] font-medium">{meta?.label ?? trigger.triggerType}</span>
+            <span className="ml-auto text-[11px] text-subt whitespace-nowrap">сработал <span className="font-semibold text-ink tabular-nums">{firedTotal.toLocaleString('ru')}</span> раз</span>
           </div>
-          <div className="text-[19px] font-semibold tracking-tighter leading-none text-ok tabular-nums mt-1">{doneTotal.toLocaleString('ru')}</div>
-        </div>
-      </div>
-
-      {/* Сигнал (на что реагирует) — для триггера-комментария, кликабелен */}
-      {signal && (() => {
-        const cond = (trigger.conditions ?? {}) as any
-        const phrases: string[] = (cond.phrases ?? []).filter(Boolean)
-        const expandable = cond.mode === 'specific' && phrases.length > 0
-        const isOpen = openKey === 'signal'
-        return (
-          <div>
-            <button onClick={() => expandable && setOpenKey(isOpen ? null : 'signal')}
-              className={cn('w-full flex items-center gap-1.5 text-[11px] text-subt px-2 py-1.5 rounded-xl text-left', expandable && (isOpen ? 'bg-black/[0.04]' : 'hover:bg-black/[0.03]'))}>
-              <Filter className="w-3.5 h-3.5 text-[#6a7df9] shrink-0" />
-              <span className="font-medium text-ink/70">Сигнал:</span> <span className="flex-1 truncate">{signal}</span>
-              {expandable && <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', isOpen && 'rotate-180')} />}
-            </button>
-            {isOpen && (
-              <div className="text-[11.5px] text-subt bg-canvas rounded-xl px-3 py-2.5 space-y-0.5 animate-fade-in mt-1">
-                <div className="font-medium text-ink/70">Реагирует на фразы{cond.exact ? ' (точное совпадение)' : ' (с опечатками)'}:</div>
-                <ul className="list-disc ml-4">{phrases.map((p, i) => <li key={i}>{p}</li>)}</ul>
-              </div>
-            )}
-          </div>
-        )
-      })()}
-
-      {/* Действия — кликабельные строки, раскрывают детали. Мелкий текст: «нажми, чтобы раскрыть» */}
-      <div className="flex flex-col gap-1.5">
-        <div className="text-[10px] text-subt/70 uppercase tracking-wider flex items-center gap-1">
-          Действия
-          <Tooltip content="Первое число — выполнено (успешно), второе — сработало (сколько раз бот пытался). Если выполнено меньше — действие часто не проходит.">
-            <span className="normal-case tracking-normal text-subt/60 cursor-help">· выполнено / сработало</span>
-          </Tooltip>
-        </div>
-        {rows.map((r) => {
-          const active = r.done > 0
-          const gap = r.fired - r.done
-          const isOpen = openKey === r.key
-          return (
-            <div key={r.key}>
-              <button
-                onClick={() => setOpenKey(isOpen ? null : r.key)}
-                className={cn('w-full flex items-center gap-2 px-2 py-1.5 rounded-xl transition-colors text-left',
-                  isOpen ? 'bg-black/[0.04]' : 'hover:bg-black/[0.03]')}>
-                <span
-                  className={cn('text-[11px] px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1.5 shrink-0', !active && 'opacity-75')}
-                  style={active
-                    ? { background: `linear-gradient(135deg, ${r.color}, ${darken(r.color)})`, color: '#fff', boxShadow: `0 2px 8px ${hexA(r.color, 0.4)}` }
-                    : { background: hexA(r.color, 0.1), color: r.color }}>
-                  <r.Icon className="w-3.5 h-3.5" strokeWidth={2.4} /> {r.label}
-                  <span className={cn('tabular-nums', active ? 'opacity-90' : 'opacity-60')}>{r.done}/{r.fired}</span>
-                </span>
-                {gap > 0 && (
-                  <span className="text-[10px] font-medium text-bad bg-bad/10 px-1.5 py-0.5 rounded-md shrink-0">−{gap} не вып.</span>
-                )}
-                <span className="flex-1 flex items-center gap-1 flex-wrap">
-                  {r.settings.map((sset, i) => (
-                    <span key={i} className="text-[10px] text-subt bg-black/[0.04] px-1.5 py-0.5 rounded-md">{sset}</span>
-                  ))}
-                </span>
-                <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', isOpen && 'rotate-180')} />
+          {signal && (
+            <>
+              <button onClick={() => signalExpandable && setOpenKey(signalOpen ? null : 'signal')}
+                className={cn('w-full flex items-center gap-1.5 text-[11px] text-subt px-2 py-1 rounded-lg text-left', signalExpandable && (signalOpen ? 'bg-black/[0.04]' : 'hover:bg-black/[0.03]'))}>
+                <Filter className="w-3.5 h-3.5 text-[#6a7df9] shrink-0" />
+                <span className="font-medium text-ink/70">Сигнал:</span> <span className="flex-1 truncate">{signal}</span>
+                {signalExpandable && <ChevronDown className={cn('w-4 h-4 text-subt shrink-0 transition-transform', signalOpen && 'rotate-180')} />}
               </button>
-              {isOpen && <div className="pl-1 pt-1"><ActionDetail trigger={trigger} k={r.key} onEdit={onEdit} /></div>}
-            </div>
-          )
-        })}
+              {signalOpen && (
+                <div className="text-[11.5px] text-subt bg-canvas rounded-lg px-3 py-2.5 space-y-0.5 animate-fade-in">
+                  <div className="font-medium text-ink/70">Реагирует на фразы{cond.exact ? ' (точное совпадение)' : ' (с опечатками)'}:</div>
+                  <ul className="list-disc ml-4">{signalPhrases.map((p, i) => <li key={i}>{p}</li>)}</ul>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
+      {/* ── БЛОК «ДЕЙСТВИЯ» — таблица: что делает + сработало/выполнено ── */}
+      <div className="rounded-xl border border-ok/30 overflow-hidden">
+        <div className="px-2.5 py-1 bg-ok/10 text-[10px] font-semibold uppercase tracking-wider text-ok flex items-center gap-1">
+          Действия <Hint text="Что бот делает при срабатывании. «Сраб.» — сколько раз пытался, «Вып.» — сколько получилось. Нажми на строку — подробности." />
+        </div>
+        {rows.length === 0 ? (
+          <div className="px-2.5 py-3 text-[11.5px] text-subt text-center">Действий нет</div>
+        ) : (
+          <>
+            <div className="grid grid-cols-[1fr_2.4rem_2.4rem] gap-x-2 px-2.5 py-1 text-[10px] text-subt/70 border-b border-line/40">
+              <span>Действие</span>
+              <span className="text-right">Сраб.</span>
+              <span className="text-right">Вып.</span>
+            </div>
+            {rows.map((r) => {
+              const isOpen = openKey === r.key
+              const short = r.done < r.fired
+              return (
+                <div key={r.key} className="border-b border-line/30 last:border-0">
+                  <button onClick={() => setOpenKey(isOpen ? null : r.key)}
+                    className={cn('w-full grid grid-cols-[1fr_2.4rem_2.4rem] gap-x-2 items-center px-2.5 py-1.5 text-left transition-colors',
+                      isOpen ? 'bg-black/[0.04]' : 'hover:bg-black/[0.03]')}>
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: hexA(r.color, 0.12) }}>
+                        <r.Icon className="w-3 h-3" style={{ color: r.color }} strokeWidth={2.4} />
+                      </span>
+                      <span className="text-[12px] truncate">{r.label}</span>
+                      <ChevronDown className={cn('w-3.5 h-3.5 text-subt shrink-0 transition-transform', isOpen && 'rotate-180')} />
+                    </span>
+                    <span className="text-[12px] tabular-nums text-subt text-right">{r.fired}</span>
+                    <span className={cn('text-[12px] tabular-nums font-semibold text-right', short ? 'text-bad' : r.done > 0 ? 'text-ok' : 'text-subt')}>{r.done}</span>
+                  </button>
+                  {isOpen && <div className="px-2.5 pb-2"><ActionDetail trigger={trigger} k={r.key} onEdit={onEdit} /></div>}
+                </div>
+              )
+            })}
+          </>
+        )}
+      </div>
+
+      {/* Футер */}
       <div className="flex items-center justify-between pt-1 border-t border-black/[0.04]">
         <button onClick={onEdit} className="flex items-center gap-1 text-[11.5px] text-subt hover:text-brand transition-colors">
           <Settings className="w-3.5 h-3.5" /> Изменить

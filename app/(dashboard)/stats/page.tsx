@@ -1,13 +1,14 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Users, Zap, Send, AlertCircle, TrendingUp, Eye, CheckCircle2, Info, RefreshCw } from 'lucide-react'
+import { Users, Zap, Send, AlertCircle, Eye, CheckCircle2, Info, RefreshCw } from 'lucide-react'
 import { formatFollowers } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { cn } from '@/lib/utils'
+import { readStat, ACTION_KEYS } from '@/lib/stats'
 
-interface DbAccount { id: string; username: string; status: string; errorCount?: number; followerCount?: number }
-interface DbTrigger { id: string; triggerType: string; isActive: boolean; fireCount?: number }
+interface DbAccount { id: string; username: string; status: string; errorCount?: number; followerCount?: number; followers?: number | null }
+interface DbTrigger { id: string; triggerType: string; isActive: boolean; fireCount?: number; stats?: any }
 interface DbLog { id: string; level: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS'; message: string; createdAt: string; account?: { username?: string } }
 
 const DB_TYPE_LABELS: Record<string, string> = {
@@ -43,11 +44,13 @@ function Stats() {
 
   useEffect(() => { load() }, [load])
 
-  const totalReach = accounts.reduce((s, a) => s + (a.followerCount ?? 0), 0)
+  // Единый источник подписчиков (как на других экранах): реальные followers, иначе отслеженные
+  const followersOf = (a: DbAccount) => a.followers ?? a.followerCount ?? 0
+  const totalReach = accounts.reduce((s, a) => s + followersOf(a), 0)
   const totalRuns = triggers.reduce((s, t) => s + (t.fireCount ?? 0), 0)
+  const totalDone = triggers.reduce((s, t) => s + ACTION_KEYS.reduce((ss, k) => ss + readStat(t.stats, k).done, 0), 0)
   const totalErrors = accounts.reduce((s, a) => s + (a.errorCount ?? 0), 0)
-  const successRate = totalRuns + totalErrors > 0 ? Math.round((totalRuns / (totalRuns + totalErrors)) * 100) : 100
-  const activeTriggers = triggers.filter((t) => t.isActive).length
+  const activeCampaigns = triggers.filter((t) => t.isActive).length
 
   const byType = Object.keys(DB_TYPE_LABELS).map((t) => ({
     type: t,
@@ -55,15 +58,15 @@ function Stats() {
     runs: triggers.filter((x) => x.triggerType === t).reduce((s, x) => s + (x.fireCount ?? 0), 0),
   }))
   const maxRuns = Math.max(1, ...byType.map((b) => b.runs))
-  const topAccounts = [...accounts].sort((a, b) => (b.followerCount ?? 0) - (a.followerCount ?? 0)).slice(0, 5)
+  const topAccounts = [...accounts].sort((a, b) => followersOf(b) - followersOf(a)).slice(0, 5)
 
   const cards = [
     { icon: Users, label: 'Аккаунтов', value: accounts.length, tone: 'bg-brand/10 text-brand' },
-    { icon: Eye, label: 'Подписчиков в базе', value: formatFollowers(totalReach), tone: 'bg-[#6a7df9]/10 text-[#6a7df9]' },
-    { icon: Zap, label: 'Активных триггеров', value: activeTriggers, tone: 'bg-warn/10 text-warn' },
-    { icon: Send, label: 'Срабатываний', value: totalRuns.toLocaleString('ru'), tone: 'bg-ok/10 text-ok' },
+    { icon: Eye, label: 'Подписчиков', value: formatFollowers(totalReach), tone: 'bg-[#6a7df9]/10 text-[#6a7df9]' },
+    { icon: Zap, label: 'Активных кампаний', value: activeCampaigns, tone: 'bg-warn/10 text-warn' },
+    { icon: Send, label: 'Сработало', value: totalRuns.toLocaleString('ru'), tone: 'bg-brand/10 text-brand' },
+    { icon: CheckCircle2, label: 'Выполнено действий', value: totalDone.toLocaleString('ru'), tone: 'bg-ok/10 text-ok' },
     { icon: AlertCircle, label: 'Ошибок', value: totalErrors, tone: 'bg-bad/10 text-bad' },
-    { icon: TrendingUp, label: 'Успешность', value: `${successRate}%`, tone: 'bg-ok/10 text-ok' },
   ]
 
   return (
@@ -71,7 +74,7 @@ function Stats() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-[26px] font-semibold tracking-tighter leading-none">Статистика</h1>
-          <p className="text-subt mt-1.5 text-[14px]">Сводка по всем аккаунтам и триггерам</p>
+          <p className="text-subt mt-1.5 text-[14px]">Сводка по всем аккаунтам и кампаниям</p>
         </div>
         <button onClick={load} className="p-2 text-subt hover:text-ink transition-colors" title="Обновить">
           <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
@@ -92,7 +95,7 @@ function Stats() {
 
       <div className="grid lg:grid-cols-2 gap-5">
         <div className="card p-6">
-          <div className="font-semibold text-[15px] mb-5">Срабатывания по типу триггера</div>
+          <div className="font-semibold text-[15px] mb-5">Срабатывания по типу кампании</div>
           <div className="space-y-4">
             {byType.map((b) => (
               <div key={b.type}>
@@ -110,7 +113,7 @@ function Stats() {
         </div>
 
         <div className="card p-6">
-          <div className="font-semibold text-[15px] mb-5">Топ аккаунтов по базе подписчиков</div>
+          <div className="font-semibold text-[15px] mb-5">Топ аккаунтов по подписчикам</div>
           <div className="space-y-3">
             {topAccounts.map((a, i) => (
               <div key={a.id} className="flex items-center gap-3">
@@ -119,7 +122,7 @@ function Stats() {
                   {(a.username?.[0] ?? '?').toUpperCase()}
                 </span>
                 <span className="font-medium text-[14px] flex-1 truncate">@{a.username}</span>
-                <span className="text-[13px] text-subt tabular-nums">{formatFollowers(a.followerCount ?? 0)}</span>
+                <span className="text-[13px] text-subt tabular-nums">{formatFollowers(followersOf(a))}</span>
               </div>
             ))}
             {topAccounts.length === 0 && <div className="py-6 text-center text-subt text-[13px]">Нет данных</div>}
