@@ -24,6 +24,13 @@ model User {
   settings  UserSettings?
 }
 
+// Лок для защиты от параллельного запуска фоновых задач (напр. поллинга).
+// Аренда с истечением: если процесс упал — лок сам «протухнет» после lockedUntil.
+model AppLock {
+  key         String   @id
+  lockedUntil DateTime @default(now())
+}
+
 // Настройки пользователя
 model UserSettings {
   userId           String  @id

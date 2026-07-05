@@ -25,9 +25,11 @@ const LIKERS_PER_MEDIA = 50
 // Сколько тредов директа читать на предмет ответов/упоминаний в сторис
 const STORY_EVENTS_AMOUNT = 15
 // Глубина скрейпа подписчиков/подписок ОСНОВНОГО черновым для проверки гейта.
-// Чем больше — тем полнее проверка, но тяжелее для чернового. Основной при этом не трогаем.
-const GATE_FOLLOWERS_SCAN = 900
-const GATE_FOLLOWING_SCAN = 900
+// Держим НЕБОЛЬШОЙ (свежая порция + накопленный снапшот подписчиков): 900+900 с
+// внутренними паузами instagrapi давали ~1-2 мин НА КАЖДЫЙ аккаунт — при 10 аккаунтах
+// цикл перехлёстывал 30-минутный интервал. 200 достаточно (снапшот копится со временем).
+const GATE_FOLLOWERS_SCAN = 200
+const GATE_FOLLOWING_SCAN = 200
 // Сколько последних подписчиков запрашивать у Instagram (лимит безопасности)
 const FOLLOWERS_FETCH_LIMIT = 50
 // Сколько последних постов и комментариев под каждым сканировать
@@ -233,6 +235,29 @@ export async function POST(req: NextRequest) {
     userId = user.id
   }
   const scope = userId ? { userId } : {}
+
+  // ── Лок от параллельного запуска ПОЛНОГО поллинга ────────────────────────────
+  // Если авто-цикл затянулся или кто-то нажал «Проверить» поверх — два прохода по
+  // тем же аккаунтам задваивали бы счётчики (а без Redis — и сами DM). Полный поллинг
+  // (без accountId) берёт аренду; целевой поллинг одного аккаунта лок не трогает.
+  const isFullPoll = !accountId
+  const LOCK_KEY = 'poll:all'
+  const LOCK_LEASE_MS = 25 * 60 * 1000
+  let lockedByUs = false
+  if (isFullPoll) {
+    await prisma.appLock.upsert({ where: { key: LOCK_KEY }, create: { key: LOCK_KEY, lockedUntil: new Date(0) }, update: {} }).catch(() => {})
+    const now = new Date()
+    const r = await prisma.appLock.updateMany({
+      where: { key: LOCK_KEY, lockedUntil: { lt: now } },
+      data: { lockedUntil: new Date(now.getTime() + LOCK_LEASE_MS) },
+    }).catch(() => ({ count: 0 }))
+    lockedByUs = r.count === 1
+    if (!lockedByUs) {
+      return NextResponse.json({ ok: true, busy: true, message: 'Проверка уже выполняется — дождитесь завершения.' })
+    }
+  }
+
+  try {
 
   // Основные аккаунты (отправители): исключаем черновых (HELPER) — те только парсят.
   const where: any = accountId
@@ -440,17 +465,21 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Реальное число подписчиков аккаунта (один лёгкий запрос)
+    // Реальное число подписчиков — для спарклайна нужна лишь ОДНА точка в день.
+    // Раньше запрос шёл КАЖДЫЙ цикл (до 48×/сутки на аккаунт) — лишняя нагрузка на IG.
+    // Тянем только если сегодняшней точки ещё нет (или числа вообще нет).
     let realFollowers: number | undefined
     let followersHistory: any = undefined
-    if (account.sessionData) {
+    const today = new Date().toISOString().slice(0, 10)
+    const histNow = Array.isArray(account.followersHistory) ? (account.followersHistory as any[]) : []
+    const haveToday = histNow.length > 0 && histNow[histNow.length - 1].d === today && account.followers != null
+    if (account.sessionData && (isManual || !haveToday)) {
       try { realFollowers = (await getAccountInfo(account.sessionData as object, account.proxy ?? undefined)).follower_count }
       catch {}
     }
     // Копим историю подписчиков (одна точка в день) для спарклайна прироста
     if (realFollowers !== undefined) {
-      const today = new Date().toISOString().slice(0, 10)
-      const hist = Array.isArray(account.followersHistory) ? [...(account.followersHistory as any[])] : []
+      const hist = [...histNow]
       const last = hist[hist.length - 1]
       if (last && last.d === today) last.n = realFollowers
       else hist.push({ d: today, n: realFollowers })
@@ -706,4 +735,9 @@ export async function POST(req: NextRequest) {
   if (dmQueue) await dmQueue.close()
 
   return NextResponse.json({ ok: true, summary })
+
+  } finally {
+    // Снимаем аренду лока — следующий цикл сможет стартовать сразу
+    if (lockedByUs) await prisma.appLock.update({ where: { key: LOCK_KEY }, data: { lockedUntil: new Date(0) } }).catch(() => {})
+  }
 }

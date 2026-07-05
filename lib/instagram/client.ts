@@ -1,15 +1,29 @@
 const PYTHON_WORKER_URL = process.env.PYTHON_WORKER_URL ?? 'http://localhost:8001'
 const PYTHON_WORKER_SECRET = process.env.PYTHON_WORKER_SECRET ?? ''
+// Таймаут на один вызов воркера. Без него зависший запрос к Instagram (мёртвый
+// прокси, троттлинг) вешал бы весь последовательный поллинг — все аккаунты за ним.
+const WORKER_TIMEOUT_MS = Number(process.env.WORKER_TIMEOUT_MS) || 75_000
 
 async function workerFetch<T = any>(path: string, body: object): Promise<T> {
-  const res = await fetch(`${PYTHON_WORKER_URL}${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Worker-Secret': PYTHON_WORKER_SECRET,
-    },
-    body: JSON.stringify(body),
-  })
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), WORKER_TIMEOUT_MS)
+  let res: Response
+  try {
+    res = await fetch(`${PYTHON_WORKER_URL}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Worker-Secret': PYTHON_WORKER_SECRET,
+      },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    })
+  } catch (e: any) {
+    if (e?.name === 'AbortError') throw new Error(`Таймаут ${Math.round(WORKER_TIMEOUT_MS / 1000)}с: воркер/Instagram не ответил (${path})`)
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
   // 202 = challenge required (not an error — parse normally)
   if (!res.ok && res.status !== 202) {
     let detail: string

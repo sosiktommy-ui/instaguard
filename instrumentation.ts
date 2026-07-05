@@ -39,12 +39,24 @@ export async function register() {
         const workerUrl = process.env.PYTHON_WORKER_URL ?? 'http://localhost:8001'
         const workerSecret = process.env.PYTHON_WORKER_SECRET ?? ''
 
+        const WORKER_TIMEOUT_MS = Number(process.env.WORKER_TIMEOUT_MS) || 75_000
         const call = async (path: string, body: object) => {
-          const res = await fetch(`${workerUrl}${path}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Worker-Secret': workerSecret },
-            body: JSON.stringify(body),
-          })
+          const ctrl = new AbortController()
+          const timer = setTimeout(() => ctrl.abort(), WORKER_TIMEOUT_MS)
+          let res: Response
+          try {
+            res = await fetch(`${workerUrl}${path}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Worker-Secret': workerSecret },
+              body: JSON.stringify(body),
+              signal: ctrl.signal,
+            })
+          } catch (e: any) {
+            if (e?.name === 'AbortError') throw new Error(`Таймаут ${Math.round(WORKER_TIMEOUT_MS / 1000)}с: воркер не ответил (${path})`)
+            throw e
+          } finally {
+            clearTimeout(timer)
+          }
           if (!res.ok) {
             const err = await res.json().catch(() => ({}))
             throw new Error(err.detail ?? `HTTP ${res.status}`)
@@ -131,6 +143,10 @@ export async function register() {
         const baseUrl = process.env.NEXT_PUBLIC_APP_URL
           ?? (railwayDomain ? `https://${railwayDomain}` : null)
           ?? 'http://localhost:3000'
+        // Бэкстоп-таймаут на весь цикл поллинга (сам поллинг ограничен пер-аккаунт
+        // таймаутами воркера, но подстрахуемся, чтобы job не висел вечно).
+        const ctrl = new AbortController()
+        const timer = setTimeout(() => ctrl.abort(), 20 * 60 * 1000)
         try {
           const res = await fetch(`${baseUrl}/api/poll`, {
             method: 'POST',
@@ -140,12 +156,16 @@ export async function register() {
               'x-internal-secret': process.env.INTERNAL_SECRET ?? 'instaguard-internal-cron',
             },
             body: '{}',
+            signal: ctrl.signal,
           })
           const data = await res.json()
+          if (data.busy) { console.log('[auto-poll] — пропуск: предыдущий цикл ещё идёт'); return }
           const total = (data.summary ?? []).reduce((s: number, r: any) => s + (r.dmsQueued ?? 0), 0)
           console.log(`[auto-poll] ✓ done, queued ${total} DMs`)
         } catch (e: any) {
-          console.error('[auto-poll] ✗ failed:', e.message)
+          console.error('[auto-poll] ✗ failed:', e?.name === 'AbortError' ? 'таймаут 20 мин' : e.message)
+        } finally {
+          clearTimeout(timer)
         }
       },
       { connection }
