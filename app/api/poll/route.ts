@@ -45,6 +45,18 @@ function capPks(set: Set<string>, max: number): string[] {
   const arr = Array.from(set)
   return arr.length > max ? arr.slice(arr.length - max) : arr
 }
+
+// Выбирает НОВЫЕ цели и помечает «известными» ТОЛЬКО обработанные (+ всю базу на
+// первом проходе). Раньше все найденные разом падали в снапшот → всё сверх
+// MAX_NEW_PER_POLL молча терялось (помечалось «видели», но действие не выполнялось).
+// Теперь лишние остаются «новыми» и добираются в следующих циклах (в пределах лимитов).
+function selectTargets<T>(all: T[], known: Set<string>, hadBaseline: boolean, pkOf: (x: T) => string): { fresh: T[]; process: T[] } {
+  if (!hadBaseline) { all.forEach((x) => { const k = pkOf(x); if (k) known.add(k) }); return { fresh: [], process: [] } }
+  const fresh = all.filter((x) => { const k = pkOf(x); return Boolean(k) && !known.has(k) })
+  const process = fresh.slice(0, MAX_NEW_PER_POLL)
+  process.forEach((x) => known.add(pkOf(x)))
+  return { fresh, process }
+}
 // Определяет по тексту ошибки, нужно ли остановить аккаунт (challenge/бан/ограничение)
 function statusFromError(msg: string): 'CHALLENGE' | 'PAUSED' | null {
   const m = (msg || '').toLowerCase()
@@ -486,57 +498,75 @@ export async function POST(req: NextRequest) {
       followersHistory = hist.slice(-30)
     }
 
+    // Парсинг черновым не должен ронять ОСНОВНОЙ. Если скрейп упал у чернового —
+    // помечаем ЕГО (и, если бан/челлендж, останавливаем + он выпадет из пула в
+    // следующем цикле), а поток тихо пропускаем. Если основной парсил сам (нет
+    // черновых, allowNoDrafts) — пробрасываем в общий catch (это его проблема).
+    const scrape = async <T>(fn: () => Promise<T>): Promise<T | null> => {
+      try { return await fn() }
+      catch (e: any) {
+        if (!draft) throw e
+        const brk = statusFromError(e?.message ?? '')
+        await Promise.all([
+          prisma.instagramAccount.update({ where: { id: draft.id }, data: { errorCount: { increment: 1 }, ...(brk ? { status: brk } : {}) } }).catch(() => null),
+          prisma.log.create({ data: { accountId: draft.id, level: 'ERROR', message: `Парсинг для @${account.username} не удался: ${e?.message}${brk ? ` → черновой остановлен (${brk})` : ''}` } }).catch(() => null),
+        ])
+        return null
+      }
+    }
+
     try {
       // ── Поток подписчиков ────────────────────────────────────────────────
       if (followerTriggers.length) {
-        const { followers } = await getFollowers(parseSession, account.username, parseProxy, FOLLOWERS_FETCH_LIMIT)
-        const snapFollowers = account.snapshots.find((sn) => sn.type === 'FOLLOWERS')
-        const hadBaseline = Boolean(snapFollowers)
-        const knownPks = extractKnownPks(snapFollowers?.data)
-        // Первая проверка (нет снапшота) — только фиксируем базу, НЕ обрабатываем существующих
-        // подписчиков (иначе на новом аккаунте будет массовая рассылка → бан).
-        let newFollowers = hadBaseline ? followers.filter((f) => !knownPks.has(String(f.pk))) : []
-        followers.forEach((f) => knownPks.add(String(f.pk)))
+        const scraped = await scrape(() => getFollowers(parseSession, account.username, parseProxy, FOLLOWERS_FETCH_LIMIT))
+        if (scraped) {
+          const { followers } = scraped
+          const snapFollowers = account.snapshots.find((sn) => sn.type === 'FOLLOWERS')
+          const hadBaseline = Boolean(snapFollowers)
+          const knownPks = extractKnownPks(snapFollowers?.data)
+          // Первая проверка (нет снапшота) — только фиксируем базу, НЕ обрабатываем существующих
+          // подписчиков (иначе на новом аккаунте будет массовая рассылка → бан).
+          const { fresh, process } = selectTargets(followers, knownPks, hadBaseline, (f) => String(f.pk))
 
-        await prisma.$transaction([
-          prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'FOLLOWERS' } }),
-          prisma.snapshot.create({ data: { accountId: account.id, type: 'FOLLOWERS', data: capPks(knownPks, SNAPSHOT_MAX) } }),
-        ])
+          await prisma.$transaction([
+            prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'FOLLOWERS' } }),
+            prisma.snapshot.create({ data: { accountId: account.id, type: 'FOLLOWERS', data: capPks(knownPks, SNAPSHOT_MAX) } }),
+          ])
 
-        s.totalFollowers = followers.length
-        s.newFollowers = newFollowers.length
-        // Не обрабатываем больше N новых за одну проверку (защита от всплеска)
-        if (newFollowers.length > MAX_NEW_PER_POLL) newFollowers = newFollowers.slice(0, MAX_NEW_PER_POLL)
+          s.totalFollowers = followers.length
+          s.newFollowers = fresh.length
 
-        // Подписчик уже подписан на нас — гейт не нужен
-        await handleTargets(
-          newFollowers.map((f) => ({ pk: String(f.pk), username: f.username })),
-          followerTriggers, false,
-        )
+          // Подписчик уже подписан на нас — гейт не нужен
+          await handleTargets(
+            process.map((f) => ({ pk: String(f.pk), username: f.username })),
+            followerTriggers, false,
+          )
+        }
       }
 
       // ── Поток лайков (отдельный кулдаун) ─────────────────────────────────
       const snapLikesMeta = account.snapshots.find((sn) => sn.type === 'LIKES')
       const likeElapsed = snapLikesMeta ? Date.now() - new Date(snapLikesMeta.createdAt).getTime() : Infinity
       if (likeTriggers.length && (isManual || likeElapsed >= LIKE_COOLDOWN_MS)) {
-        const { likers } = await getLikers(parseSession, account.username, parseProxy, LIKERS_MEDIA_COUNT, LIKERS_PER_MEDIA)
-        const hadBaseline = Boolean(snapLikesMeta)
-        const knownL = extractKnownPks(snapLikesMeta?.data)
-        let newLikers = hadBaseline ? likers.filter((l) => !knownL.has(String(l.pk))) : []
-        likers.forEach((l) => knownL.add(String(l.pk)))
+        const scraped = await scrape(() => getLikers(parseSession, account.username, parseProxy, LIKERS_MEDIA_COUNT, LIKERS_PER_MEDIA))
+        if (scraped) {
+          const { likers } = scraped
+          const hadBaseline = Boolean(snapLikesMeta)
+          const knownL = extractKnownPks(snapLikesMeta?.data)
+          const { fresh, process } = selectTargets(likers, knownL, hadBaseline, (l) => String(l.pk))
 
-        await prisma.$transaction([
-          prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'LIKES' } }),
-          prisma.snapshot.create({ data: { accountId: account.id, type: 'LIKES', data: capPks(knownL, SNAPSHOT_MAX) } }),
-        ])
+          await prisma.$transaction([
+            prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'LIKES' } }),
+            prisma.snapshot.create({ data: { accountId: account.id, type: 'LIKES', data: capPks(knownL, SNAPSHOT_MAX) } }),
+          ])
 
-        s.newLikers = newLikers.length
-        if (newLikers.length > MAX_NEW_PER_POLL) newLikers = newLikers.slice(0, MAX_NEW_PER_POLL)
-        // Гейт: лайкнувший может быть не подписан → DM пропускается (лайк/подписка/сторис остаются)
-        await handleTargets(
-          newLikers.map((l) => ({ pk: String(l.pk), username: l.username })),
-          likeTriggers, true,
-        )
+          s.newLikers = fresh.length
+          // Гейт: лайкнувший может быть не подписан → DM пропускается (лайк/подписка/сторис остаются)
+          await handleTargets(
+            process.map((l) => ({ pk: String(l.pk), username: l.username })),
+            likeTriggers, true,
+          )
+        }
       }
 
       // ── Поток стори-событий: ответы на мои сторис + упоминания (сессией основного) ──
@@ -547,18 +577,16 @@ export async function POST(req: NextRequest) {
         const { events } = await getStoryEvents(session, proxy, STORY_EVENTS_AMOUNT)
         const hadBaseline = Boolean(snapStoryMeta)
         const knownS = extractKnownPks(snapStoryMeta?.data)
-        let newEvents = hadBaseline ? events.filter((e) => e.pk && !knownS.has(String(e.pk))) : []
-        events.forEach((e) => { if (e.pk) knownS.add(String(e.pk)) })
+        const { fresh, process } = selectTargets(events, knownS, hadBaseline, (e) => (e.pk ? String(e.pk) : ''))
 
         await prisma.$transaction([
           prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'STORY' } }),
           prisma.snapshot.create({ data: { accountId: account.id, type: 'STORY', data: capPks(knownS, SNAPSHOT_MAX) } }),
         ])
 
-        s.newStoryEvents = newEvents.length
-        if (newEvents.length > MAX_NEW_PER_POLL) newEvents = newEvents.slice(0, MAX_NEW_PER_POLL)
+        s.newStoryEvents = fresh.length
         await handleTargets(
-          newEvents.map((e) => ({ pk: String(e.user_pk), username: e.username })),
+          process.map((e) => ({ pk: String(e.user_pk), username: e.username })),
           storyTriggers, true,
         )
       }
@@ -569,13 +597,14 @@ export async function POST(req: NextRequest) {
         ? Date.now() - new Date(snapCommentsMeta.createdAt).getTime()
         : Infinity
       if (commentTriggers.length && (isManual || commentElapsed >= COMMENT_COOLDOWN_MS)) {
-        const { comments } = await getComments(parseSession, account.username, parseProxy, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA)
+        const scraped = await scrape(() => getComments(parseSession, account.username, parseProxy, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA))
+        if (scraped) {
+        const { comments } = scraped
         const hadBaseline = Boolean(snapCommentsMeta)
         const knownC = extractKnownPks(snapCommentsMeta?.data)
         // Первая проверка (нет снапшота) — только фиксируем базу, НЕ реагируем на старые комменты,
         // иначе бот разом ответит на все существующие. Реагируем только на появившиеся после базы.
-        const newComments = hadBaseline ? comments.filter((c) => !knownC.has(String(c.pk))) : []
-        comments.forEach((c) => knownC.add(String(c.pk)))
+        const { fresh, process: toProcess } = selectTargets(comments, knownC, hadBaseline, (c) => String(c.pk))
 
         await prisma.$transaction([
           prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'COMMENTS' } }),
@@ -583,8 +612,7 @@ export async function POST(req: NextRequest) {
         ])
 
         s.totalComments = comments.length
-        s.newComments = newComments.length
-        const toProcess = newComments.slice(0, MAX_NEW_PER_POLL)
+        s.newComments = fresh.length
 
         for (const c of toProcess) {
           for (const trigger of commentTriggers) {
@@ -701,6 +729,7 @@ export async function POST(req: NextRequest) {
               if (fired) s.commentActions++
             }
           }
+        }
         }
       }
 
