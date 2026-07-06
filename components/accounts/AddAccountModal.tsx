@@ -11,6 +11,27 @@ type AuthMode = 'password' | 'cookies'
 
 interface SectionItem { id: string; parentId: string | null; name: string }
 
+// Разбирает строку от продавца «логин пароль 2FA-ключ» при вставке.
+// 2FA-ключ = хвост из base32-групп по 4 символа (OJDU 3SXQ …) ИЛИ один длинный base32-токен.
+// Возвращает null, если формат не распознан (тогда обычная вставка).
+function parseSellerLine(text: string): { username: string; password: string; totp: string } | null {
+  const toks = text.trim().split(/\s+/).filter(Boolean)
+  if (toks.length < 2) return null
+  const isGroup = (t: string) => /^[A-Za-z2-7]{4}$/.test(t)
+  const isLong = (t: string) => /^[A-Za-z2-7]{16,}$/.test(t)
+  let end = toks.length
+  const groups: string[] = []
+  while (end > 0 && isGroup(toks[end - 1])) { groups.unshift(toks[end - 1]); end-- }
+  let totp = ''
+  if (groups.length >= 2) totp = groups.join('')
+  else if (isLong(toks[toks.length - 1])) { totp = toks[toks.length - 1]; end = toks.length - 1 }
+  else end = toks.length
+  const rest = toks.slice(0, end)
+  if (rest.length >= 2) return { username: rest[0].replace(/^@/, ''), password: rest[1], totp }
+  if (rest.length === 1 && totp) return { username: '', password: rest[0], totp }
+  return null
+}
+
 /**
  * Единый переиспользуемый попап подключения Instagram-аккаунта.
  * Используется и на вкладке «Аккаунты», и на главном экране (кнопка «+ Аккаунт»).
@@ -26,6 +47,18 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState('')
   const [step, setStep]         = useState<'form' | 'auth'>('form')
+  const [pasteNote, setPasteNote] = useState('')
+
+  // Умная вставка: если вставили строку «логин пароль 2FA-ключ» — раскладываем по полям
+  const onCredsPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const parsed = parseSellerLine(e.clipboardData.getData('text'))
+    if (!parsed) return
+    e.preventDefault()
+    if (parsed.username) setUsername(parsed.username)
+    setPassword(parsed.password)
+    if (parsed.totp) setTotp(parsed.totp)
+    setPasteNote(`Разложено по полям: ${parsed.username ? `логин @${parsed.username} · ` : ''}пароль${parsed.totp ? ' · 2FA-ключ' : ''}`)
+  }
 
   // Разделы/подразделы (папки) — для назначения аккаунту при создании
   const [sections, setSections] = useState<SectionItem[]>([])
@@ -187,6 +220,7 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
               <div className="relative">
                 <AtSign className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
                 <input value={username} onChange={(e) => setUsername(e.target.value)}
+                  onPaste={onCredsPaste}
                   onKeyDown={(e) => e.key === 'Enter' && save()}
                   autoFocus className="field pl-10" placeholder="username" />
               </div>
@@ -196,6 +230,7 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
               <div className="relative">
                 <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
                 <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+                  onPaste={onCredsPaste}
                   onKeyDown={(e) => e.key === 'Enter' && save()}
                   className="field pl-10" placeholder="••••••••" />
               </div>
@@ -212,6 +247,7 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
                   className="field pl-10 font-mono text-[13px]" placeholder="напр. JBSWY3DPEHPK3PXP (необязательно)" />
               </div>
             </div>
+            {pasteNote && <div className="text-[12px] text-ok bg-ok/10 rounded-2xl px-3 py-2">✓ {pasteNote}</div>}
             {proxyBlock}
             {error && <div className="text-bad text-[12.5px] whitespace-pre-wrap break-words bg-bad/[0.06] rounded-2xl p-3 max-h-56 overflow-y-auto leading-relaxed">{error}</div>}
             <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed">
