@@ -43,6 +43,15 @@ const TYPE_META: Record<string, { label: string; color: string; Icon: LucideIcon
 const TYPE_SHORT: Record<string, string> = {
   NEW_FOLLOWER: 'Подписка', NEW_COMMENT: 'Комментарий', NEW_LIKE: 'Лайк', STORY_MENTION: 'Сторис',
 }
+// Полный набор возможных действий для каждого типа события (таблица всегда полная;
+// невключённые — серым). «Коммент» (ответ в комментах) есть только у события «Комментарий».
+const TYPE_ACTIONS: Record<string, ActionKey[]> = {
+  NEW_FOLLOWER: ['dm', 'like', 'follow', 'story'],
+  NEW_COMMENT: ['dm', 'like', 'follow', 'story', 'comment'],
+  NEW_LIKE: ['dm', 'like', 'follow', 'story'],
+  STORY_MENTION: ['dm', 'like', 'follow', 'story'],
+}
+const MUTED = '#b4b4bd' // цвет неактивных (серых) заголовков
 const ACTION_FROM_TYPE: Record<string, ActionKey> = {
   SEND_MESSAGE: 'dm', LIKE_MEDIA: 'like', FOLLOW_BACK: 'follow', VIEW_STORIES: 'story',
   REPLY_COMMENT: 'comment', LIKE_COMMENT: 'comment', COMMENT_GATE: 'comment',
@@ -98,13 +107,14 @@ function AccountsView({ triggers }: { triggers: MxTrigger[] }) {
     const rows = [...rowMap.entries()].map(([id, username]) => ({ id, username }))
       .sort((a, b) => a.username.localeCompare(b.username))
 
-    // Группы = типы событий, присутствующие среди триггеров
-    const groups = TYPE_ORDER.filter((type) => triggers.some((t) => t.triggerType === type)).map((type) => {
+    // Таблица ВСЕГДА полная: все типы событий и все их возможные действия.
+    // Неиспользуемые (нет такой кампании / действие не включено) — серым.
+    const groups = TYPE_ORDER.map((type) => {
       const list = triggers.filter((t) => t.triggerType === type)
-      const actionKeys = ACTION_KEYS.filter((k) =>
-        list.some((t) => configuredKeys(t).has(k)) ||
-        list.some((t) => { const s = readStat(t.stats, k); return s.fired > 0 || s.done > 0 })
-      )
+      const active = list.length > 0
+      const actionKeys = TYPE_ACTIONS[type]
+      const actionActive = (k: ActionKey) =>
+        list.some((t) => configuredKeys(t).has(k) || (() => { const s = readStat(t.stats, k); return s.fired > 0 || s.done > 0 })())
       const cell = (accId: string, k: ActionKey): Stat | null => {
         const rel = list.filter((t) => t.responder?.id === accId)
         if (!rel.length) return null
@@ -114,16 +124,14 @@ function AccountsView({ triggers }: { triggers: MxTrigger[] }) {
         if (!list.some((t) => t.responder?.id === accId)) return null
         return actionKeys.reduce((acc, k) => addStat(acc, cell(accId, k) ?? ZERO), { ...ZERO })
       }
-      return { type, ...TYPE_META[type], actionKeys, cell, groupTotal }
-    }).filter((g) => g.actionKeys.length > 0)
+      return { type, ...TYPE_META[type], active, actionKeys, actionActive, cell, groupTotal }
+    })
 
     const grandTotal = (accId: string) => groups.reduce((s, g) => s + (g.groupTotal(accId)?.done ?? 0), 0)
     return { rows, groups, grandTotal }
   }, [triggers])
 
-  if (!model.groups.length || !model.rows.length) {
-    return <Empty />
-  }
+  if (!model.rows.length) return <Empty />
 
   return (
     <Scroll>
@@ -132,15 +140,18 @@ function AccountsView({ triggers }: { triggers: MxTrigger[] }) {
           <th rowSpan={2} className="sticky left-0 z-10 bg-white text-left align-bottom font-semibold text-ink/80 px-3 py-2.5 border-b border-black/10 min-w-[168px]">
             Аккаунт
           </th>
-          {model.groups.map((g) => (
-            <th key={g.type} colSpan={g.actionKeys.length + 1}
-              className="px-2.5 py-2 border-b border-l-2 text-center"
-              style={{ borderLeftColor: hexA(g.color, 0.35), background: hexA(g.color, 0.09) }}>
-              <div className="inline-flex items-center gap-1.5 font-semibold" style={{ color: g.color }}>
-                <g.Icon className="w-4 h-4" />{g.label}
-              </div>
-            </th>
-          ))}
+          {model.groups.map((g) => {
+            const c = g.active ? g.color : MUTED
+            return (
+              <th key={g.type} colSpan={g.actionKeys.length + 1}
+                className="px-2.5 py-2 border-b border-l-2 text-center"
+                style={{ borderLeftColor: hexA(c, 0.35), background: g.active ? hexA(g.color, 0.09) : 'rgba(0,0,0,0.02)' }}>
+                <div className="inline-flex items-center gap-1.5 font-semibold" style={{ color: c }}>
+                  <g.Icon className="w-4 h-4" />{g.label}
+                </div>
+              </th>
+            )
+          })}
           <th rowSpan={2} className="px-3 py-2.5 border-b border-l-2 border-black/15 text-center align-bottom font-semibold text-ink min-w-[62px] bg-black/[0.02]">
             Итого
           </th>
@@ -149,16 +160,17 @@ function AccountsView({ triggers }: { triggers: MxTrigger[] }) {
           {model.groups.flatMap((g) => [
             ...g.actionKeys.map((k, idx) => {
               const A = ACTION_META[k]
+              const on = g.active && g.actionActive(k)
               return (
                 <th key={g.type + k}
-                  className={`px-2.5 py-1.5 border-b border-black/10 font-medium text-subt whitespace-nowrap text-center min-w-[62px] ${idx === 0 ? 'border-l-2' : 'border-l border-black/[0.04]'}`}
-                  style={idx === 0 ? { borderLeftColor: hexA(g.color, 0.35) } : undefined}>
+                  className={`px-2.5 py-1.5 border-b border-black/10 font-medium whitespace-nowrap text-center min-w-[62px] ${on ? 'text-subt' : 'text-black/25'} ${idx === 0 ? 'border-l-2' : 'border-l border-black/[0.04]'}`}
+                  style={idx === 0 ? { borderLeftColor: hexA(g.active ? g.color : MUTED, 0.35) } : undefined}>
                   <span className="inline-flex items-center gap-1"><A.Icon className="w-3 h-3 opacity-60" />{A.label}</span>
                 </th>
               )
             }),
             <th key={g.type + '_sum'} className="px-2.5 py-1.5 border-b border-black/10 font-semibold text-center min-w-[52px]"
-              style={{ color: g.color, background: hexA(g.color, 0.05) }} title={`Итог по «${g.label}»`}>Σ</th>,
+              style={{ color: g.active ? g.color : MUTED, background: g.active ? hexA(g.color, 0.05) : 'rgba(0,0,0,0.02)' }} title={`Итог по «${g.label}»`}>Σ</th>,
           ])}
         </tr>
       </thead>
@@ -177,12 +189,12 @@ function AccountsView({ triggers }: { triggers: MxTrigger[] }) {
               ...g.actionKeys.map((k, idx) => (
                 <td key={g.type + k}
                   className={`text-center px-2.5 py-2 border-b border-black/[0.05] ${idx === 0 ? 'border-l-2' : 'border-l border-black/[0.04]'}`}
-                  style={idx === 0 ? { borderLeftColor: hexA(g.color, 0.25) } : undefined}>
+                  style={idx === 0 ? { borderLeftColor: hexA(g.active ? g.color : MUTED, 0.25) } : undefined}>
                   <Cell v={g.cell(acc.id, k)} />
                 </td>
               )),
               <td key={g.type + '_sum'} className="text-center px-2.5 py-2 border-b border-black/[0.05] font-semibold tabular-nums"
-                style={{ color: g.color, background: hexA(g.color, 0.04) }}>
+                style={{ color: g.active ? g.color : MUTED, background: g.active ? hexA(g.color, 0.04) : 'rgba(0,0,0,0.02)' }}>
                 <SumCell v={g.groupTotal(acc.id)} />
               </td>,
             ])}
@@ -273,11 +285,12 @@ function SummaryView({ triggers }: { triggers: MxTrigger[] }) {
     const rows = [...rowMap.entries()].map(([id, username]) => ({ id, username }))
       .sort((a, b) => a.username.localeCompare(b.username))
 
-    const eventTypes = TYPE_ORDER.filter((type) => triggers.some((t) => t.triggerType === type))
-    const actionKeys = ACTION_KEYS.filter((k) =>
-      triggers.some((t) => configuredKeys(t).has(k)) ||
-      triggers.some((t) => { const s = readStat(t.stats, k); return s.fired > 0 || s.done > 0 })
-    )
+    // Таблица всегда полная: все типы событий и все действия (неактивные — серым)
+    const eventTypes = [...TYPE_ORDER]
+    const actionKeys = [...ACTION_KEYS]
+    const eventActive = (type: string) => triggers.some((t) => t.triggerType === type)
+    const actionActive = (k: ActionKey) =>
+      triggers.some((t) => configuredKeys(t).has(k) || (() => { const s = readStat(t.stats, k); return s.fired > 0 || s.done > 0 })())
 
     // событие = сколько раз СРАБОТАЛ триггер этого типа (fireCount)
     const eventVal = (accId: string, type: string) =>
@@ -290,10 +303,10 @@ function SummaryView({ triggers }: { triggers: MxTrigger[] }) {
 
     const eventSum = (accId: string) => eventTypes.reduce((s, ty) => s + eventVal(accId, ty), 0)
     const actionSum = (accId: string) => actionKeys.reduce((s, k) => s + actionVal(accId, k), 0)
-    return { rows, eventTypes, actionKeys, eventVal, actionVal, eventSum, actionSum }
+    return { rows, eventTypes, actionKeys, eventActive, actionActive, eventVal, actionVal, eventSum, actionSum }
   }, [triggers])
 
-  if (!model.rows.length || (!model.eventTypes.length && !model.actionKeys.length)) return <Empty />
+  if (!model.rows.length) return <Empty />
 
   const num = (n: number, color?: string) =>
     n > 0 ? <span className="font-semibold tabular-nums" style={color ? { color } : undefined}>{n}</span>
@@ -316,10 +329,11 @@ function SummaryView({ triggers }: { triggers: MxTrigger[] }) {
         <tr>
           {model.eventTypes.map((type, idx) => {
             const m = TYPE_META[type]
+            const on = model.eventActive(type)
             return (
               <th key={type}
                 className={`px-2.5 py-1.5 border-b border-black/10 font-medium text-center min-w-[74px] whitespace-nowrap ${idx === 0 ? 'border-l-2 border-black/15' : 'border-l border-black/[0.04]'}`}
-                style={{ color: m.color, background: hexA(m.color, 0.06) }}>
+                style={{ color: on ? m.color : MUTED, background: on ? hexA(m.color, 0.06) : 'rgba(0,0,0,0.015)' }}>
                 <span className="inline-flex items-center gap-1"><m.Icon className="w-3 h-3" />{TYPE_SHORT[type]}</span>
               </th>
             )
@@ -327,9 +341,10 @@ function SummaryView({ triggers }: { triggers: MxTrigger[] }) {
           <th className="px-2.5 py-1.5 border-b border-black/10 font-semibold text-center min-w-[52px] text-ink/70 bg-black/[0.03]">Σ</th>
           {model.actionKeys.map((k, idx) => {
             const A = ACTION_META[k]
+            const on = model.actionActive(k)
             return (
               <th key={k}
-                className={`px-2.5 py-1.5 border-b border-black/10 font-medium text-subt text-center min-w-[70px] whitespace-nowrap ${idx === 0 ? 'border-l-2 border-black/25' : 'border-l border-black/[0.04]'}`}>
+                className={`px-2.5 py-1.5 border-b border-black/10 font-medium text-center min-w-[70px] whitespace-nowrap ${on ? 'text-subt' : 'text-black/25'} ${idx === 0 ? 'border-l-2 border-black/25' : 'border-l border-black/[0.04]'}`}>
                 <span className="inline-flex items-center gap-1"><A.Icon className="w-3 h-3 opacity-60" />{A.label}</span>
               </th>
             )
