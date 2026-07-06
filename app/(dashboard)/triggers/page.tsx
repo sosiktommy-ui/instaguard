@@ -6,7 +6,7 @@ import {
   Heart, MessageCircle, UserPlus, Clapperboard, RefreshCw,
   Plus, ChevronDown, ChevronUp, ToggleLeft, ToggleRight,
   Link2, Bookmark, FileText, X, UserCheck, Eye,
-  Image as ImageIcon, Sparkles, ChevronRight, ArrowLeft, Settings, Power, PauseCircle,
+  Image as ImageIcon, Sparkles, ChevronRight, ArrowLeft, Settings, Power, PauseCircle, ScrollText,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/Tooltip'
@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils'
 import { readStat } from '@/lib/stats'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { Hint } from '@/components/common/Hint'
+import { LogModal } from '@/components/common/LogModal'
 
 // ── Метаданные типов триггеров (цвет, иконка, подпись) ────────────────────────
 const TRIG_META = [
@@ -1229,8 +1230,8 @@ function ActionDetail({ trigger, k, onEdit }: { trigger: DbTrigger; k: string; o
 }
 
 // ── Компактная карточка кампании (триггера) ─────────────────────────────────
-function CampaignCard({ trigger, onToggle, onEdit, onDelete, index = 0 }: {
-  trigger: DbTrigger; onToggle: () => void; onEdit: () => void; onDelete: () => void; index?: number
+function CampaignCard({ trigger, onToggle, onEdit, onDelete, onOpenLog, index = 0 }: {
+  trigger: DbTrigger; onToggle: () => void; onEdit: () => void; onDelete: () => void; onOpenLog: () => void; index?: number
 }) {
   const [openKey, setOpenKey] = useState<string | null>(null)
   const meta = META_BY_DB[trigger.triggerType]
@@ -1331,6 +1332,9 @@ function CampaignCard({ trigger, onToggle, onEdit, onDelete, index = 0 }: {
 
       {/* Футер */}
       <div className="flex items-center justify-between pt-1 border-t border-black/[0.04]">
+        <button onClick={onOpenLog} className="flex items-center gap-1 text-[11.5px] text-subt hover:text-brand transition-colors">
+          <ScrollText className="w-3.5 h-3.5" /> Лог
+        </button>
         <button onClick={onEdit} className="flex items-center gap-1 text-[11.5px] text-subt hover:text-brand transition-colors">
           <Settings className="w-3.5 h-3.5" /> Изменить
         </button>
@@ -1343,8 +1347,8 @@ function CampaignCard({ trigger, onToggle, onEdit, onDelete, index = 0 }: {
 }
 
 // ── Карточка аккаунта (уровень 1) ───────────────────────────────────────────
-function AccountCard({ acc, campaigns, activeTypes, onOpen, index = 0 }: {
-  acc: DbAccount; campaigns: DbTrigger[]; activeTypes: Set<string>; onOpen: () => void; index?: number
+function AccountCard({ acc, campaigns, activeTypes, onOpen, onOpenLog, index = 0 }: {
+  acc: DbAccount; campaigns: DbTrigger[]; activeTypes: Set<string>; onOpen: () => void; onOpenLog: () => void; index?: number
 }) {
   const active = campaigns.filter((t) => t.isActive).length
   const paused = campaigns.length - active
@@ -1353,8 +1357,8 @@ function AccountCard({ acc, campaigns, activeTypes, onOpen, index = 0 }: {
   const followers = acc.followers ?? acc.followerCount ?? 0
   const activeMetas = TRIG_META.filter((m) => activeTypes.has(m.db))
   return (
-    <button onClick={onOpen}
-      className={cn('group card card-3d rise text-left p-4 flex flex-col gap-3 w-full border', PLATE_STYLE[ps])}
+    <div onClick={onOpen} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') onOpen() }}
+      className={cn('group card card-3d rise text-left p-4 flex flex-col gap-3 w-full border cursor-pointer', PLATE_STYLE[ps])}
       style={{ animationDelay: `${index * 70}ms` }}>
       <div className="flex items-center gap-2.5">
         <span className="w-9 h-9 rounded-2xl bg-gradient-to-br from-[#feda75] via-[#d62976] to-[#4f5bd5] flex items-center justify-center text-white font-semibold shrink-0">
@@ -1368,6 +1372,10 @@ function AccountCard({ acc, campaigns, activeTypes, onOpen, index = 0 }: {
             <SecurityBadge acc={acc} />
           </div>
         </div>
+        <button onClick={(e) => { e.stopPropagation(); onOpenLog() }} title="Открыть лог"
+          className="p-1.5 -m-1.5 rounded-lg text-subt hover:text-brand hover:bg-brand/[0.08] transition-colors shrink-0">
+          <ScrollText className="w-4 h-4" />
+        </button>
         <ChevronRight className="w-5 h-5 text-subt shrink-0" />
       </div>
 
@@ -1401,7 +1409,7 @@ function AccountCard({ acc, campaigns, activeTypes, onOpen, index = 0 }: {
           <div className="text-[10px] text-subt mt-1">Срабатываний</div>
         </div>
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -1492,6 +1500,7 @@ function TriggersScreen() {
   const [stopGate, setStopGate] = useState<DbTrigger | null>(null)   // «останови перед правкой»
   const [postEdit, setPostEdit] = useState<DbTrigger | null>(null)   // «включить/пауза + обнулить/сохранить»
   const [confirmDel, setConfirmDel] = useState<DbTrigger | null>(null)
+  const [logTarget, setLogTarget] = useState<{ accountId: string; title: string; subtitle?: string; matchText?: string } | null>(null)
 
   const deleteTrigger = async (id: string) => {
     await fetch(`/api/triggers/${id}`, { method: 'DELETE' })
@@ -1652,7 +1661,8 @@ function TriggersScreen() {
               <CampaignCard key={t.id} trigger={t} index={i}
                 onToggle={() => toggleTrigger(t.id, t.isActive)}
                 onEdit={() => requestEditCampaign(t)}
-                onDelete={() => setConfirmDel(t)} />
+                onDelete={() => setConfirmDel(t)}
+                onOpenLog={() => setLogTarget({ accountId: t.responder.id, title: t.name, subtitle: `@${t.responder.username}`, matchText: t.name })} />
             ))}
           </div>
         )}
@@ -1692,6 +1702,7 @@ function TriggersScreen() {
           onConfirm={doDeleteCampaign}
           onCancel={() => setConfirmDel(null)}
         />
+        {logTarget && <LogModal {...logTarget} onClose={() => setLogTarget(null)} />}
       </div>
     )
   }
@@ -1762,7 +1773,8 @@ function TriggersScreen() {
             <AccountCard key={acc.id} acc={acc} index={i}
               campaigns={campaignsFor(acc.id)}
               activeTypes={activeByAccount.get(acc.id) ?? new Set<string>()}
-              onOpen={() => setSelId(acc.id)} />
+              onOpen={() => setSelId(acc.id)}
+              onOpenLog={() => setLogTarget({ accountId: acc.id, title: `@${acc.username}`, subtitle: 'Журнал аккаунта' })} />
           ))}
         </div>
       )}
@@ -1792,6 +1804,8 @@ function TriggersScreen() {
         <AddAccountModal onClose={() => setShowAdd(false)}
           onAdded={() => { loadAccounts(); loadTriggers(); loadSections() }} />
       )}
+
+      {logTarget && <LogModal {...logTarget} onClose={() => setLogTarget(null)} />}
     </div>
   )
 }

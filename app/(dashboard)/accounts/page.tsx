@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Play, Pause, Trash2, X, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp, Info } from 'lucide-react'
+import { Plus, Play, Pause, Trash2, X, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp, Info, ScrollText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
 import { DraftsStatus } from '@/components/accounts/DraftsStatus'
@@ -17,6 +17,7 @@ import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { Hint } from '@/components/common/Hint'
 import { PageHeader } from '@/components/common/PageHeader'
 import { IconTile } from '@/components/common/IconTile'
+import { LogModal } from '@/components/common/LogModal'
 import { TONE } from '@/lib/colors'
 
 interface RealAccount {
@@ -131,13 +132,14 @@ function campaignActionRows(c: any): ActRow[] {
 }
 
 // ── Детальное окно аккаунта: статистика + кампании ────────────────────────────
-function AccountDetailModal({ acc, ra, campaigns, sections = [], onChanged, onClose }: {
+function AccountDetailModal({ acc, ra, campaigns, sections = [], onChanged, onClose, onOpenLog }: {
   acc: { username: string; followers?: number }
   ra?: RealAccount
   campaigns: any[]
   sections?: SectionItem[]
   onChanged?: () => void
   onClose: () => void
+  onOpenLog?: () => void
 }) {
   const roots = sections.filter((s) => !s.parentId)
   const curSub = sections.find((s) => s.id === ra?.sectionId && s.parentId)
@@ -199,7 +201,12 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], onChanged, onCl
         {/* Шапка с IG-градиентом */}
         <div className="relative p-6 pb-5 overflow-hidden border-b border-black/[0.05]">
           <div className="absolute inset-0 bg-gradient-to-br from-[#feda75]/15 via-[#d62976]/12 to-[#4f5bd5]/15 pointer-events-none" />
-          <button onClick={onClose} className="absolute top-4 right-4 z-10 text-subt hover:text-ink transition-colors"><X size={20} /></button>
+          <div className="absolute top-4 right-4 z-10 flex items-center gap-1">
+            {onOpenLog && (
+              <button onClick={onOpenLog} title="Открыть лог" className="p-1.5 text-subt hover:text-brand transition-colors"><ScrollText size={18} /></button>
+            )}
+            <button onClick={onClose} className="p-1.5 text-subt hover:text-ink transition-colors"><X size={20} /></button>
+          </div>
           <div className="relative flex items-center gap-4">
             <div className="w-16 h-16 rounded-3xl bg-gradient-to-br from-[#feda75] via-[#d62976] to-[#4f5bd5] flex items-center justify-center text-white font-bold text-2xl shadow-lg shrink-0">
               {acc.username[0].toUpperCase()}
@@ -379,7 +386,6 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], onChanged, onCl
 }
 
 function Accounts() {
-  const accounts               = useStore((s) => s.accounts)
   const removeAccount          = useStore((s) => s.removeAccount)
   const toggleStatus           = useStore((s) => s.toggleAccountStatus)
 
@@ -392,6 +398,7 @@ function Accounts() {
   const [editProxyVal, setEditProxyVal] = useState('')
   const [detail, setDetail] = useState<{ acc: any; ra?: RealAccount } | null>(null)
   const [pendingDel, setPendingDel] = useState<{ raId?: string; accId: string; username: string } | null>(null)
+  const [logAcc, setLogAcc] = useState<{ id: string; username: string } | null>(null)
 
   const [dbTriggers, setDbTriggers] = useState<any[]>([])
   const [sections, setSections] = useState<SectionItem[]>([])
@@ -504,11 +511,14 @@ function Accounts() {
     setReal((prev) => prev.map((a) => a.id === id ? { ...a, status: newStatus } : a))
   }
 
-  // Merge Zustand accounts (UI) with real DB accounts for display.
+  // Список строится напрямую из реальных DB-аккаунтов (единственный источник правды).
+  // Раньше сверялся с локальным Zustand-списком (localStorage) по username — если там
+  // не было записи (другой браузер/устройство, очищенный кэш), аккаунт не показывался
+  // вообще, и перезагрузка страницы не помогала, т.к. источник данных не обновляется.
   // Черновые (HELPER) сюда не показываем — у них своя вкладка «Черновые аккаунты».
-  const mergedAccounts = accounts
-    .map((a) => ({ ...a, real: realAccounts.find((r) => r.username === a.username) }))
-    .filter((a) => a.real?.role !== 'HELPER')
+  const mergedAccounts = realAccounts
+    .filter((r) => r.role !== 'HELPER')
+    .map((r) => ({ id: r.id, username: r.username, followers: r.followers ?? r.followerCount ?? 0, status: r.status, real: r }))
 
   // Счётчик аккаунтов по разделам (для чипов): раздел = свои + все его подразделы
   const sectionsWithCount: SectionItem[] = sections.map((s) => ({
@@ -551,7 +561,7 @@ function Accounts() {
 
       {realAccounts.length > 0 && mergedAccounts.length === 0 && (
         <div className="card p-5 text-[14px] text-subt">
-          В БД есть {realAccounts.length} аккаунтов — перезагрузите страницу чтобы увидеть их в UI.
+          Все подключённые аккаунты ({realAccounts.length}) — черновые (парсеры). Они находятся на вкладке «Черновые аккаунты».
         </div>
       )}
 
@@ -684,6 +694,12 @@ function Accounts() {
                       {status === 'ACTIVE' ? <><Pause className="w-3.5 h-3.5" /> Пауза</> : <><Play className="w-3.5 h-3.5" /> Запустить</>}
                     </Button>
                     {ra && (
+                      <Button variant="secondary" size="icon" title="Открыть лог"
+                        onClick={() => setLogAcc({ id: ra.id, username: acc.username })}>
+                        <ScrollText className="w-4 h-4" />
+                      </Button>
+                    )}
+                    {ra && (
                       <Button variant="secondary" size="icon" title="Сбросить снапшот подписчиков"
                         onClick={() => handleResetSnapshot(ra.id)}>
                         <RotateCcw className="w-4 h-4" />
@@ -725,8 +741,11 @@ function Accounts() {
           onChanged={loadRealAccounts}
           campaigns={dbTriggers.filter((t) => t.responder?.id === (detail.ra?.id ?? detail.acc.id))}
           onClose={() => setDetail(null)}
+          onOpenLog={detail.ra ? () => setLogAcc({ id: detail.ra!.id, username: detail.acc.username }) : undefined}
         />
       )}
+
+      {logAcc && <LogModal accountId={logAcc.id} title={`@${logAcc.username}`} subtitle="Журнал аккаунта" onClose={() => setLogAcc(null)} />}
     </div>
   )
 }
