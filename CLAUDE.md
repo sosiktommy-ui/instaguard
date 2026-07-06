@@ -116,6 +116,19 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-06 (6)
+
+#### fix: вход по мобильным Android-сессиям (куки) — `KeyError: 'app_version'`
+
+- **Причина «не могу войти по кукам»:** покупные аккаунты вставляются как экспорт мобильной Android-сессии (`логин:пароль:2fa | User-Agent | device-ids | заголовки-с-Bearer | |`). Старый `_parse_mobile_session` клал `device_id/uuid/phone_id/adid` **внутрь `device_settings`** и НЕ передавал `app_version` и остальные поля устройства. instagrapi в `init()` строит `base_headers`, читая `device_settings["app_version"]` напрямую → падал на КАЖДОЙ строке.
+- **Воркер (⚠️ нужен редеплой Python-сервиса):**
+  - Новый `_parse_user_agent()` разбирает мобильный UA (`Instagram <app_version> Android (<api>/<release>; <dpi>; <res>; <manuf>; <model>; <device>; <cpu>; <locale>; <version_code>)`) в **полный** `device_settings` (все 10 полей). Если UA не распознан — дефолтное устройство (лишь бы `app_version` был).
+  - `_parse_mobile_session` переписан: `device_settings` полный из UA; идентификаторы устройства кладутся в блок **`uuids`** (где их ждёт instagrapi), а не в device_settings. Добавлены top-level `mid`/`ig_u_rur`/`ig_www_claim`/`locale`/`country`. `sessionid` больше НЕ url-декодируется — держим как в токене (`%3A`), чтобы реконструированный Bearer совпадал байт-в-байт.
+  - `login_by_cookies` получил **запасной путь**: если полный вход по собранному settings падает (не challenge/2FA) — повторяем через `login_by_sessionid(sessionid)` (instagrapi сам поднимает совместимое устройство).
+- **`app/api/accounts/import` (массовый импорт, режим «Куки»):** был баг — для полной мобильной сессии строка резалась `split('|').slice(3)`, отбрасывая UA и device-ids (именно то, что нужно парсеру). Теперь если строка содержит `Authorization=Bearer` — передаётся целиком.
+- Разбор проверен на реальных сессиях: `device_settings` полный, `sessionid`/`ds_user_id` корректны, `uuids`/`mid`/`rur`/`claim` заполнены.
+- ⚠️ **Про «забанен ли IP»:** это отдельная причина и её кодом не чинят. Если Instagram в ответе на вход по паролю пишет `blacklist`/`change your ip` — виноват дата-центровый прокси/IP сервера (уже ловится в `worker.py` `/login`). Для этих аккаунтов надёжнее вход **по кукам** (сессия создана с чистого мобильного IP) + чистый резидентный/мобильный прокси в стране аккаунта (id_ID/pt_BR/en_PH у вставленных строк).
+
 ### 2026-07-06 (5)
 
 #### feat: 2FA-логин (TOTP) + массовый импорт логин/пароль (не только куки)

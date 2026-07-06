@@ -3,8 +3,10 @@ import base64
 import json
 import logging
 import random
+import re
 import time
 import urllib.parse
+import uuid as _uuid
 
 from instagrapi import Client
 from instagrapi.exceptions import ChallengeRequired, TwoFactorRequired
@@ -39,25 +41,97 @@ _challenge_sessions: dict[str, dict] = {}
 _IG_RECAPTCHA_SITEKEY = '6LenUD0UAAAAABGHhh5oqMVnHlC2tDHWwHkM79Nl'
 
 
+# Дефолтное устройство instagrapi — используется, только если User-Agent не удалось
+# распознать (лишь бы в device_settings всегда был app_version и остальные ключи).
+_DEFAULT_DEVICE = {
+    "app_version": "269.0.0.18.75",
+    "android_version": 26,
+    "android_release": "8.0.0",
+    "dpi": "480dpi",
+    "resolution": "1080x1920",
+    "manufacturer": "OnePlus",
+    "device": "devitron",
+    "model": "6T Dev",
+    "cpu": "qcom",
+    "version_code": "314665256",
+}
+
+
+def _rand_uuid() -> str:
+    return str(_uuid.uuid4())
+
+
+def _rand_android_id() -> str:
+    return 'android-' + ''.join(random.choice('0123456789abcdef') for _ in range(16))
+
+
+def _parse_user_agent(ua: str):
+    """
+    Разобрать мобильный Instagram User-Agent в ПОЛНЫЙ device_settings + locale.
+    Формат instagrapi (config.USER_AGENT_BASE):
+      Instagram <app_version> Android (<api>/<release>; <dpi>; <res>; <manufacturer>;
+                <model>; <device>; <cpu>; <locale>; <version_code>)
+    Пример: Instagram 359.2.0.64.89 Android (28/9; 544dpi; 800x1666; DOOGEE; S60; S60; mt6757; id_ID; 671551917)
+    Возвращает (device_settings: dict, locale: str) либо None, если формат не распознан.
+    """
+    if not ua:
+        return None
+    m = re.search(r'Instagram\s+([\d.]+)\s+Android\s*\((.+)\)', ua)
+    if not m:
+        return None
+    app_version = m.group(1).strip()
+    fields = [x.strip() for x in m.group(2).split(';')]
+    if len(fields) < 7:
+        return None
+
+    api_rel = fields[0].split('/')
+    try:
+        android_version = int(api_rel[0].strip())
+    except (ValueError, IndexError):
+        android_version = 28
+    android_release = api_rel[1].strip() if len(api_rel) > 1 and api_rel[1].strip() else '9'
+    locale = fields[7] if len(fields) > 7 and fields[7] else 'en_US'
+    version_code = fields[8] if len(fields) > 8 else ''
+
+    device_settings = {
+        "app_version":     app_version,
+        "android_version": android_version,
+        "android_release": android_release,
+        "dpi":             fields[1],
+        "resolution":      fields[2],
+        "manufacturer":    fields[3],
+        "model":           fields[4],
+        "device":          fields[5],
+        "cpu":             fields[6],
+        "version_code":    version_code,
+    }
+    return device_settings, locale
+
+
 def _parse_mobile_session(raw: str) -> dict:
     """
-    Parse the pipe-delimited Android Instagram session export format:
-      username:id:token | UserAgent | device_id;uuid;phone_id;adid | Key=Val;Key=Val; | |
-    Returns instagrapi-compatible settings dict.
+    Разобрать pipe-формат экспорта мобильной Android-сессии Instagram:
+      user:pass:2fa | UserAgent | android-<id>;uuid;phone_id;adid | Key=Val;Key=Val; | |
+    Возвращает ПОЛНЫЙ instagrapi-совместимый settings-словарь: uuids + device_settings +
+    user_agent + cookies + authorization_data + mid/rur/claim + locale/country.
+
+    Ключевое: device_settings ВСЕГДА полный (с app_version и пр.), иначе instagrapi падает
+    на `KeyError: 'app_version'` при построении base_headers в init(). Идентификаторы
+    устройства (device_id/uuid/phone_id/adid) кладём в блок uuids — там их и ждёт instagrapi,
+    а НЕ в device_settings.
     """
     parts = raw.split('|')
 
     user_agent = parts[1].strip() if len(parts) > 1 else ''
 
-    # Device IDs (part 3): "android-XXXX;uuid;phone_id;adid"
+    # Идентификаторы устройства (часть 3): "android-XXXX;uuid;phone_id;adid"
     device_ids = [d.strip() for d in parts[2].split(';')] if len(parts) > 2 else []
-    raw_device_id = device_ids[0] if device_ids else ''
-    device_id     = raw_device_id.replace('android-', '')
-    uuid          = device_ids[1] if len(device_ids) > 1 else ''
-    phone_id      = device_ids[2] if len(device_ids) > 2 else ''
-    adid          = device_ids[3] if len(device_ids) > 3 else ''
+    android_device_id = device_ids[0] if len(device_ids) > 0 and device_ids[0] else _rand_android_id()
+    uuid_val = device_ids[1] if len(device_ids) > 1 and device_ids[1] else _rand_uuid()
+    phone_id = device_ids[2] if len(device_ids) > 2 and device_ids[2] else _rand_uuid()
+    adid     = device_ids[3] if len(device_ids) > 3 and device_ids[3] else _rand_uuid()
 
-    # Headers (part 4): "Key=Value;Key=Value;..."
+    # Заголовки (часть 4): "Key=Value;Key=Value;..."
     headers: dict[str, str] = {}
     if len(parts) > 3:
         for item in parts[3].split(';'):
@@ -69,38 +143,79 @@ def _parse_mobile_session(raw: str) -> dict:
     # Decode Bearer IGT:2:<base64> → {"ds_user_id": "...", "sessionid": "..."}
     auth       = headers.get('Authorization', '')
     session_id = ''
-    ds_user_id = headers.get('IG-U-DS-USER-ID', '')
+    ds_user_id = headers.get('IG-U-DS-USER-ID', '') or headers.get('IG-INTENDED-USER-ID', '')
 
     if 'IGT:2:' in auth:
-        b64 = auth.split('IGT:2:')[1]
+        b64 = auth.split('IGT:2:', 1)[1].strip()
         b64 += '=' * ((4 - len(b64) % 4) % 4)
         try:
-            decoded    = json.loads(base64.b64decode(b64).decode('utf-8'))
-            session_id = urllib.parse.unquote(decoded.get('sessionid', ''))
+            decoded = json.loads(base64.b64decode(b64).decode('utf-8'))
+            # sessionid держим В ТОМ ЖЕ виде, что и в токене (обычно с %3A) — чтобы
+            # реконструированный instagrapi Bearer совпадал с исходным байт-в-байт.
+            session_id = decoded.get('sessionid', '') or session_id
             if not ds_user_id:
-                ds_user_id = decoded.get('ds_user_id', '')
+                ds_user_id = str(decoded.get('ds_user_id', ''))
         except Exception as e:
             logger.warning("Bearer decode failed: %s", e)
 
-    logger.info("Mobile session parsed: user_id=%s session_id=%s...", ds_user_id, session_id[:20])
+    # Запасные пути на случай необычного экспорта
+    if not session_id:
+        session_id = headers.get('sessionid', '')
+    if not ds_user_id and session_id:
+        num = re.match(r'^(\d+)', session_id)
+        if num:
+            ds_user_id = num.group(1)
+
+    # device_settings из User-Agent; если UA не распознан — дефолтное устройство
+    parsed = _parse_user_agent(user_agent)
+    if parsed:
+        device_settings, locale = parsed
+    else:
+        logger.warning("User-Agent не распознан, беру дефолтное устройство: %.60s", user_agent)
+        device_settings, locale = dict(_DEFAULT_DEVICE), 'en_US'
+
+    country = locale.split('_')[-1].upper() if '_' in locale else 'US'
+
+    mid   = headers.get('X-MID', '')
+    rur   = headers.get('IG-U-RUR', '')
+    claim = headers.get('X-IG-WWW-Claim', '')
+    csrf  = headers.get('csrftoken', '') or headers.get('X-CSRFToken', '')
+
+    cookies: dict[str, str] = {}
+    if session_id:
+        cookies["sessionid"] = session_id
+    if ds_user_id:
+        cookies["ds_user_id"] = ds_user_id
+    if csrf:
+        cookies["csrftoken"] = csrf
+    if mid:
+        cookies["mid"] = mid
+
+    logger.info("Mobile session parsed: user_id=%s app_version=%s session=%s…",
+                ds_user_id, device_settings.get("app_version"), session_id[:16])
 
     return {
-        "cookies": {
-            "sessionid": session_id,
-            "ds_user_id": ds_user_id,
-        },
-        "user_agent": user_agent,
-        "device_settings": {
-            "device_id":         device_id,
-            "uuid":              uuid,
+        "uuids": {
             "phone_id":          phone_id,
-            "android_device_id": raw_device_id,
+            "uuid":              uuid_val,
+            "client_session_id": _rand_uuid(),
             "advertising_id":    adid,
+            "android_device_id": android_device_id,
+            "request_id":        _rand_uuid(),
+            "tray_session_id":   _rand_uuid(),
         },
+        "cookies": cookies,
+        "device_settings": device_settings,
+        "user_agent": user_agent,
         "authorization_data": {
             "ds_user_id": ds_user_id,
             "sessionid":  session_id,
         },
+        "locale": locale,
+        "country": country,
+        "mid": mid,
+        "ig_u_rur": rur,
+        "ig_www_claim": claim,
     }
 
 
@@ -300,18 +415,46 @@ def submit_challenge_code(username: str, code: str) -> dict:
 
 
 def login_by_cookies(cookies: dict, proxy: str | None = None) -> tuple[dict, str]:
-    cl = Client()
-    if proxy:
-        cl.set_proxy(_normalize_proxy(proxy))
+    """Вход по кукам/сессии. Поддерживает:
+      • pipe-формат мобильной Android-сессии (парсится в полный settings);
+      • обычный словарь куки (sessionid, csrftoken, …) или один sessionid.
+    Для мобильной сессии при неудаче — запасной вход по sessionid (login_by_sessionid),
+    где instagrapi сам поднимает совместимое устройство."""
+    norm_proxy = _normalize_proxy(proxy)
+
+    def _new_client() -> Client:
+        c = Client()
+        c.delay_range = [2, 6]
+        if norm_proxy:
+            c.set_proxy(norm_proxy)
+        return c
 
     if _is_mobile_session(cookies):
-        # Pipe-delimited Android session export — parse and reconstruct proper settings
+        # Экспорт мобильной сессии — собираем полный settings и логинимся им
         settings = _parse_mobile_session(cookies['sessionid'])
-        cl.set_settings(settings)
-    else:
-        # Plain cookie dict (sessionid, csrftoken, …) or single sessionid value
-        cl.private.cookies.update(cookies)
+        session_id = settings['authorization_data'].get('sessionid', '')
 
+        cl = _new_client()
+        try:
+            cl.set_settings(settings)
+            cl.get_timeline_feed()
+            info = cl.account_info()
+            return cl.get_settings(), info.username
+        except (ChallengeRequired, TwoFactorRequired):
+            raise
+        except Exception as e:
+            # Запасной путь: чистый вход по sessionid (instagrapi сам поднимет устройство).
+            logger.warning("Полный вход по мобильной сессии не удался (%s); пробую login_by_sessionid", e)
+            if not session_id or len(session_id) < 30:
+                raise
+            cl2 = _new_client()
+            cl2.login_by_sessionid(session_id)
+            info = cl2.account_info()
+            return cl2.get_settings(), info.username
+
+    # Обычные куки (словарь sessionid/csrftoken/… либо один sessionid)
+    cl = _new_client()
+    cl.private.cookies.update(cookies)
     cl.get_timeline_feed()
     info = cl.account_info()
     return cl.get_settings(), info.username

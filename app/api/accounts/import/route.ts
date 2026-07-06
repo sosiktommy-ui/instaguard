@@ -82,9 +82,16 @@ export async function POST(req: NextRequest) {
           sessionData = r.sessionData
           clean = login.replace(/^@/, '').trim().toLowerCase()
         } else {
-          // Формат «логин|пароль|UA|куки»: куки — всё, начиная с 4-й части. Иначе вся строка = куки.
-          const parts = line.split('|')
-          const cookiesRaw = parts.length >= 4 ? parts.slice(3).join('|') : line
+          // Полная мобильная сессия (login:pass:2fa|UA|device-ids|заголовки с Bearer) —
+          // передаём ВСЮ строку как есть: воркеру нужны и UA, и device-ids, и заголовки.
+          // Иначе формат «логин|пароль|UA|куки»: куки — всё с 4-й части. Иначе вся строка = куки.
+          let cookiesRaw: string
+          if (line.includes('Authorization=Bearer')) {
+            cookiesRaw = line
+          } else {
+            const parts = line.split('|')
+            cookiesRaw = parts.length >= 4 ? parts.slice(3).join('|') : line
+          }
           const norm = normalizeCookies(cookiesRaw)
           if (norm.error) { results.push({ line: i + 1, ok: false, reason: norm.error }); continue }
           const res = await loginByCookies(norm.cookies, px.url || undefined)
