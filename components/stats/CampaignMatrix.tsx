@@ -16,6 +16,7 @@ export interface MxTrigger {
   id: string
   name?: string
   triggerType: string
+  fireCount?: number
   actions?: any[]
   stats?: any
   responder?: { id: string; username: string } | null
@@ -39,6 +40,9 @@ const TYPE_META: Record<string, { label: string; color: string; Icon: LucideIcon
   NEW_LIKE: { label: 'Лайк', color: TONE.pink, Icon: Heart },
   STORY_MENTION: { label: 'Ответ на сторис', color: TONE.warn, Icon: Clapperboard },
 }
+const TYPE_SHORT: Record<string, string> = {
+  NEW_FOLLOWER: 'Подписка', NEW_COMMENT: 'Комментарий', NEW_LIKE: 'Лайк', STORY_MENTION: 'Сторис',
+}
 const ACTION_FROM_TYPE: Record<string, ActionKey> = {
   SEND_MESSAGE: 'dm', LIKE_MEDIA: 'like', FOLLOW_BACK: 'follow', VIEW_STORIES: 'story',
   REPLY_COMMENT: 'comment', LIKE_COMMENT: 'comment', COMMENT_GATE: 'comment',
@@ -57,27 +61,31 @@ const addStat = (a: Stat, b: Stat): Stat => ({ fired: a.fired + b.fired, done: a
 const ZERO: Stat = { fired: 0, done: 0 }
 
 export function CampaignMatrix({ triggers }: { triggers: MxTrigger[]; accounts?: MxAccount[] }) {
-  const [view, setView] = useState<'accounts' | 'campaigns'>('accounts')
+  const [view, setView] = useState<'accounts' | 'campaigns' | 'summary'>('accounts')
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
         <div className="segment">
-          {([['accounts', 'По аккаунтам'], ['campaigns', 'По кампаниям']] as const).map(([v, label]) => (
+          {([['accounts', 'По аккаунтам'], ['campaigns', 'По кампаниям'], ['summary', 'Сводка']] as const).map(([v, label]) => (
             <button key={v} onClick={() => setView(v)}
               className={`px-3.5 py-1.5 rounded-xl text-[13px] font-medium transition-all ${view === v ? 'bg-white shadow-sm text-ink' : 'text-subt hover:text-ink'}`}>
               {label}
             </button>
           ))}
         </div>
-        <div className="text-[12px] text-subt hidden sm:flex items-center gap-3">
-          <span className="inline-flex items-center gap-1"><Check className="w-3.5 h-3.5 text-ok" />выполнено</span>
-          <span><span className="text-warn font-medium">0/N</span> — не выполнилось</span>
-          <span>— нет</span>
-        </div>
+        {view !== 'summary' && (
+          <div className="text-[12px] text-subt hidden sm:flex items-center gap-3">
+            <span className="inline-flex items-center gap-1"><Check className="w-3.5 h-3.5 text-ok" />выполнено</span>
+            <span><span className="text-warn font-medium">0/N</span> — не выполнилось</span>
+            <span>— нет</span>
+          </div>
+        )}
       </div>
 
-      {view === 'accounts' ? <AccountsView triggers={triggers} /> : <CampaignsView triggers={triggers} />}
+      {view === 'accounts' ? <AccountsView triggers={triggers} />
+        : view === 'campaigns' ? <CampaignsView triggers={triggers} />
+        : <SummaryView triggers={triggers} />}
     </div>
   )
 }
@@ -252,6 +260,108 @@ function CampaignsView({ triggers }: { triggers: MxTrigger[] }) {
             </tr>
           )
         })}
+      </tbody>
+    </Scroll>
+  )
+}
+
+// ── Вид «Сводка»: аккаунты × (события — сработало | действия — выполнено) ──────
+function SummaryView({ triggers }: { triggers: MxTrigger[] }) {
+  const model = useMemo(() => {
+    const rowMap = new Map<string, string>()
+    for (const t of triggers) if (t.responder) rowMap.set(t.responder.id, t.responder.username)
+    const rows = [...rowMap.entries()].map(([id, username]) => ({ id, username }))
+      .sort((a, b) => a.username.localeCompare(b.username))
+
+    const eventTypes = TYPE_ORDER.filter((type) => triggers.some((t) => t.triggerType === type))
+    const actionKeys = ACTION_KEYS.filter((k) =>
+      triggers.some((t) => configuredKeys(t).has(k)) ||
+      triggers.some((t) => { const s = readStat(t.stats, k); return s.fired > 0 || s.done > 0 })
+    )
+
+    // событие = сколько раз СРАБОТАЛ триггер этого типа (fireCount)
+    const eventVal = (accId: string, type: string) =>
+      triggers.filter((t) => t.responder?.id === accId && t.triggerType === type)
+        .reduce((s, t) => s + (t.fireCount ?? 0), 0)
+    // действие = сумма ВЫПОЛНЕННЫХ (done) по всем триггерам аккаунта
+    const actionVal = (accId: string, k: ActionKey) =>
+      triggers.filter((t) => t.responder?.id === accId)
+        .reduce((s, t) => s + readStat(t.stats, k).done, 0)
+
+    const eventSum = (accId: string) => eventTypes.reduce((s, ty) => s + eventVal(accId, ty), 0)
+    const actionSum = (accId: string) => actionKeys.reduce((s, k) => s + actionVal(accId, k), 0)
+    return { rows, eventTypes, actionKeys, eventVal, actionVal, eventSum, actionSum }
+  }, [triggers])
+
+  if (!model.rows.length || (!model.eventTypes.length && !model.actionKeys.length)) return <Empty />
+
+  const num = (n: number, color?: string) =>
+    n > 0 ? <span className="font-semibold tabular-nums" style={color ? { color } : undefined}>{n}</span>
+          : <span className="text-black/25 tabular-nums">0</span>
+
+  return (
+    <Scroll>
+      <thead>
+        <tr>
+          <th rowSpan={2} className="sticky left-0 z-10 bg-white text-left align-bottom font-semibold text-ink/80 px-3 py-2.5 border-b border-black/10 min-w-[168px]">
+            Аккаунт
+          </th>
+          <th colSpan={model.eventTypes.length + 1} className="px-2.5 py-2 border-b border-l-2 border-black/15 text-center font-semibold text-ink/70 text-[12px] uppercase tracking-wide bg-black/[0.02]">
+            Сработало по событиям
+          </th>
+          <th colSpan={model.actionKeys.length + 1} className="px-2.5 py-2 border-b border-l-2 border-black/25 text-center font-semibold text-ink/70 text-[12px] uppercase tracking-wide bg-black/[0.02]">
+            Выполнено по действиям
+          </th>
+        </tr>
+        <tr>
+          {model.eventTypes.map((type, idx) => {
+            const m = TYPE_META[type]
+            return (
+              <th key={type}
+                className={`px-2.5 py-1.5 border-b border-black/10 font-medium text-center min-w-[74px] whitespace-nowrap ${idx === 0 ? 'border-l-2 border-black/15' : 'border-l border-black/[0.04]'}`}
+                style={{ color: m.color, background: hexA(m.color, 0.06) }}>
+                <span className="inline-flex items-center gap-1"><m.Icon className="w-3 h-3" />{TYPE_SHORT[type]}</span>
+              </th>
+            )
+          })}
+          <th className="px-2.5 py-1.5 border-b border-black/10 font-semibold text-center min-w-[52px] text-ink/70 bg-black/[0.03]">Σ</th>
+          {model.actionKeys.map((k, idx) => {
+            const A = ACTION_META[k]
+            return (
+              <th key={k}
+                className={`px-2.5 py-1.5 border-b border-black/10 font-medium text-subt text-center min-w-[70px] whitespace-nowrap ${idx === 0 ? 'border-l-2 border-black/25' : 'border-l border-black/[0.04]'}`}>
+                <span className="inline-flex items-center gap-1"><A.Icon className="w-3 h-3 opacity-60" />{A.label}</span>
+              </th>
+            )
+          })}
+          <th className="px-2.5 py-1.5 border-b border-black/10 font-semibold text-center min-w-[52px] text-ink/70 bg-black/[0.03]">Σ</th>
+        </tr>
+      </thead>
+      <tbody>
+        {model.rows.map((acc) => (
+          <tr key={acc.id} className="hover:bg-black/[0.015]">
+            <td className="sticky left-0 z-10 bg-white px-3 py-2 border-b border-black/[0.05] whitespace-nowrap">
+              <span className="inline-flex items-center gap-2">
+                <span className="w-6 h-6 rounded-lg bg-gradient-to-br from-[#feda75] via-[#d62976] to-[#4f5bd5] flex items-center justify-center text-white text-[11px] font-semibold shrink-0">
+                  {(acc.username?.[0] ?? '?').toUpperCase()}
+                </span>
+                <span className="font-medium truncate max-w-[120px]">@{acc.username}</span>
+              </span>
+            </td>
+            {model.eventTypes.map((type, idx) => (
+              <td key={type} className={`text-center px-2.5 py-2 border-b border-black/[0.05] ${idx === 0 ? 'border-l-2 border-black/15' : 'border-l border-black/[0.04]'}`}>
+                {num(model.eventVal(acc.id, type), TYPE_META[type].color)}
+              </td>
+            ))}
+            <td className="text-center px-2.5 py-2 border-b border-black/[0.05] bg-black/[0.02]">{num(model.eventSum(acc.id))}</td>
+            {model.actionKeys.map((k, idx) => (
+              <td key={k} className={`text-center px-2.5 py-2 border-b border-black/[0.05] ${idx === 0 ? 'border-l-2 border-black/25' : 'border-l border-black/[0.04]'}`}>
+                {num(model.actionVal(acc.id, k))}
+              </td>
+            ))}
+            <td className="text-center px-2.5 py-2 border-b border-black/[0.05] bg-black/[0.02]">{num(model.actionSum(acc.id))}</td>
+          </tr>
+        ))}
       </tbody>
     </Scroll>
   )
