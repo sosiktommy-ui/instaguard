@@ -20,6 +20,7 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
   const [mode, setMode]         = useState<AuthMode>('password')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [totp, setTotp]         = useState('')   // 2FA-ключ (base32), если у аккаунта включена 2FA
   const [cookies, setCookies]   = useState('')
   const [proxy, setProxy]       = useState(presetProxy ?? '')
   const [loading, setLoading]   = useState(false)
@@ -93,7 +94,7 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
             <input value={proxy} onChange={(e) => setProxy(e.target.value)}
               className="field pl-10 font-mono text-[13px]" placeholder="user:pass@host:port" />
           </div>
-          <p className="text-[11px] text-subt mt-1.5 pl-1">Индивидуальный прокси только для этого аккаунта. Можно оставить пустым — тогда без прокси.</p>
+          <p className="text-[11px] text-subt mt-1.5 pl-1">Индивидуальный прокси только для этого аккаунта. Если оставить пустым — прокси подключится автоматически из пула, чтобы вход не шёл без прокси (риск бана). Вход совсем без прокси возможен, только если включить «Работать без прокси» в Настройках.</p>
         </>
       )}
     </div>
@@ -109,7 +110,7 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
       const proxyVal = proxyMode === 'unique' ? (proxy.trim() || undefined) : undefined
       const body = mode === 'cookies'
         ? { authMethod: 'cookies', cookies: cookies.trim(), proxy: proxyVal, proxyMode, sectionId }
-        : { username: username.replace(/^@/, '').trim(), password, proxy: proxyVal, proxyMode, sectionId }
+        : { username: username.replace(/^@/, '').trim(), password, totpSecret: totp.trim() || undefined, proxy: proxyVal, proxyMode, sectionId }
 
       const res = await fetch('/api/accounts/auth', {
         method: 'POST',
@@ -197,6 +198,18 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
                 <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && save()}
                   className="field pl-10" placeholder="••••••••" />
+              </div>
+            </div>
+            <div>
+              <label className="text-[13px] text-subt font-medium mb-2 flex items-center gap-1.5">
+                2FA-ключ <span className="text-subt/70 font-normal">(если включена 2FA)</span>
+                <Hint text="Ключ двухфакторной аутентификации (base32, вида JBSW Y3DP…). Магазины дают его в комплекте у аккаунтов «2FA verified with key». Без него вход в такой аккаунт Instagram не пропустит. Оставьте пустым, если 2FA нет." />
+              </label>
+              <div className="relative">
+                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
+                <input value={totp} onChange={(e) => setTotp(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && save()}
+                  className="field pl-10 font-mono text-[13px]" placeholder="напр. JBSWY3DPEHPK3PXP (необязательно)" />
               </div>
             </div>
             {proxyBlock}

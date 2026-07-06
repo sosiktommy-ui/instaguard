@@ -17,12 +17,17 @@ interface AccLike {
   proxy?: string | null
   hasSession?: boolean | null
   lastChecked?: string | Date | null
+  createdAt?: string | Date | null
+  role?: string | null
 }
+
+interface SecCtx { draftCount?: number; allowNoDrafts?: boolean }
 
 // Флагманский бейдж «Индекс безопасности». size='lg' — с подписью и /100.
 // При наведении — разбор по факторам (что снижает счёт, что в порядке), не просто число.
-export function SecurityBadge({ acc, size = 'sm', className }: { acc: AccLike; size?: 'sm' | 'lg'; className?: string }) {
-  const s = securityIndex(acc)
+// ctx — глобальные данные владельца (сколько черновых, разрешён ли парсинг без них).
+export function SecurityBadge({ acc, ctx, size = 'sm', className }: { acc: AccLike; ctx?: SecCtx; size?: 'sm' | 'lg'; className?: string }) {
+  const s = securityIndex(acc, ctx)
   const tip = (
     <div className="text-left">
       <div className="font-semibold text-[12.5px] mb-1.5 text-center">Индекс безопасности {s.score}/100 · {s.label}</div>

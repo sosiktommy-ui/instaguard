@@ -28,6 +28,7 @@ class LoginPayload(BaseModel):
     username: str
     password: str
     proxy: str | None = None
+    totpSecret: str | None = None   # 2FA-ключ (base32) для аккаунтов с двухфакторной аутентификацией
 
 
 class FollowersPayload(BaseModel):
@@ -166,7 +167,7 @@ def test_session(payload: SessionPayload, x_worker_secret: str = Header(...)):
 def login(payload: LoginPayload, x_worker_secret: str = Header(...)):
     _check_secret(x_worker_secret)
     try:
-        result = ig.login_by_credentials(payload.username, payload.password, payload.proxy)
+        result = ig.login_by_credentials(payload.username, payload.password, payload.proxy, payload.totpSecret)
         if result.get('needsChallenge'):
             # 202 = challenge required, not an error
             return JSONResponse(status_code=202, content=result)

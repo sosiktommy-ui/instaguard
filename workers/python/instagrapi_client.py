@@ -7,7 +7,7 @@ import time
 import urllib.parse
 
 from instagrapi import Client
-from instagrapi.exceptions import ChallengeRequired
+from instagrapi.exceptions import ChallengeRequired, TwoFactorRequired
 
 logger = logging.getLogger(__name__)
 
@@ -146,11 +146,18 @@ def _try_solve_recaptcha(page_url: str = 'https://www.instagram.com/challenge/')
         return None
 
 
-def login_by_credentials(username: str, password: str, proxy: str | None = None) -> dict:
+def _totp_code(cl: Client, secret: str) -> str:
+    """Сгенерировать 6-значный TOTP-код из 2FA-ключа (base32). Пробелы/дефисы игнорируем."""
+    seed = secret.replace(' ', '').replace('-', '').strip()
+    return cl.totp_generate_code(seed)
+
+
+def login_by_credentials(username: str, password: str, proxy: str | None = None, totp_secret: str | None = None) -> dict:
     """
     Returns {'sessionData': dict} on success.
     Returns {'needsChallenge': True, 'stepName': str, 'username': str} when challenge is required
     (challenge session stored internally — call submit_challenge_code next).
+    totp_secret — 2FA-ключ (base32) для аккаунтов с включённой двухфакторной аутентификацией.
     Raises Exception on hard failure.
     """
     cl = Client()
@@ -158,8 +165,22 @@ def login_by_credentials(username: str, password: str, proxy: str | None = None)
         cl.set_proxy(_normalize_proxy(proxy))
 
     try:
-        cl.login(username, password)
+        if totp_secret:
+            # Аккаунт с 2FA: сразу передаём сгенерированный код
+            cl.login(username, password, verification_code=_totp_code(cl, totp_secret))
+        else:
+            cl.login(username, password)
         return {'sessionData': cl.get_settings()}
+
+    except TwoFactorRequired:
+        # Instagram запросил 2FA. Если есть ключ — повторяем вход с кодом; иначе пробрасываем.
+        if totp_secret:
+            try:
+                cl.login(username, password, verification_code=_totp_code(cl, totp_secret))
+                return {'sessionData': cl.get_settings()}
+            except Exception as e2:
+                raise Exception(f"2FA код не принят — проверьте 2FA-ключ ({e2})")
+        raise
 
     except ChallengeRequired:
         challenge = cl.last_json.get('challenge', {})

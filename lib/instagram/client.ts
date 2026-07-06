@@ -80,8 +80,8 @@ export async function viewStories(session: object, userId: string, like = false,
   return workerFetch<{ status: string; viewed: number; liked: number }>('/user-stories', { sessionData: session, userId, like, proxy })
 }
 
-export async function loginByCredentials(username: string, password: string, proxy?: string) {
-  return workerFetch<{ sessionData?: object; needsChallenge?: boolean; stepName?: string; username?: string }>('/login', { username, password, proxy })
+export async function loginByCredentials(username: string, password: string, proxy?: string, totpSecret?: string) {
+  return workerFetch<{ sessionData?: object; needsChallenge?: boolean; stepName?: string; username?: string }>('/login', { username, password, proxy, totpSecret })
 }
 
 export async function submitChallengeCode(username: string, code: string) {

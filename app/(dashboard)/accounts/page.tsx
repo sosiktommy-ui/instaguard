@@ -1,9 +1,10 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Play, Pause, Trash2, X, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp, Info, ScrollText } from 'lucide-react'
+import { Plus, Play, Pause, Trash2, X, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp, Info, ScrollText, Cookie } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
+import { ImportCookiesModal } from '@/components/accounts/ImportCookiesModal'
 import { DraftsStatus } from '@/components/accounts/DraftsStatus'
 import { SecurityBadge } from '@/components/accounts/SecurityBadge'
 import { SectionBar, type SectionItem } from '@/components/accounts/SectionBar'
@@ -133,11 +134,12 @@ function campaignActionRows(c: any): ActRow[] {
 }
 
 // ── Детальное окно аккаунта: статистика + кампании ────────────────────────────
-function AccountDetailModal({ acc, ra, campaigns, sections = [], onChanged, onClose, onOpenLog }: {
+function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChanged, onClose, onOpenLog }: {
   acc: { username: string; followers?: number }
   ra?: RealAccount
   campaigns: any[]
   sections?: SectionItem[]
+  secCtx?: { draftCount?: number; allowNoDrafts?: boolean }
   onChanged?: () => void
   onClose: () => void
   onOpenLog?: () => void
@@ -218,7 +220,7 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], onChanged, onCl
                 <span className={cn('flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-0.5 rounded-full', st.pill)}>
                   <span className={cn('w-1.5 h-1.5 rounded-full', st.dot)} /> {st.t}
                 </span>
-                {ra && <SecurityBadge acc={ra} size="lg" />}
+                {ra && <SecurityBadge acc={ra} ctx={secCtx} size="lg" />}
                 {ra?.lastChecked && (
                   <span className="flex items-center gap-1 text-[11px] text-subt">
                     <Calendar className="w-3 h-3" /> {new Date(ra.lastChecked).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
@@ -391,7 +393,9 @@ function Accounts() {
   const toggleStatus           = useStore((s) => s.toggleAccountStatus)
 
   const [showAdd, setShowAdd]       = useState(false)
+  const [showImport, setShowImport] = useState(false)
   const [realAccounts, setReal]     = useState<RealAccount[]>([])
+  const [allowNoDrafts, setAllowNoDrafts] = useState(false)  // из /api/settings — для индекса безопасности
   const [polling, setPolling]       = useState(false)
   const [pollMsg, setPollMsg]       = useState('')
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set())
@@ -412,14 +416,19 @@ function Accounts() {
 
   const loadRealAccounts = useCallback(async () => {
     try {
-      const [accRes, trRes, secRes] = await Promise.all([fetch('/api/accounts'), fetch('/api/triggers'), fetch('/api/sections')])
+      const [accRes, trRes, secRes, setRes] = await Promise.all([fetch('/api/accounts'), fetch('/api/triggers'), fetch('/api/sections'), fetch('/api/settings')])
       if (accRes.ok) setReal(await accRes.json())
       if (trRes.ok) setDbTriggers(await trRes.json())
       if (secRes.ok) setSections(await secRes.json())
+      if (setRes.ok) { const d = await setRes.json(); setAllowNoDrafts(Boolean(d.allowNoDrafts)) }
     } catch {}
   }, [])
 
   useEffect(() => { loadRealAccounts() }, [loadRealAccounts])
+
+  // Живые черновые (HELPER) — глобально, для индекса безопасности основных.
+  const draftCount = realAccounts.filter((r) => r.role === 'HELPER' && r.status === 'ACTIVE' && r.hasSession).length
+  const secCtx = { draftCount, allowNoDrafts }
 
   // Статистика берётся из БД-триггеров (как на странице «Триггеры»), а не из Zustand —
   // иначе цифры не сходятся.
@@ -545,6 +554,7 @@ function Accounts() {
           {polling ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
           {polling ? 'Проверка…' : 'Проверить подписчиков'}
         </Button>
+        <Button variant="secondary" onClick={() => setShowImport(true)}><Cookie className="w-4 h-4" /> Импорт списком</Button>
         <Button onClick={() => setShowAdd(true)}><Plus className="w-4 h-4" /> Добавить</Button>
       </PageHeader>
 
@@ -614,7 +624,7 @@ function Accounts() {
                           status === 'ACTIVE' ? 'bg-ok' : status === 'BLOCKED' ? 'bg-bad' : 'bg-warn')} />
                         {status === 'ACTIVE' ? 'Активен' : status === 'BLOCKED' ? 'Заблокирован' : 'Пауза'}
                       </span>
-                      {ra && <SecurityBadge acc={ra} />}
+                      {ra && <SecurityBadge acc={ra} ctx={secCtx} />}
                     </div>
                   </div>
 
@@ -733,12 +743,14 @@ function Accounts() {
       />
 
       {showAdd && <AddAccountModal onClose={() => setShowAdd(false)} onAdded={() => loadRealAccounts()} />}
+      {showImport && <ImportCookiesModal onClose={() => setShowImport(false)} onDone={() => loadRealAccounts()} />}
 
       {detail && (
         <AccountDetailModal
           acc={detail.acc}
           ra={detail.ra}
           sections={sections}
+          secCtx={secCtx}
           onChanged={loadRealAccounts}
           campaigns={dbTriggers.filter((t) => t.responder?.id === (detail.ra?.id ?? detail.acc.id))}
           onClose={() => setDetail(null)}

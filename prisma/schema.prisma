@@ -89,6 +89,7 @@ model InstagramAccount {
   followersHistory Json?    // история [{d:'YYYY-MM-DD', n}] для спарклайна прироста
   sectionId   String?       // раздел/подраздел (папка пользователя)
   proxyId     String?       // ссылка на прокси (пуловый/индивидуальный); строковый proxy оставлен для воркеров
+  createdAt   DateTime      @default(now())  // когда аккаунт заведён — задел под «прогрев» (рампу дневных лимитов по возрасту)
 
   user                User           @relation(fields: [userId], references: [id])
   section             Section?       @relation(fields: [sectionId], references: [id])

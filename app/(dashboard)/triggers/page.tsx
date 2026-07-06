@@ -6,7 +6,7 @@ import {
   Heart, MessageCircle, UserPlus, Clapperboard, RefreshCw,
   Plus, ChevronDown, ChevronUp, ToggleLeft, ToggleRight,
   Link2, Bookmark, FileText, X, UserCheck, Eye,
-  Image as ImageIcon, Sparkles, ChevronRight, ArrowLeft, Settings, Power, PauseCircle, ScrollText,
+  Image as ImageIcon, Sparkles, ChevronRight, ArrowLeft, Settings, Power, PauseCircle, ScrollText, Globe,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/Tooltip'
@@ -1349,8 +1349,9 @@ function CampaignCard({ trigger, onToggle, onEdit, onDelete, onOpenLog, index = 
 }
 
 // ── Карточка аккаунта (уровень 1) ───────────────────────────────────────────
-function AccountCard({ acc, campaigns, activeTypes, onOpen, onOpenLog, index = 0 }: {
+function AccountCard({ acc, campaigns, activeTypes, onOpen, onOpenLog, index = 0, draftCount, allowNoDrafts }: {
   acc: DbAccount; campaigns: DbTrigger[]; activeTypes: Set<string>; onOpen: () => void; onOpenLog: () => void; index?: number
+  draftCount?: number; allowNoDrafts?: boolean
 }) {
   const active = campaigns.filter((t) => t.isActive).length
   const paused = campaigns.length - active
@@ -1368,10 +1369,16 @@ function AccountCard({ acc, campaigns, activeTypes, onOpen, onOpenLog, index = 0
         </span>
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-[14px] truncate">@{acc.username}</div>
-          <div className="flex items-center gap-1.5 mt-0.5">
+          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
             <span className={cn('w-1.5 h-1.5 rounded-full', PLATE_DOT[ps])} />
             <span className="text-[10.5px] text-subt">{PLATE_LABEL[ps]}</span>
-            <SecurityBadge acc={acc} />
+            <SecurityBadge acc={acc} ctx={{ draftCount, allowNoDrafts }} />
+            <Tooltip content={acc.proxy ? 'Прокси подключён' : 'Без прокси — высокий риск бана'}>
+              <span className={cn('inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-md',
+                acc.proxy ? 'text-ok bg-ok/10' : 'text-bad bg-bad/10')}>
+                <Globe className="w-2.5 h-2.5" /> {acc.proxy ? 'Прокси' : 'Без прокси'}
+              </span>
+            </Tooltip>
           </div>
         </div>
         <button onClick={(e) => { e.stopPropagation(); onOpenLog() }} title="Открыть лог"
@@ -1467,6 +1474,7 @@ function TriggersScreen() {
   const [sections, setSections] = useState<SectionItem[]>([])
   const [selSection, setSelSection] = useState('')
   const [selSub, setSelSub] = useState('')
+  const [allowNoDrafts, setAllowNoDrafts] = useState(false)  // из /api/settings — для индекса безопасности
 
   const formApi = useRef<FormApi | null>(null)
   const [selId, setSelId] = useState<string | null>(null)
@@ -1489,8 +1497,17 @@ function TriggersScreen() {
   const loadSections = useCallback(async () => {
     try { const res = await fetch('/api/sections'); if (res.ok) setSections(await res.json()) } catch {}
   }, [])
+  const loadSettings = useCallback(async () => {
+    try { const res = await fetch('/api/settings'); if (res.ok) { const d = await res.json(); setAllowNoDrafts(Boolean(d.allowNoDrafts)) } } catch {}
+  }, [])
 
-  useEffect(() => { loadAccounts(); loadTriggers(); loadTemplates(); loadSections() }, [loadAccounts, loadTriggers, loadTemplates, loadSections])
+  // Живые черновые (HELPER) владельца — глобально, для индекса безопасности основных.
+  const draftCount = useMemo(
+    () => dbAccounts.filter((a) => a.role === 'HELPER' && a.status === 'ACTIVE' && a.hasSession).length,
+    [dbAccounts],
+  )
+
+  useEffect(() => { loadAccounts(); loadTriggers(); loadTemplates(); loadSections(); loadSettings() }, [loadAccounts, loadTriggers, loadTemplates, loadSections, loadSettings])
 
   // Открыть сразу конкретный аккаунт, если пришли со страницы «Аккаунты» (?account=<id>)
   useEffect(() => {
@@ -1775,6 +1792,7 @@ function TriggersScreen() {
             <AccountCard key={acc.id} acc={acc} index={i}
               campaigns={campaignsFor(acc.id)}
               activeTypes={activeByAccount.get(acc.id) ?? new Set<string>()}
+              draftCount={draftCount} allowNoDrafts={allowNoDrafts}
               onOpen={() => setSelId(acc.id)}
               onOpenLog={() => setLogTarget({ accountId: acc.id, title: `@${acc.username}`, subtitle: 'Журнал аккаунта' })} />
           ))}

@@ -1,4 +1,4 @@
-import { loadCounters, DAILY_CAPS, type ActionKind } from '@/lib/limits'
+import { loadCounters, DAILY_CAPS, scaleCaps, warmupFactor, warmupPct, type ActionKind } from '@/lib/limits'
 
 /**
  * «Индекс безопасности» аккаунта (0–100) — насколько он защищён от бана прямо сейчас.
@@ -26,6 +26,11 @@ export function securityIndex(acc: {
   proxy?: string | null
   hasSession?: boolean | null
   lastChecked?: string | Date | null
+  createdAt?: string | Date | null
+  role?: string | null
+}, ctx?: {
+  draftCount?: number      // сколько живых черновых (HELPER) у владельца — глобально
+  allowNoDrafts?: boolean   // включено ли «работать без черновых» (основной парсит сам)
 }): Safety {
   const factors: SafetyFactor[] = []
   const push = (ok: boolean, label: string, delta: number) => factors.push({ ok, label, delta: ok ? 0 : delta })
@@ -48,12 +53,13 @@ export function securityIndex(acc: {
   else push(true, 'Ошибок подряд нет', 0)
 
   // 4. Дневная загрузка лимитов — чем ближе к суточному потолку, тем выше риск ограничений.
-  // Показываем самое «горячее» действие, а не абстрактный процент.
+  // Потолки берём УЖАТЫЕ под прогрев (для молодого аккаунта лимиты ниже) — процент честный.
   const c = loadCounters(acc.limits) as any
+  const caps = scaleCaps(warmupFactor(acc.createdAt))
   let worstKey: ActionKind | null = null
   let worstPct = 0
   for (const k of CAP_ORDER) {
-    const cap = DAILY_CAPS[k]
+    const cap = caps[k]
     const used = Number(c[k]) || 0
     const pct = cap ? Math.min(100, (used / cap) * 100) : 0
     if (pct > worstPct) { worstPct = pct; worstKey = k }
@@ -68,6 +74,20 @@ export function securityIndex(acc: {
   if (!acc.proxy) push(false, 'Нет прокси', 20)
   else push(true, 'Прокси подключён', 0)
 
+  // 5b. Черновые (парсеры) берут на себя палевную работу (скрейп, лайки, подписки),
+  // защищая основной. Фактор только для основных (у самого чернового его нет).
+  if (ctx && acc.role !== 'HELPER' && ctx.draftCount !== undefined) {
+    if (ctx.draftCount > 0) {
+      push(true, `Черновые подключены (${ctx.draftCount}) — основной защищён`, 0)
+    } else if (ctx.allowNoDrafts) {
+      // «Работать без черновых» включено → основной сам парсит = прямой риск бана
+      push(false, 'Нет черновых: основной парсит сам — риск бана', 25)
+    } else {
+      // Черновых нет, но парсинг основным выключен → бан не грозит, зато кампании стоят
+      push(false, 'Нет черновых — кампании стоят (основной защищён, но не работает)', 10)
+    }
+  }
+
   // 6. Давно не проверялся — если бот давно не заходил, счётчики/статус могут быть устаревшими
   if (!acc.lastChecked) {
     push(false, 'Ещё ни разу не проверялся ботом', 15)
@@ -77,6 +97,11 @@ export function securityIndex(acc: {
     else if (hours > 24) push(false, 'Давно не проверялся (больше суток)', 10)
     else push(true, 'Проверялся недавно', 0)
   }
+
+  // 7. Прогрев — молодой аккаунт работает на сниженных лимитах (это защита, не штраф).
+  const wpct = warmupPct(acc.createdAt)
+  if (wpct < 100) push(true, `Прогрев: лимиты ${wpct}% (аккаунт разгоняется)`, 0)
+  else push(true, 'Прогрет — лимиты на 100%', 0)
 
   const score = Math.max(0, Math.min(100, 100 - factors.reduce((s, f) => s + f.delta, 0)))
   const label = score >= 80 ? 'Защищён' : score >= 60 ? 'Норма' : score >= 35 ? 'Риск' : 'Опасно'

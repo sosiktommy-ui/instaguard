@@ -6,7 +6,7 @@ import {
   getLikers, getStoryEvents, getAccountInfo,
 } from '@/lib/instagram/client'
 import { Queue } from 'bullmq'
-import { loadCounters, consume, MAX_NEW_PER_POLL, type Counters } from '@/lib/limits'
+import { loadCounters, consume, warmupFactor, scaleCaps, MAX_NEW_PER_POLL, type Counters, type ActionKind } from '@/lib/limits'
 import { getCurrentUser } from '@/lib/auth'
 import { mergeStatsMap } from '@/lib/stats'
 
@@ -284,21 +284,25 @@ export async function POST(req: NextRequest) {
     },
   })
 
+  // Настройки владельцев: парсинг без черновых (этап 9) и работа без прокси (защита от бана).
+  const ownerIds = [...new Set(accounts.map((a) => a.userId))]
+  const settingsRows = ownerIds.length
+    ? await prisma.userSettings.findMany({ where: { userId: { in: ownerIds } }, select: { userId: true, allowNoDrafts: true, allowNoProxy: true } })
+    : []
+  const allowNoDrafts = new Map(settingsRows.map((r) => [r.userId, r.allowNoDrafts]))
+  const allowNoProxy = new Map(settingsRows.map((r) => [r.userId, r.allowNoProxy]))
+  // Прокси обязателен, если владелец НЕ включил «Работать без прокси» (по умолчанию — обязателен).
+  const proxyRequired = (userId: string) => !allowNoProxy.get(userId)
+
   // Пул черновых (HELPER) аккаунтов-парсеров: активные, с живой сессией. LRU — кто дольше не работал.
+  // Если прокси обязателен — черновые без прокси в пул не берём (иначе парсинг пойдёт с IP сервера → бан).
   const draftPool = (await prisma.instagramAccount.findMany({
     where: { role: 'HELPER', status: 'ACTIVE', ...scope },
     orderBy: { lastChecked: 'asc' },
-  })).filter((d) => d.sessionData)
+  })).filter((d) => d.sessionData && (!proxyRequired(d.userId) || Boolean(d.proxy)))
 
   // Основные, которым реально есть что делать (есть активные триггеры)
   const workingMains = accounts.filter((a) => a.sessionData && a.triggersAsResponder.length)
-
-  // Настройки владельцев: разрешён ли парсинг основными без черновых (этап 9)
-  const ownerIds = [...new Set(accounts.map((a) => a.userId))]
-  const settingsRows = ownerIds.length
-    ? await prisma.userSettings.findMany({ where: { userId: { in: ownerIds } }, select: { userId: true, allowNoDrafts: true } })
-    : []
-  const allowNoDrafts = new Map(settingsRows.map((r) => [r.userId, r.allowNoDrafts]))
 
   // ФОЛБЭК: черновых нет И никому не разрешено «без черновых» → НЕ парсим основными + тревога.
   const anyCanProceed = draftPool.length > 0 || workingMains.some((a) => allowNoDrafts.get(a.userId))
@@ -328,6 +332,13 @@ export async function POST(req: NextRequest) {
 
   for (const account of accounts) {
     if (!account.sessionData) continue
+
+    // Прокси обязателен и не задан → НЕ работаем этим аккаунтом (защита от мгновенного бана).
+    // Отключается тумблером «Работать без прокси» в Настройках.
+    if (proxyRequired(account.userId) && !account.proxy) {
+      summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, triggersFound: account.triggersAsResponder.length, totalComments: 0, newComments: 0, commentActions: 0, skipped: 'no-proxy' })
+      continue
+    }
 
     // Кулдаун: пропускаем авто-поллинг если аккаунт проверялся недавно
     if (!isManual && account.lastChecked) {
@@ -371,6 +382,13 @@ export async function POST(req: NextRequest) {
     } else {
       s.skipped = 'no-draft'; summary.push(s); continue
     }
+
+    // Прогрев: дневные лимиты ужимаются по возрасту аккаунта (свежий не срывается на полную).
+    // Для черновых берём более строгий из двух возрастов (основной/черновой) — молодой
+    // черновой прогревается тоже. use() — списание бюджета с учётом ужатых лимитов.
+    const warm = Math.min(warmupFactor(account.createdAt), draft ? warmupFactor(draft.createdAt) : 1)
+    const caps = scaleCaps(warm)
+    const use = (k: ActionKind, n = 1) => consume(counters, k, n, caps)
 
     // ── Проверка подписки БЕЗ обращения к основному ──────────────────────────
     // Черновой скрейпит подписчиков основного (публично) → гейт = принадлежность множеству.
@@ -435,10 +453,10 @@ export async function POST(req: NextRequest) {
           }
 
           // ВСЕ действия делает основной (лимиты counters); черновой только парсил цель
-          const willDM = dmAllowed && consume(counters, 'dm')
-          const willFollow = doFollowT && consume(counters, 'follow')
-          const willLike = doLikeT && consume(counters, 'like')
-          const willStory = Boolean(storiesAct) && consume(counters, 'story')
+          const willDM = dmAllowed && use('dm')
+          const willFollow = doFollowT && use('follow')
+          const willLike = doLikeT && use('like')
+          const willStory = Boolean(storiesAct) && use('story')
           // Флаги fallback (follow+like основным при закрытой личке). Бюджет заранее НЕ
           // списываем: иначе на каждом успешном DM утекал бы дневной лимит вхолостую.
           const fallbackFollow = willDM && !willFollow
@@ -648,7 +666,7 @@ export async function POST(req: NextRequest) {
 
               if (!ok) {
                 const gateText = gateCfg.inviteText.replace(/\{\{username\}\}/gi, c.username)
-                if (gateText && consume(counters, 'comment')) {
+                if (gateText && use('comment')) {
                   incFired.comment = (incFired.comment || 0) + 1
                   try { await replyComment(session, c.media_id, gateText, c.pk, proxy); fired = true; incDone.comment = (incDone.comment || 0) + 1 }
                   catch (e: any) { errors.push(`коммент-приглашение: ${e.message}`) }
@@ -661,32 +679,32 @@ export async function POST(req: NextRequest) {
             if (!gatedStop) {
               if (reply) {
                 const variants: string[] = (reply.replies ?? []).filter(Boolean)
-                if (variants.length && consume(counters, 'comment')) {
+                if (variants.length && use('comment')) {
                   incFired.comment = (incFired.comment || 0) + 1
                   const pick = variants[Math.floor(Math.random() * variants.length)].replace(/\{\{username\}\}/gi, c.username)
                   try { await replyComment(session, c.media_id, pick, c.pk, proxy); fired = true; incDone.comment = (incDone.comment || 0) + 1 }
                   catch (e: any) { errors.push(`ответ: ${e.message}`) }
                 }
               }
-              if (doLikePosts && consume(counters, 'like', COMMENT_LIKE_POSTS)) {
+              if (doLikePosts && use('like', COMMENT_LIKE_POSTS)) {
                 incFired.like = (incFired.like || 0) + 1
                 await randDelay(2, 5)
                 try { await likeUserMedias(session, c.user_pk, COMMENT_LIKE_POSTS, proxy); fired = true; incDone.like = (incDone.like || 0) + 1 }
                 catch (e: any) { errors.push(`лайк постов: ${e.message}`) }
               }
-              if (likeCmt && consume(counters, 'like')) {
+              if (likeCmt && use('like')) {
                 incFired.like = (incFired.like || 0) + 1
                 await randDelay(1, 3)
                 try { await likeComment(session, c.pk, proxy); fired = true; incDone.like = (incDone.like || 0) + 1 }
                 catch (e: any) { errors.push(`лайк коммента: ${e.message}`) }
               }
-              if (doFollow && consume(counters, 'follow')) {
+              if (doFollow && use('follow')) {
                 incFired.follow = (incFired.follow || 0) + 1
                 await randDelay(2, 5)
                 try { await followUser(session, c.user_pk, proxy); fired = true; incDone.follow = (incDone.follow || 0) + 1 }
                 catch (e: any) { errors.push(`подписка: ${e.message}`) }
               }
-              if (dm?.templates?.[0] && consume(counters, 'dm')) {
+              if (dm?.templates?.[0] && use('dm')) {
                 incFired.dm = (incFired.dm || 0) + 1
                 await randDelay(3, 8)
                 let text = String(dm.templates[0]).replace(/\{\{username\}\}/gi, c.username)
@@ -704,11 +722,11 @@ export async function POST(req: NextRequest) {
                   if (statusFromError(e.message)) throw e  // бан/челлендж/лимит → основной на паузу
                   // Личка закрыта / не доставлено → мягкий контакт основным (follow + лайк)
                   errors.push(`директ закрыт: ${e.message}`)
-                  if (consume(counters, 'follow')) { incFired.follow = (incFired.follow || 0) + 1; try { await followUser(session, c.user_pk, proxy); fired = true; incDone.follow = (incDone.follow || 0) + 1 } catch {} }
-                  if (consume(counters, 'like'))   { incFired.like = (incFired.like || 0) + 1; await randDelay(2, 5); try { await likeLatestMedia(session, c.user_pk, proxy); fired = true; incDone.like = (incDone.like || 0) + 1 } catch {} }
+                  if (use('follow')) { incFired.follow = (incFired.follow || 0) + 1; try { await followUser(session, c.user_pk, proxy); fired = true; incDone.follow = (incDone.follow || 0) + 1 } catch {} }
+                  if (use('like'))   { incFired.like = (incFired.like || 0) + 1; await randDelay(2, 5); try { await likeLatestMedia(session, c.user_pk, proxy); fired = true; incDone.like = (incDone.like || 0) + 1 } catch {} }
                 }
               }
-              if (storiesAct && consume(counters, 'story')) {
+              if (storiesAct && use('story')) {
                 incFired.story = (incFired.story || 0) + 1
                 await randDelay(3, 7)
                 try { await viewStories(session, c.user_pk, Boolean(storiesAct.like), proxy); fired = true; incDone.story = (incDone.story || 0) + 1 }
