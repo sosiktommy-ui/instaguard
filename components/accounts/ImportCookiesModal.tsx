@@ -30,12 +30,23 @@ export function ImportCookiesModal({ onClose, onDone }: { onClose: () => void; o
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, mode, role }),
       })
-      const d = await r.json()
-      if (!r.ok) { setError(d.error ?? 'Ошибка импорта'); return }
+      // Читаем как текст: ответ может быть не-JSON (например, gateway-таймаут 502/504),
+      // тогда покажем статус и тело, а не глухое «Ошибка импорта».
+      const rawBody = await r.text()
+      let d: any = null
+      try { d = rawBody ? JSON.parse(rawBody) : null } catch { /* не JSON */ }
+      if (!r.ok) {
+        if (d?.error) setError(d.error)
+        else if (r.status === 502 || r.status === 504)
+          setError(`Шлюз оборвал запрос (${r.status}) — вход занял слишком долго. Импортируйте по 1–2 строки за раз (каждый вход к Instagram — 15–40с).`)
+        else setError(`Ошибка ${r.status}: ${(rawBody || 'пустой ответ').slice(0, 300)}`)
+        return
+      }
+      if (!d) { setError('Сервер вернул пустой ответ — попробуйте меньше строк за раз.'); return }
       setRes(d)
       if (d.imported > 0) onDone(d.imported)
-    } catch {
-      setError('Ошибка сети — проверьте подключение')
+    } catch (e: any) {
+      setError(`Ошибка сети — ${e?.message ?? 'проверьте подключение'}`)
     } finally {
       setLoading(false)
     }
