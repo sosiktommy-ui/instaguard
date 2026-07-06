@@ -8,10 +8,11 @@ import { cn } from '@/lib/utils'
 import { readStat, ACTION_KEYS } from '@/lib/stats'
 import { PageHeader } from '@/components/common/PageHeader'
 import { StatCard } from '@/components/common/StatCard'
+import { CampaignMatrix } from '@/components/stats/CampaignMatrix'
 import { TONE } from '@/lib/colors'
 
 interface DbAccount { id: string; username: string; status: string; errorCount?: number; followerCount?: number; followers?: number | null }
-interface DbTrigger { id: string; triggerType: string; isActive: boolean; fireCount?: number; stats?: any }
+interface DbTrigger { id: string; name?: string; triggerType: string; isActive: boolean; fireCount?: number; stats?: any; actions?: any[]; responder?: { id: string; username: string } | null }
 interface DbLog { id: string; level: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS'; message: string; createdAt: string; account?: { username?: string } }
 
 const DB_TYPE_LABELS: Record<string, string> = {
@@ -121,6 +122,15 @@ function Stats() {
             {topAccounts.length === 0 && <div className="py-6 text-center text-subt text-[13px]">Нет данных</div>}
           </div>
         </div>
+      </div>
+
+      <div className="card card-3d gloss p-6">
+        <div className="flex items-center justify-between mb-1">
+          <div className="font-semibold text-[15px]">Матрица выполнений</div>
+          <div className="text-[12px] text-subt">кампании · действия × аккаунты</div>
+        </div>
+        <div className="text-[12px] text-subt mb-4">✓ — выполнено, <span className="text-warn">0/N</span> — сработало, но не выполнилось, — — нет такой кампании у аккаунта</div>
+        <CampaignMatrix triggers={triggers} accounts={accounts} />
       </div>
 
       <div className="card card-3d gloss p-6">
