@@ -178,9 +178,19 @@ def login(payload: LoginPayload, x_worker_secret: str = Header(...)):
         logging.warning("Login failed for %s [%s]: %s", payload.username, err_type, err)
 
         if err_type in ("BadPassword", "IncorrectPassword"):
-            detail = ("Instagram отклонил вход («bad_password»). При ВЕРНОМ пароле частые причины: "
-                      "включена 2FA (добавьте 2FA-ключ), вход с флагнутого IP или прокси не в стране аккаунта, "
-                      "либо аккаунт требует входа по кукам. Надёжнее всего — режим «Куки».")
+            # Разбираем сырой ответ: Instagram часто отдаёт «bad_password», хотя реальная
+            # причина — IP в чёрном списке (дата-центровый прокси / IP сервера).
+            _snap = getattr(e, 'ig_snapshot', None) or {}
+            _m = str(_snap.get('message', '')).lower()
+            if 'blacklist' in _m or 'change your ip' in _m or 'blocklist' in _m:
+                detail = ("🚫 IP в чёрном списке Instagram — это НЕ пароль. Instagram прямо просит сменить IP. "
+                          "Обычно виноват дата-центровый прокси или IP сервера. Решение: поставьте ЧИСТЫЙ "
+                          "резидентный/мобильный прокси в стране аккаунта, либо войдите через режим «Куки» "
+                          "(сессия, созданная с чистого IP).")
+            else:
+                detail = ("Instagram отклонил вход («bad_password»). При ВЕРНОМ пароле частые причины: "
+                          "включена 2FA (добавьте 2FA-ключ), вход с флагнутого IP или прокси не в стране аккаунта, "
+                          "либо аккаунт требует входа по кукам. Надёжнее всего — режим «Куки».")
         elif err_type == "TwoFactorRequired":
             detail = "Требуется двухфакторная аутентификация (2FA) — отключите её временно в настройках Instagram."
         elif err_type in ("ChallengeRequired", "ChallengeUnknownStep", "SelectContactPointRecoveryForm"):
