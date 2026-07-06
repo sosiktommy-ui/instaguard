@@ -125,11 +125,7 @@ function Stats() {
       </div>
 
       <div className="card card-3d gloss p-6">
-        <div className="flex items-center justify-between mb-1">
-          <div className="font-semibold text-[15px]">Матрица выполнений</div>
-          <div className="text-[12px] text-subt">кампании · действия × аккаунты</div>
-        </div>
-        <div className="text-[12px] text-subt mb-4">✓ — выполнено, <span className="text-warn">0/N</span> — сработало, но не выполнилось, — — нет такой кампании у аккаунта</div>
+        <div className="font-semibold text-[15px] mb-4">Матрица выполнений</div>
         <CampaignMatrix triggers={triggers} accounts={accounts} />
       </div>
 
