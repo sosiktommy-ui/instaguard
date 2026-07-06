@@ -210,6 +210,9 @@ def _parse_mobile_session(raw: str) -> dict:
         "authorization_data": {
             "ds_user_id": ds_user_id,
             "sessionid":  session_id,
+            # instagrapi аутентифицируется Bearer-заголовком (он у нас валидный из токена),
+            # а не только кукой — так же, как делает штатный login_by_sessionid.
+            "should_use_header_over_cookies": True,
         },
         "locale": locale,
         "country": country,
@@ -432,30 +435,27 @@ def login_by_cookies(cookies: dict, proxy: str | None = None) -> tuple[dict, str
     if _is_mobile_session(cookies):
         # Экспорт мобильной сессии — собираем полный settings и логинимся им
         settings = _parse_mobile_session(cookies['sessionid'])
-        session_id = settings['authorization_data'].get('sessionid', '')
-
         cl = _new_client()
+        cl.set_settings(settings)
+        # Прогрев ленты «по-человечески» — не критично, если не удался
+        # (например, флагнутый feed/timeline); настоящую проверку делает account_info.
         try:
-            cl.set_settings(settings)
             cl.get_timeline_feed()
-            info = cl.account_info()
-            return cl.get_settings(), info.username
-        except (ChallengeRequired, TwoFactorRequired):
-            raise
         except Exception as e:
-            # Запасной путь: чистый вход по sessionid (instagrapi сам поднимет устройство).
-            logger.warning("Полный вход по мобильной сессии не удался (%s); пробую login_by_sessionid", e)
-            if not session_id or len(session_id) < 30:
-                raise
-            cl2 = _new_client()
-            cl2.login_by_sessionid(session_id)
-            info = cl2.account_info()
-            return cl2.get_settings(), info.username
+            logger.info("get_timeline_feed прогрев не удался (не критично): %s", e)
+        # Проверка сессии и username — приватным accounts/current_user.
+        # НЕ используем login_by_sessionid / user_short_gql: их публичный GraphQL
+        # (query_hash) Instagram задеприкейтил → 400 «invalid request».
+        info = cl.account_info()
+        return cl.get_settings(), info.username
 
     # Обычные куки (словарь sessionid/csrftoken/… либо один sessionid)
     cl = _new_client()
     cl.private.cookies.update(cookies)
-    cl.get_timeline_feed()
+    try:
+        cl.get_timeline_feed()
+    except Exception as e:
+        logger.info("get_timeline_feed прогрев не удался (не критично): %s", e)
     info = cl.account_info()
     return cl.get_settings(), info.username
 

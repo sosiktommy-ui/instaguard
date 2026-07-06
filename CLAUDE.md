@@ -116,6 +116,15 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-06 (7)
+
+#### fix: вход по кукам — убран мёртвый публичный GraphQL, проверка через account_info
+
+- После фикса (6) `KeyError: 'app_version'` ушёл, но вход падал с `ClientGraphqlError: 400 … graphql/query … 'invalid request'`. Причина: основной вход (`get_timeline_feed`) падал → срабатывал мой запасной `login_by_sessionid`, а он внутри instagrapi тянет username через **публичный GraphQL** (`www.instagram.com/graphql/query` со старым `query_hash`), который Instagram **задеприкейтил** → 400. Fallback не помогал и прятал настоящую ошибку.
+- **Воркер (⚠️ редеплой Python):**
+  - `login_by_cookies` больше НЕ использует `login_by_sessionid`/`user_short_gql`. Проверка сессии и получение username — через приватный `account_info()` (`accounts/current_user/`, мобильный API, без GraphQL). `get_timeline_feed()` оставлен как необязательный «прогрев» (его падение не критично).
+  - В `authorization_data` добавлен `should_use_header_over_cookies: True` — instagrapi аутентифицируется валидным Bearer-заголовком из токена, а не только кукой (как штатный `login_by_sessionid`). Вероятная причина падения `get_timeline_feed` — раньше флага не было.
+
 ### 2026-07-06 (6)
 
 #### fix: вход по мобильным Android-сессиям (куки) — `KeyError: 'app_version'`
