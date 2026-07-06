@@ -253,6 +253,15 @@ def login_by_credentials(username: str, password: str, proxy: str | None = None,
 
         return {'needsChallenge': True, 'stepName': step_name, 'username': username}
 
+    except Exception as e:
+        # Прикрепляем сырой ответ Instagram к ошибке — «снимок» для диагностики в UI.
+        # Ловит BadPassword, SentryBlock и т.п. (2FA и Challenge обработаны выше).
+        try:
+            e.ig_snapshot = cl.last_json
+        except Exception:
+            pass
+        raise
+
 
 def submit_challenge_code(username: str, code: str) -> dict:
     """Submit the verification code received by email/SMS. Returns {'sessionData': dict}."""

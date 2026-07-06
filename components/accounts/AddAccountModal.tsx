@@ -213,7 +213,7 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
               </div>
             </div>
             {proxyBlock}
-            {error && <p className="text-bad text-[13px] text-center">{error}</p>}
+            {error && <div className="text-bad text-[12.5px] whitespace-pre-wrap break-words bg-bad/[0.06] rounded-2xl p-3 max-h-56 overflow-y-auto leading-relaxed">{error}</div>}
             <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed">
               Пароль не хранится — только сессия Instagram.
             </div>
@@ -234,7 +234,7 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
               />
             </div>
             {proxyBlock}
-            {error && <p className="text-bad text-[13px] text-center">{error}</p>}
+            {error && <div className="text-bad text-[12.5px] whitespace-pre-wrap break-words bg-bad/[0.06] rounded-2xl p-3 max-h-56 overflow-y-auto leading-relaxed">{error}</div>}
             <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed">
               Экспортируйте куки с instagram.com через расширение браузера (например, Cookie-Editor). Нужен как минимум <code className="font-mono bg-black/5 px-1 rounded">sessionid</code>.
             </div>

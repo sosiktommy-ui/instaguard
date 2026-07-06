@@ -178,7 +178,9 @@ def login(payload: LoginPayload, x_worker_secret: str = Header(...)):
         logging.warning("Login failed for %s [%s]: %s", payload.username, err_type, err)
 
         if err_type in ("BadPassword", "IncorrectPassword"):
-            detail = "Неверный пароль. Проверьте логин и пароль."
+            detail = ("Instagram отклонил вход («bad_password»). При ВЕРНОМ пароле частые причины: "
+                      "включена 2FA (добавьте 2FA-ключ), вход с флагнутого IP или прокси не в стране аккаунта, "
+                      "либо аккаунт требует входа по кукам. Надёжнее всего — режим «Куки».")
         elif err_type == "TwoFactorRequired":
             detail = "Требуется двухфакторная аутентификация (2FA) — отключите её временно в настройках Instagram."
         elif err_type in ("ChallengeRequired", "ChallengeUnknownStep", "SelectContactPointRecoveryForm"):
@@ -193,6 +195,16 @@ def login(payload: LoginPayload, x_worker_secret: str = Header(...)):
             detail = "Instagram не принял авторизацию. Попробуйте через несколько минут."
         else:
             detail = f"{err_type}: {err}"
+
+        # «Скрин при ошибке»: прикладываем сырой ответ Instagram (что он реально вернул) —
+        # чтобы владелец видел настоящую причину, а не только наше сообщение.
+        snap = getattr(e, 'ig_snapshot', None)
+        if snap:
+            import json as _json
+            try:
+                detail += "\n\n📋 Ответ Instagram: " + _json.dumps(snap, ensure_ascii=False)[:700]
+            except Exception:
+                pass
 
         raise HTTPException(status_code=400, detail=detail)
 
