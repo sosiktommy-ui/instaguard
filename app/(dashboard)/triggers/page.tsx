@@ -133,6 +133,8 @@ interface DbAccount {
   sectionId?: string | null      // раздел/подраздел (папка)
   limits?: unknown               // дневные счётчики (для индекса безопасности)
   proxy?: string | null          // прокси (для индекса безопасности)
+  hasSession?: boolean           // жива ли сессия Instagram (для индекса безопасности)
+  lastChecked?: string | null    // когда бот последний раз проверял (для индекса безопасности)
 }
 interface DbTrigger {
   id: string

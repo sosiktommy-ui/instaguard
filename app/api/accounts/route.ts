@@ -13,7 +13,7 @@ export async function GET() {
       select: {
         id: true, username: true, status: true, role: true,
         lastChecked: true, errorCount: true, proxy: true, followers: true, limits: true, followersHistory: true,
-        sectionId: true, proxyId: true,
+        sectionId: true, proxyId: true, sessionData: true,
         snapshots: { orderBy: { createdAt: 'desc' }, take: 1, select: { data: true } },
       },
     })
@@ -33,6 +33,7 @@ export async function GET() {
         followersHistory: a.followersHistory ?? null,  // для спарклайна прироста
         sectionId: a.sectionId ?? null,   // раздел/подраздел (папка)
         proxyId: a.proxyId ?? null,       // к какому прокси привязан (для вкладки «Прокси»)
+        hasSession: Boolean(a.sessionData),   // жива ли сессия Instagram (для «Индекса безопасности»); сам sessionData наружу не отдаём
       }
     }))
   } catch {

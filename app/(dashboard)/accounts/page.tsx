@@ -33,6 +33,7 @@ interface RealAccount {
   followersHistory?: { d: string; n: number }[] | null
   limits?: Record<string, unknown> | null
   sectionId?: string | null
+  hasSession?: boolean
 }
 
 // Мини-спарклайн прироста подписчиков (инлайн SVG, без библиотек)
