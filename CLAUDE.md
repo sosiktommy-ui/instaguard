@@ -116,6 +116,15 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-07 (5)
+
+#### feat: авто-определение протокола прокси (HTTP / SOCKS5 / SOCKS4)
+
+- Новые прокси пользователя рвали соединение (`ProxyError: Unable to connect to proxy … Remote end closed connection`) — вероятно, это SOCKS, а мы всегда коннектились как HTTP. Продавцы часто дают одну строку `host:port:user:pass` без указания протокола.
+- **Воркер (⚠️ редеплой Python):** новый `_resolve_proxy_scheme(proxy)` — пробным подключением (`api.ipify.org`) определяет рабочую схему в порядке **http → socks5 → socks4**, возвращает готовый URL со схемой, результат **кешируется на процесс** (`_proxy_scheme_cache`), чтобы не пробовать на каждом действии. Если пользователь задал схему явно (`socks5://…`) — берётся как есть. Используется во ВСЕХ путях: `build_client`, `login_by_credentials`, `login_by_cookies`, `submit_challenge_code`, `check_proxy`.
+- **`requirements.txt`:** добавлен `PySocks>=1.7.1` (нужен requests/instagrapi для SOCKS).
+- **UI:** `check_proxy` возвращает `scheme`; в «Проверить IP» рядом со страной показывается чип протокола (SOCKS5/SOCKS4), если не http. Так видно, что автоопределение сработало.
+
 ### 2026-07-07 (4)
 
 #### feat: массовая проверка прокси + вердикт «датацентр/VPN/резидент/мобильный»

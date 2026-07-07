@@ -34,6 +34,45 @@ def _normalize_proxy(proxy: str | None) -> str | None:
     # host:port  →  http://host:port
     return f'http://{proxy}'
 
+
+# Кеш «сырая строка прокси → рабочий URL со схемой» на время жизни процесса воркера,
+# чтобы не пробовать протокол заново на каждом действии поллинга.
+_proxy_scheme_cache: dict[str, str] = {}
+
+
+def _resolve_proxy_scheme(proxy: str | None) -> str | None:
+    """Определить РАБОЧУЮ схему прокси (http / socks5 / socks4) пробным подключением и
+    вернуть готовый URL со схемой. Продавцы часто дают одну строку host:port:user:pass,
+    не указывая протокол — тут он определяется сам. Если пользователь задал схему явно
+    (socks5://…) — используем как есть. Результат кешируется на процесс."""
+    if not proxy:
+        return None
+    key = proxy.strip()
+    if key in _proxy_scheme_cache:
+        return _proxy_scheme_cache[key]
+    base = _normalize_proxy(key)  # http://user:pass@host:port (или уже со схемой)
+    if not base:
+        return None
+    # Явно заданная не-http схема — доверяем без проб
+    if base.startswith(('socks5://', 'socks5h://', 'socks4://', 'https://')):
+        _proxy_scheme_cache[key] = base
+        return base
+    import requests
+    hostpart = base.split('://', 1)[1]  # user:pass@host:port
+    candidates = [base, f'socks5://{hostpart}', f'socks4://{hostpart}']  # http → socks5 → socks4
+    for url in candidates:
+        try:
+            requests.get('https://api.ipify.org?format=json',
+                         proxies={'http': url, 'https': url}, timeout=10)
+            _proxy_scheme_cache[key] = url
+            logger.info("Proxy scheme resolved: %s → %s", key.split(':')[0], url.split('://')[0])
+            return url
+        except Exception:
+            continue
+    # Ни одна схема не подключилась — вернём http (вызывающий получит понятную ProxyError)
+    return base
+
+
 def check_proxy(proxy: str | None = None) -> dict:
     """Проверить прокси: вернуть исходящий IP, страну, провайдера И вердикт по репутации
     (датацентр / VPN / прокси / мобильный) — как это видит Instagram. Без proxy — IP сервера.
@@ -42,8 +81,9 @@ def check_proxy(proxy: str | None = None) -> dict:
     + компанию/тип). Запрос идём ЧЕРЕЗ прокси без параметра — сервис видит именно исходящий IP
     прокси и возвращает его репутацию за один вызов. Фолбэк — ipinfo/ip-api (только IP/ISP)."""
     import requests
-    norm = _normalize_proxy(proxy)
+    norm = _resolve_proxy_scheme(proxy)  # авто-схема: http / socks5 / socks4
     proxies = {"http": norm, "https": norm} if norm else None
+    scheme = norm.split('://', 1)[0] if norm else 'direct'
 
     # 1) ipapi.is — IP + флаги репутации за один запрос через прокси
     try:
@@ -54,7 +94,7 @@ def check_proxy(proxy: str | None = None) -> dict:
         loc = j.get("location") or {}
         isp = company.get("name") or asn.get("org") or asn.get("descr") or ""
         res = {
-            "ok": True, "proxyUsed": bool(norm),
+            "ok": True, "proxyUsed": bool(norm), "scheme": scheme,
             "ip": j.get("ip", ""),
             "country": loc.get("country") or loc.get("country_code") or "",
             "isp": isp,
@@ -64,8 +104,8 @@ def check_proxy(proxy: str | None = None) -> dict:
             "proxy": bool(j.get("is_proxy")),
             "mobile": bool(j.get("is_mobile")),
         }
-        logger.info("check_proxy: ip=%s country=%s dc=%s vpn=%s mobile=%s isp=%s",
-                    res["ip"], res["country"], res["datacenter"], res["vpn"], res["mobile"], isp)
+        logger.info("check_proxy: scheme=%s ip=%s country=%s dc=%s vpn=%s mobile=%s isp=%s",
+                    scheme, res["ip"], res["country"], res["datacenter"], res["vpn"], res["mobile"], isp)
         return res
     except Exception as e:
         logger.warning("check_proxy ipapi.is failed: %s", e)
@@ -77,7 +117,7 @@ def check_proxy(proxy: str | None = None) -> dict:
             r = requests.get(url, proxies=proxies, timeout=20)
             j = r.json()
             return {
-                "ok": True, "proxyUsed": bool(norm),
+                "ok": True, "proxyUsed": bool(norm), "scheme": scheme,
                 "ip": j.get("ip") or j.get("query") or "",
                 "country": j.get("country") or j.get("countryCode") or "",
                 "isp": j.get("org") or j.get("isp") or j.get("as") or "",
@@ -86,7 +126,7 @@ def check_proxy(proxy: str | None = None) -> dict:
         except Exception as e:
             last_err = e
             logger.warning("check_proxy via %s failed: %s", url, e)
-    return {"ok": False, "proxyUsed": bool(norm), "error": f"{type(last_err).__name__}: {last_err}"}
+    return {"ok": False, "proxyUsed": bool(norm), "scheme": scheme, "error": f"{type(last_err).__name__}: {last_err}"}
 
 
 # In-memory store for pending challenge sessions: username → {settings, api_path, proxy}
@@ -291,7 +331,7 @@ def build_client(session_data: dict, proxy: str | None = None) -> Client:
     # Встроенная пауза instagrapi между запросами — дополнительная защита от бана
     cl.delay_range = [2, 6]
     if proxy:
-        cl.set_proxy(_normalize_proxy(proxy))
+        cl.set_proxy(_resolve_proxy_scheme(proxy))
     cl.set_settings(session_data)
     return cl
 
@@ -335,7 +375,7 @@ def login_by_credentials(username: str, password: str, proxy: str | None = None,
     """
     cl = Client()
     if proxy:
-        cl.set_proxy(_normalize_proxy(proxy))
+        cl.set_proxy(_resolve_proxy_scheme(proxy))
 
     try:
         if totp_secret:
@@ -444,7 +484,7 @@ def submit_challenge_code(username: str, code: str) -> dict:
 
     cl = Client()
     if pending.get('proxy'):
-        cl.set_proxy(pending['proxy'])
+        cl.set_proxy(_resolve_proxy_scheme(pending['proxy']))
     cl.set_settings(pending['settings'])
 
     api_path = pending['api_path']
@@ -499,7 +539,7 @@ def login_by_cookies(cookies: dict, proxy: str | None = None) -> tuple[dict, str
       • обычный словарь куки (sessionid, csrftoken, …) или один sessionid.
     Проверка/username — через приватный account_info() (НЕ через login_by_sessionid/
     публичный GraphQL: его query_hash Instagram задеприкейтил → 400 «invalid request»)."""
-    norm_proxy = _normalize_proxy(proxy)
+    norm_proxy = _resolve_proxy_scheme(proxy)
 
     def _new_client() -> Client:
         c = Client()

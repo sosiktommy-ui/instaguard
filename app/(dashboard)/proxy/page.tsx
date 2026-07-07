@@ -19,7 +19,7 @@ interface MainAccount { id: string; username: string; role: string; status: stri
 
 // Результат «Проверить IP»: исходящий IP + флаги репутации от воркера (ipapi.is)
 type IpInfo = {
-  loading?: boolean; ip?: string; country?: string; isp?: string; error?: string
+  loading?: boolean; ip?: string; country?: string; isp?: string; scheme?: string; error?: string
   datacenter?: boolean | null; vpn?: boolean | null; proxy?: boolean | null; mobile?: boolean | null
 }
 
@@ -115,7 +115,7 @@ function Proxies() {
       const r = await fetch('/api/proxies/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proxyId: p.id }) })
       const d = await r.json().catch(() => ({}))
       if (!r.ok || d.ok === false) setIpCheck((s) => ({ ...s, [p.id]: { error: d.error ?? 'прокси не отвечает' } }))
-      else setIpCheck((s) => ({ ...s, [p.id]: { ip: d.ip, country: d.country, isp: d.isp, datacenter: d.datacenter, vpn: d.vpn, proxy: d.proxy, mobile: d.mobile } }))
+      else setIpCheck((s) => ({ ...s, [p.id]: { ip: d.ip, country: d.country, isp: d.isp, scheme: d.scheme, datacenter: d.datacenter, vpn: d.vpn, proxy: d.proxy, mobile: d.mobile } }))
     } catch { setIpCheck((s) => ({ ...s, [p.id]: { error: 'ошибка сети' } })) }
   }
 
@@ -134,7 +134,7 @@ function Proxies() {
           const d = await r.json().catch(() => ({}))
           const val: IpInfo & { src: string } = (!r.ok || d.ok === false)
             ? { src: lines[i], error: d.error ?? 'не отвечает' }
-            : { src: lines[i], ip: d.ip, country: d.country, isp: d.isp, datacenter: d.datacenter, vpn: d.vpn, proxy: d.proxy, mobile: d.mobile }
+            : { src: lines[i], ip: d.ip, country: d.country, isp: d.isp, scheme: d.scheme, datacenter: d.datacenter, vpn: d.vpn, proxy: d.proxy, mobile: d.mobile }
           setBulkRes((prev) => prev.map((x, j) => (j === i ? val : x)))
         } catch {
           setBulkRes((prev) => prev.map((x, j) => (j === i ? { src: lines[i], error: 'ошибка сети' } : x)))
@@ -163,6 +163,7 @@ function Proxies() {
           <span className="text-[11px] inline-flex items-center gap-1.5 flex-wrap">
             <span className="font-mono text-ink">{c.ip}</span>
             {c.country && <span className="px-1.5 py-0.5 rounded-md bg-canvas border border-line/50 text-subt">{c.country}</span>}
+            {c.scheme && c.scheme !== 'http' && <span className="px-1.5 py-0.5 rounded-md bg-brand/10 text-brand font-medium uppercase">{c.scheme}</span>}
             {c.isp && <span className="text-subt truncate max-w-[200px]" title={c.isp}>{c.isp}</span>}
             {v && <span className={cn('font-medium', v.cls)}>{v.text}</span>}
           </span>
