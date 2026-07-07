@@ -871,6 +871,9 @@ function CreateForm({
                 Настройка
               </span>
 
+              {/* Название кампании — первым полем */}
+              <input value={d.name} onChange={(e) => set('name', e.target.value)} className="field py-2 text-[13px]" placeholder="Название кампании" />
+
               {/* Действия (чипы) */}
               <div>
                 <div className="text-[11px] font-medium text-subt mb-1.5 flex items-center gap-1.5">Действие <Hint text="Можно выбрать несколько действий сразу. Наведи на иконку, чтобы узнать, что делает каждое." /></div>
@@ -895,8 +898,6 @@ function CreateForm({
                 {isComment && d.actLikeComment && <div className="text-[10.5px] text-subt mt-1.5">↳ Бот зайдёт к автору комментария и пролайкает его посты (если есть)</div>}
                 {isComment && d.actFollow && <div className="text-[10.5px] text-subt mt-1">↳ Подписаться на автора комментария</div>}
               </div>
-
-              <input value={d.name} onChange={(e) => set('name', e.target.value)} className="field py-2 text-[13px]" placeholder="Название кампании" />
 
               {/* ════ КОММЕНТАРИЙ ════ */}
               {isComment ? (

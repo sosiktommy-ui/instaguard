@@ -258,30 +258,33 @@ function Proxies() {
         )}
       </div>
 
-      {/* Таблица 1 — Пуловые */}
-      <div>
-        <div className="flex items-center gap-2 px-1 mb-2">
-          <span className="font-semibold text-[15px]">Пуловые</span>
-          <span className="text-[12px] text-subt">({pool.length})</span>
+      {/* Пуловые и Приватные — две колонки бок о бок */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+        {/* Колонка 1 — Пуловые */}
+        <div>
+          <div className="flex items-center gap-2 px-1 mb-2">
+            <span className="font-semibold text-[15px]">Пуловые</span>
+            <span className="text-[12px] text-subt">({pool.length})</span>
+          </div>
+          {pool.length === 0 ? (
+            <div className="card p-10 text-center text-[13px] text-subt">Пул пуст. Добавьте прокси через блок выше («В пул») — тогда при создании аккаунта появится режим «Авто».</div>
+          ) : (
+            <div className="space-y-3">{pool.map((p) => poolRow(p))}</div>
+          )}
         </div>
-        {pool.length === 0 ? (
-          <div className="card p-10 text-center text-[13px] text-subt">Пул пуст. Добавьте прокси через блок выше («В пул») — тогда при создании аккаунта появится режим «Авто».</div>
-        ) : (
-          <div className="grid sm:grid-cols-2 gap-3">{pool.map((p) => poolRow(p))}</div>
-        )}
-      </div>
 
-      {/* Таблица 2 — Приватные */}
-      <div>
-        <div className="flex items-center gap-2 px-1 mb-2">
-          <span className="font-semibold text-[15px]">Приватные</span>
-          <span className="text-[12px] text-subt">({individual.length})</span>
+        {/* Колонка 2 — Приватные */}
+        <div>
+          <div className="flex items-center gap-2 px-1 mb-2">
+            <span className="font-semibold text-[15px]">Приватные</span>
+            <span className="text-[12px] text-subt">({individual.length})</span>
+          </div>
+          {individual.length === 0 ? (
+            <div className="card p-10 text-center text-[13px] text-subt">Приватных прокси нет. Добавьте их через блок выше («Приватные») и привяжите аккаунт — или они появятся, когда при подключении аккаунта выберут «Уникальный».</div>
+          ) : (
+            <div className="space-y-3">{individual.map((p) => individualRow(p))}</div>
+          )}
         </div>
-        {individual.length === 0 ? (
-          <div className="card p-10 text-center text-[13px] text-subt">Приватных прокси нет. Добавьте их через блок выше («Приватные») и привяжите аккаунт — или они появятся, когда при подключении аккаунта выберут «Уникальный».</div>
-        ) : (
-          <div className="grid sm:grid-cols-2 gap-3">{individual.map((p) => individualRow(p))}</div>
-        )}
       </div>
 
       {/* Настройка «аккаунтов на прокси» — компактная, свёрнутая, внизу (дублирует «Настройки») */}
