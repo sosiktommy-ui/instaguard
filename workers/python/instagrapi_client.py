@@ -35,26 +35,54 @@ def _normalize_proxy(proxy: str | None) -> str | None:
     return f'http://{proxy}'
 
 def check_proxy(proxy: str | None = None) -> dict:
-    """Проверить прокси: вернуть исходящий IP, страну и провайдера (как их видит внешний мир).
-    Показывает, РАБОТАЕТ ли прокси и какой у него IP — чтобы понять, используется ли он при
-    входе и не дата-центровый/чёрносписочный ли это IP. Без proxy — вернёт IP самого сервера."""
+    """Проверить прокси: вернуть исходящий IP, страну, провайдера И вердикт по репутации
+    (датацентр / VPN / прокси / мобильный) — как это видит Instagram. Без proxy — IP сервера.
+
+    Основной сервис — ipapi.is (без ключа отдаёт флаги is_datacenter/is_vpn/is_proxy/is_mobile
+    + компанию/тип). Запрос идём ЧЕРЕЗ прокси без параметра — сервис видит именно исходящий IP
+    прокси и возвращает его репутацию за один вызов. Фолбэк — ipinfo/ip-api (только IP/ISP)."""
     import requests
     norm = _normalize_proxy(proxy)
     proxies = {"http": norm, "https": norm} if norm else None
-    # Несколько сервисов на случай, если один недоступен через прокси.
-    services = ["https://ipinfo.io/json", "http://ip-api.com/json"]
+
+    # 1) ipapi.is — IP + флаги репутации за один запрос через прокси
+    try:
+        r = requests.get("https://api.ipapi.is/", proxies=proxies, timeout=25)
+        j = r.json()
+        company = j.get("company") or {}
+        asn = j.get("asn") or {}
+        loc = j.get("location") or {}
+        isp = company.get("name") or asn.get("org") or asn.get("descr") or ""
+        res = {
+            "ok": True, "proxyUsed": bool(norm),
+            "ip": j.get("ip", ""),
+            "country": loc.get("country") or loc.get("country_code") or "",
+            "isp": isp,
+            "companyType": company.get("type") or "",
+            "datacenter": bool(j.get("is_datacenter")),
+            "vpn": bool(j.get("is_vpn")),
+            "proxy": bool(j.get("is_proxy")),
+            "mobile": bool(j.get("is_mobile")),
+        }
+        logger.info("check_proxy: ip=%s country=%s dc=%s vpn=%s mobile=%s isp=%s",
+                    res["ip"], res["country"], res["datacenter"], res["vpn"], res["mobile"], isp)
+        return res
+    except Exception as e:
+        logger.warning("check_proxy ipapi.is failed: %s", e)
+
+    # 2) Фолбэк: только IP/страна/ISP (без флагов репутации)
     last_err = None
-    for url in services:
+    for url in ["https://ipinfo.io/json", "http://ip-api.com/json"]:
         try:
             r = requests.get(url, proxies=proxies, timeout=20)
             j = r.json()
-            # ipinfo: {ip, city, region, country, org}; ip-api: {query, country, city, isp, org, as}
-            ip = j.get("ip") or j.get("query") or ""
-            country = j.get("country") or j.get("countryCode") or ""
-            city = j.get("city") or ""
-            isp = j.get("org") or j.get("isp") or j.get("as") or ""
-            logger.info("check_proxy: proxy_used=%s ip=%s country=%s isp=%s", bool(norm), ip, country, isp)
-            return {"ok": True, "proxyUsed": bool(norm), "ip": ip, "country": country, "city": city, "isp": isp}
+            return {
+                "ok": True, "proxyUsed": bool(norm),
+                "ip": j.get("ip") or j.get("query") or "",
+                "country": j.get("country") or j.get("countryCode") or "",
+                "isp": j.get("org") or j.get("isp") or j.get("as") or "",
+                "datacenter": None, "vpn": None, "proxy": None, "mobile": None,
+            }
         except Exception as e:
             last_err = e
             logger.warning("check_proxy via %s failed: %s", url, e)

@@ -17,6 +17,20 @@ interface AccRef { id: string; username: string; role: string; status: string }
 interface ProxyItem { id: string; url: string; kind: string; label: string | null; accountCount: number; accounts: AccRef[] }
 interface MainAccount { id: string; username: string; role: string; status: string; proxyId: string | null }
 
+// Результат «Проверить IP»: исходящий IP + флаги репутации от воркера (ipapi.is)
+type IpInfo = {
+  loading?: boolean; ip?: string; country?: string; isp?: string; error?: string
+  datacenter?: boolean | null; vpn?: boolean | null; proxy?: boolean | null; mobile?: boolean | null
+}
+
+// Вердикт по флагам: годится прокси для Instagram или нет
+function proxyVerdict(r: IpInfo): { text: string; cls: string } {
+  if (r.datacenter || r.vpn || r.proxy) return { text: '🔴 датацентр/VPN — Instagram забанит', cls: 'text-bad' }
+  if (r.mobile) return { text: '✅ мобильный — отлично', cls: 'text-ok' }
+  if (r.datacenter === false) return { text: '✅ резидентный — годится', cls: 'text-ok' }
+  return { text: 'ℹ репутация неизвестна — сверьте на ipqualityscore', cls: 'text-subt' }
+}
+
 const STATUS_DOT: Record<string, string> = { ACTIVE: 'bg-ok', PAUSED: 'bg-warn', BLOCKED: 'bg-bad', CHALLENGE: 'bg-bad' }
 const roleLabel = (r: string) => (r === 'HELPER' ? 'черновой' : 'основной')
 
@@ -35,7 +49,11 @@ function Proxies() {
   const [attachFor, setAttachFor] = useState<string | null>(null)  // id прокси, у которого открыт выбор аккаунта
   const [attachSel, setAttachSel] = useState('')                    // выбранный в пикере аккаунт
   const [newAcctProxy, setNewAcctProxy] = useState<string | null>(null)  // presetProxy для модалки нового аккаунта
-  const [ipCheck, setIpCheck] = useState<Record<string, { loading?: boolean; ip?: string; country?: string; isp?: string; error?: string }>>({})  // результат «Проверить IP» по id прокси
+  const [ipCheck, setIpCheck] = useState<Record<string, IpInfo>>({})  // результат «Проверить IP» по id прокси
+  const [bulkOpen, setBulkOpen] = useState(false)   // блок массовой проверки списка
+  const [bulkText, setBulkText] = useState('')
+  const [bulkRunning, setBulkRunning] = useState(false)
+  const [bulkRes, setBulkRes] = useState<Array<IpInfo & { src: string }>>([])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -97,13 +115,43 @@ function Proxies() {
       const r = await fetch('/api/proxies/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proxyId: p.id }) })
       const d = await r.json().catch(() => ({}))
       if (!r.ok || d.ok === false) setIpCheck((s) => ({ ...s, [p.id]: { error: d.error ?? 'прокси не отвечает' } }))
-      else setIpCheck((s) => ({ ...s, [p.id]: { ip: d.ip, country: d.country, isp: d.isp } }))
+      else setIpCheck((s) => ({ ...s, [p.id]: { ip: d.ip, country: d.country, isp: d.isp, datacenter: d.datacenter, vpn: d.vpn, proxy: d.proxy, mobile: d.mobile } }))
     } catch { setIpCheck((s) => ({ ...s, [p.id]: { error: 'ошибка сети' } })) }
   }
+
+  // Массовая проверка вставленного списка прокси (по строке на прокси), с ограничением параллельности.
+  const runBulk = async () => {
+    const lines = bulkText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    if (!lines.length) return
+    setBulkRunning(true)
+    setBulkRes(lines.map((l) => ({ src: l, loading: true })))
+    let idx = 0
+    const one = async () => {
+      while (idx < lines.length) {
+        const i = idx++
+        try {
+          const r = await fetch('/api/proxies/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: lines[i] }) })
+          const d = await r.json().catch(() => ({}))
+          const val: IpInfo & { src: string } = (!r.ok || d.ok === false)
+            ? { src: lines[i], error: d.error ?? 'не отвечает' }
+            : { src: lines[i], ip: d.ip, country: d.country, isp: d.isp, datacenter: d.datacenter, vpn: d.vpn, proxy: d.proxy, mobile: d.mobile }
+          setBulkRes((prev) => prev.map((x, j) => (j === i ? val : x)))
+        } catch {
+          setBulkRes((prev) => prev.map((x, j) => (j === i ? { src: lines[i], error: 'ошибка сети' } : x)))
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(4, lines.length) }, one))
+    setBulkRunning(false)
+  }
+
+  // Короткий хост из строки прокси (для подписи в таблице)
+  const proxyHost = (s: string) => (s.split(/[:@]/)[0] || s).slice(0, 24)
 
   // Блок «Проверить IP» — общий для пуловых и приватных карточек
   const ipCheckBlock = (p: ProxyItem) => {
     const c = ipCheck[p.id]
+    const v = c && (c.ip || c.datacenter != null) ? proxyVerdict(c) : null
     return (
       <div className="mt-2.5 pt-2.5 border-t border-line/40 flex items-center gap-2 flex-wrap">
         <button onClick={() => runCheck(p)} disabled={c?.loading}
@@ -115,7 +163,8 @@ function Proxies() {
           <span className="text-[11px] inline-flex items-center gap-1.5 flex-wrap">
             <span className="font-mono text-ink">{c.ip}</span>
             {c.country && <span className="px-1.5 py-0.5 rounded-md bg-canvas border border-line/50 text-subt">{c.country}</span>}
-            {c.isp && <span className="text-subt truncate max-w-[220px]" title={c.isp}>{c.isp}</span>}
+            {c.isp && <span className="text-subt truncate max-w-[200px]" title={c.isp}>{c.isp}</span>}
+            {v && <span className={cn('font-medium', v.cls)}>{v.text}</span>}
           </span>
         )}
       </div>
@@ -291,6 +340,66 @@ function Proxies() {
             <div className="flex justify-end mt-3">
               <Button onClick={addProxy} disabled={!addVal.trim()}><Plus className="w-4 h-4" /> {addKind === 'pool' ? 'Добавить в пул' : 'Добавить приватные'}</Button>
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* Массовая проверка списка прокси (перед добавлением) */}
+      <div className="card overflow-hidden">
+        <button onClick={() => setBulkOpen((v) => !v)} className="w-full flex items-center justify-between px-5 py-4 hover:bg-black/[0.02] transition-colors">
+          <div className="flex items-center gap-3 text-left">
+            <div className="w-8 h-8 rounded-xl bg-ok/10 flex items-center justify-center shrink-0"><RefreshCw className="w-4 h-4 text-ok" /></div>
+            <div>
+              <span className="font-semibold text-[15px] block">Проверить список прокси</span>
+              <span className="text-[12px] text-subt">Вставь список — покажу IP, страну и вердикт (датацентр/VPN/резидент/мобильный) по каждому</span>
+            </div>
+          </div>
+          {bulkOpen ? <ChevronUp className="w-4 h-4 text-subt shrink-0" /> : <ChevronDown className="w-4 h-4 text-brand shrink-0" />}
+        </button>
+        {bulkOpen && (
+          <div className="border-t border-black/[0.05] p-5 space-y-3">
+            <div className="text-[12px] text-subt">По одному прокси на строку. Форматы: <code className="font-mono bg-black/5 px-1 rounded">host:port:user:pass</code> или <code className="font-mono bg-black/5 px-1 rounded">user:pass@host:port</code>. Прокси не сохраняются — только проверка.</div>
+            <textarea value={bulkText} onChange={(e) => setBulkText(e.target.value)} rows={5}
+              className="field font-mono text-[12px] resize-none leading-relaxed" placeholder={'77.47.240.82:50101:user:pass\n161.77.66.213:50101:user:pass'} />
+            <div className="flex justify-end">
+              <Button onClick={runBulk} disabled={bulkRunning || !bulkText.trim()}>
+                {bulkRunning
+                  ? <span className="inline-flex items-center gap-2"><RefreshCw className="w-4 h-4 animate-spin" /> Проверяю…</span>
+                  : <><RefreshCw className="w-4 h-4" /> Проверить</>}
+              </Button>
+            </div>
+            {bulkRes.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="text-[12px] text-subt">Годных (не датацентр/VPN): <span className="font-semibold text-ok tabular-nums">{bulkRes.filter((r) => !r.error && !(r.datacenter || r.vpn || r.proxy) && (r.ip || r.datacenter != null)).length}</span> из {bulkRes.length}</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[11.5px]">
+                    <thead className="text-subt text-left">
+                      <tr className="border-b border-line/50">
+                        <th className="py-1.5 pr-3 font-medium">Прокси</th>
+                        <th className="py-1.5 pr-3 font-medium">IP</th>
+                        <th className="py-1.5 pr-3 font-medium">Страна</th>
+                        <th className="py-1.5 pr-3 font-medium">Провайдер</th>
+                        <th className="py-1.5 font-medium">Вердикт</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bulkRes.map((r, i) => {
+                        const v = !r.error && (r.ip || r.datacenter != null) ? proxyVerdict(r) : null
+                        return (
+                          <tr key={i} className="border-b border-line/30">
+                            <td className="py-1.5 pr-3 font-mono text-subt">{proxyHost(r.src)}</td>
+                            <td className="py-1.5 pr-3 font-mono text-ink">{r.loading ? '…' : (r.ip || '—')}</td>
+                            <td className="py-1.5 pr-3">{r.country || '—'}</td>
+                            <td className="py-1.5 pr-3 text-subt truncate max-w-[180px]" title={r.isp}>{r.isp || '—'}</td>
+                            <td className={cn('py-1.5 font-medium', v?.cls)}>{r.loading ? 'проверяю…' : r.error ? `✕ ${r.error}` : v?.text}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -93,9 +93,10 @@ export async function loginByCookies(cookies: object, proxy?: string) {
 }
 
 export async function checkProxy(proxy?: string) {
-  return workerFetch<{ ok: boolean; proxyUsed: boolean; ip?: string; country?: string; city?: string; isp?: string; error?: string }>(
-    '/check-proxy', { proxy }
-  )
+  return workerFetch<{
+    ok: boolean; proxyUsed: boolean; ip?: string; country?: string; isp?: string; companyType?: string
+    datacenter?: boolean | null; vpn?: boolean | null; proxy?: boolean | null; mobile?: boolean | null; error?: string
+  }>('/check-proxy', { proxy })
 }
 
 export async function getAccountInfo(session: object, proxy?: string) {
