@@ -134,12 +134,30 @@ def login_cookies(payload: CookiePayload, x_worker_secret: str = Header(...)):
         err_type = type(e).__name__
         err = str(e)
         logging.warning("Cookie login failed [%s]: %s", err_type, err)
-        if err_type in ("LoginRequired", "ChallengeRequired"):
-            detail = "Куки недействительны или истекли — экспортируйте свежие куки из браузера."
+        if err_type == "LoginRequired":
+            detail = ("Сессия недействительна (login_required) — Instagram разлогинил её. "
+                      "Причины: куки протухли/аккаунт разлогинен продавцом, ЛИБО вход идёт с "
+                      "флагнутого IP (дата-центр). Возьмите свежую сессию и/или чистый резидентный "
+                      "прокси в стране аккаунта.")
+        elif err_type in ("ChallengeRequired", "ChallengeUnknownStep", "SelectContactPointRecoveryForm"):
+            detail = ("Instagram требует подтверждение (checkpoint/challenge) — обычно из-за входа "
+                      "с нового/подозрительного IP. Нужен чистый резидентный/мобильный прокси в стране аккаунта.")
+        elif err_type == "FeedbackRequired":
+            detail = "Аккаунт временно ограничен Instagram (feedback_required)."
         elif err_type == "SentryBlock":
-            detail = "Instagram заблокировал вход с этого IP. Попробуйте через прокси."
+            detail = "Instagram заблокировал вход с этого IP (sentry_block). Нужен чистый прокси."
+        elif err_type in ("ProxyError", "ConnectionError", "ConnectError", "SSLError", "ReadTimeout", "Timeout", "ClientConnectionError"):
+            detail = f"Не удалось подключиться через прокси ({err_type}) — прокси мёртв/неверный формат: {err}"
         else:
             detail = f"{err_type}: {err}"
+        # Прикладываем сырой ответ Instagram (что он реально вернул) — настоящая причина.
+        snap = getattr(e, 'ig_snapshot', None)
+        if snap:
+            import json as _json
+            try:
+                detail += "\n\n📋 Ответ Instagram: " + _json.dumps(snap, ensure_ascii=False)[:700]
+            except Exception:
+                pass
         raise HTTPException(status_code=400, detail=detail)
 
 

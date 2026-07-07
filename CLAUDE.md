@@ -124,6 +124,8 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 - **Воркер (⚠️ редеплой Python):**
   - `login_by_cookies` больше НЕ использует `login_by_sessionid`/`user_short_gql`. Проверка сессии и получение username — через приватный `account_info()` (`accounts/current_user/`, мобильный API, без GraphQL). `get_timeline_feed()` оставлен как необязательный «прогрев» (его падение не критично).
   - В `authorization_data` добавлен `should_use_header_over_cookies: True` — instagrapi аутентифицируется валидным Bearer-заголовком из токена, а не только кукой (как штатный `login_by_sessionid`). Вероятная причина падения `get_timeline_feed` — раньше флага не было.
+  - **Диагностика:** вход по кукам теперь прикладывает к ошибке **сырой ответ Instagram** (`cl.last_json`) — как это уже делал вход по паролю. В `/login-cookies` разобраны `LoginRequired`/`Challenge`/`FeedbackRequired`/`SentryBlock`/прокси-ошибки с понятным текстом. Теперь по ошибке видно НАСТОЯЩУЮ причину (сессия мертва / чекпоинт / флагнутый IP / дохлый прокси), а не общий текст.
+- ⚠️ **Главная гипотеза при «падает и по кукам, и по логину»:** вход идёт с **дата-центрового IP** (сервер Railway без прокси, `allowNoProxy=true`, или дата-центровый прокси). Сессии созданы на чистых мобильных IP (id_ID/pt_BR/en_PH), а вход из US-дата-центра → Instagram отдаёт `login_required`/`checkpoint`. Лечится только чистым **резидентным/мобильным прокси в стране аккаунта**, не кодом.
 
 ### 2026-07-06 (6)
 

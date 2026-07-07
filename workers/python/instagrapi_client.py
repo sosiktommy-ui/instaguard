@@ -417,12 +417,33 @@ def submit_challenge_code(username: str, code: str) -> dict:
         raise Exception(f"Ошибка подтверждения: {e}")
 
 
+def _verify_and_username(cl: Client) -> str:
+    """Проверить сессию приватным account_info() (accounts/current_user/, без GraphQL)
+    и вернуть username. При ошибке прикрепляем сырой ответ Instagram (cl.last_json) —
+    это «настоящая причина»: login_required (сессия мертва), checkpoint/challenge_required
+    (чекпоинт), feedback_required (ограничение), либо сетевой/прокси-сбой (last_json пуст)."""
+    # Человеко-подобный прогрев ленты — не критично, если не удался.
+    try:
+        cl.get_timeline_feed()
+    except Exception as e:
+        logger.info("get_timeline_feed прогрев не удался (не критично): %s", e)
+    try:
+        info = cl.account_info()
+        return info.username
+    except Exception as e:
+        try:
+            e.ig_snapshot = cl.last_json
+        except Exception:
+            pass
+        raise
+
+
 def login_by_cookies(cookies: dict, proxy: str | None = None) -> tuple[dict, str]:
     """Вход по кукам/сессии. Поддерживает:
       • pipe-формат мобильной Android-сессии (парсится в полный settings);
       • обычный словарь куки (sessionid, csrftoken, …) или один sessionid.
-    Для мобильной сессии при неудаче — запасной вход по sessionid (login_by_sessionid),
-    где instagrapi сам поднимает совместимое устройство."""
+    Проверка/username — через приватный account_info() (НЕ через login_by_sessionid/
+    публичный GraphQL: его query_hash Instagram задеприкейтил → 400 «invalid request»)."""
     norm_proxy = _normalize_proxy(proxy)
 
     def _new_client() -> Client:
@@ -437,27 +458,12 @@ def login_by_cookies(cookies: dict, proxy: str | None = None) -> tuple[dict, str
         settings = _parse_mobile_session(cookies['sessionid'])
         cl = _new_client()
         cl.set_settings(settings)
-        # Прогрев ленты «по-человечески» — не критично, если не удался
-        # (например, флагнутый feed/timeline); настоящую проверку делает account_info.
-        try:
-            cl.get_timeline_feed()
-        except Exception as e:
-            logger.info("get_timeline_feed прогрев не удался (не критично): %s", e)
-        # Проверка сессии и username — приватным accounts/current_user.
-        # НЕ используем login_by_sessionid / user_short_gql: их публичный GraphQL
-        # (query_hash) Instagram задеприкейтил → 400 «invalid request».
-        info = cl.account_info()
-        return cl.get_settings(), info.username
+        return cl.get_settings(), _verify_and_username(cl)
 
     # Обычные куки (словарь sessionid/csrftoken/… либо один sessionid)
     cl = _new_client()
     cl.private.cookies.update(cookies)
-    try:
-        cl.get_timeline_feed()
-    except Exception as e:
-        logger.info("get_timeline_feed прогрев не удался (не критично): %s", e)
-    info = cl.account_info()
-    return cl.get_settings(), info.username
+    return cl.get_settings(), _verify_and_username(cl)
 
 
 def get_account_info(session_data: dict, proxy: str | None = None) -> dict:
