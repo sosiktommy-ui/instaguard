@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { loginByCredentials, loginByCookies } from '@/lib/instagram/client'
 import { getCurrentUser } from '@/lib/auth'
 import { normalizeCookies } from '@/lib/cookies'
+import { pickPoolProxy } from '@/lib/proxyPool'
 
 export async function POST(req: NextRequest) {
   try {
@@ -40,22 +41,20 @@ export async function POST(req: NextRequest) {
     const needPool = proxyMode === 'auto' || (!manualProxy && !allowNoProxy)
 
     if (needPool) {
-      const pool = await prisma.proxy.findMany({
-        where: { userId: user.id, kind: 'pool' },
-        select: { id: true, url: true, _count: { select: { accounts: true } } },
-        orderBy: { createdAt: 'asc' },
-      })
-      const free = pool.filter((p) => p._count.accounts < cap).sort((a, b) => a._count.accounts - b._count.accounts)[0]
-      if (free) {
-        proxyUrl = free.url
-        proxyId = free.id
+      // Подбор: пропускаем мёртвые прокси, предпочитаем «чистые» (см. lib/proxyPool).
+      const pick = await pickPoolProxy(user.id, cap)
+      if (pick.ok) {
+        proxyUrl = pick.url
+        proxyId = pick.id
       } else if (proxyMode === 'auto' || !allowNoProxy) {
-        // Прокси обязателен, но пул пуст → НЕ входим без прокси (иначе риск мгновенного бана).
+        // Прокси обязателен, но нет пригодного → НЕ входим без прокси (иначе риск мгновенного бана).
         return NextResponse.json({
-          error: 'В пуле нет свободных прокси. Добавьте прокси на вкладке «Прокси», укажите уникальный вручную, либо включите «Работать без прокси» в Настройках.',
+          error: pick.reason === 'all-dead'
+            ? 'Все свободные прокси в пуле не отвечают. Проверьте их на вкладке «Прокси» → «Проверить IP».'
+            : 'В пуле нет свободных прокси. Добавьте прокси на вкладке «Прокси», укажите уникальный вручную, либо включите «Работать без прокси» в Настройках.',
         }, { status: 400 })
       }
-      // allowNoProxy=true и пул пуст, режим не «авто» → продолжаем без прокси (осознанно разрешено)
+      // allowNoProxy=true и пригодного прокси нет → продолжаем без прокси (осознанно разрешено)
     } else if (manualProxy) {
       // Уникальный (ручной) — заводим/переиспользуем индивидуальный прокси
       const found = await prisma.proxy.findFirst({ where: { userId: user.id, url: manualProxy } })

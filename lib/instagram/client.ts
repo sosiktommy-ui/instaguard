@@ -92,6 +92,12 @@ export async function loginByCookies(cookies: object, proxy?: string) {
   return workerFetch<{ sessionData: object; username: string }>('/login-cookies', { cookies, proxy })
 }
 
+export interface ProxyCheck { url: string; ok: boolean; ip: string; country: string; datacenter: boolean | null; vpn: boolean | null }
+/** Выбрать лучший рабочий прокси из кандидатов (мёртвые пропускаются, чистые в приоритете). */
+export async function pickProxy(candidates: string[]) {
+  return workerFetch<{ chosen: string | null; flagged: boolean; checked: ProxyCheck[] }>('/pick-proxy', { candidates })
+}
+
 export async function checkProxy(proxy?: string) {
   return workerFetch<{
     ok: boolean; proxyUsed: boolean; scheme?: string; ip?: string; country?: string; isp?: string; companyType?: string

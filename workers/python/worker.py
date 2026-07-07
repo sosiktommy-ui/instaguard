@@ -54,6 +54,10 @@ class CheckProxyPayload(BaseModel):
     proxy: str | None = None
 
 
+class PickProxyPayload(BaseModel):
+    candidates: list[str] = []   # прокси-кандидаты (в порядке предпочтения); вернём лучший рабочий
+
+
 class ActionPayload(BaseModel):
     sessionData: dict
     userId: str
@@ -169,6 +173,12 @@ def login_cookies(payload: CookiePayload, x_worker_secret: str = Header(...)):
 def check_proxy(payload: CheckProxyPayload, x_worker_secret: str = Header(...)):
     _check_secret(x_worker_secret)
     return ig.check_proxy(payload.proxy)
+
+
+@app.post("/pick-proxy")
+def pick_proxy(payload: PickProxyPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    return ig.pick_best_proxy(payload.candidates)
 
 
 @app.post("/account-info")

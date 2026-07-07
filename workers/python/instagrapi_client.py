@@ -39,6 +39,11 @@ def _normalize_proxy(proxy: str | None) -> str | None:
 # чтобы не пробовать протокол заново на каждом действии поллинга.
 _proxy_scheme_cache: dict[str, str] = {}
 
+# Кеш репутации прокси (успешные результаты check_proxy) — чтобы не дёргать чекер
+# на каждом подключении аккаунта при массовом импорте.
+_proxy_rep_cache: dict[str, dict] = {}
+_PROXY_REP_TTL = 1800.0  # сек — сколько доверяем закешированной проверке прокси (30 мин)
+
 
 def _resolve_proxy_scheme(proxy: str | None) -> str | None:
     """Определить РАБОЧУЮ схему прокси (http / socks5 / socks4) пробным подключением и
@@ -73,7 +78,7 @@ def _resolve_proxy_scheme(proxy: str | None) -> str | None:
     return base
 
 
-def check_proxy(proxy: str | None = None) -> dict:
+def _check_proxy_uncached(proxy: str | None = None) -> dict:
     """Проверить прокси: вернуть исходящий IP, страну, провайдера И вердикт по репутации
     (датацентр / VPN / прокси / мобильный) — как это видит Instagram. Без proxy — IP сервера.
 
@@ -127,6 +132,48 @@ def check_proxy(proxy: str | None = None) -> dict:
             last_err = e
             logger.warning("check_proxy via %s failed: %s", url, e)
     return {"ok": False, "proxyUsed": bool(norm), "scheme": scheme, "error": f"{type(last_err).__name__}: {last_err}"}
+
+
+def check_proxy(proxy: str | None = None, use_cache: bool = False) -> dict:
+    """Обёртка с кешем поверх _check_proxy_uncached. use_cache=True — берём недавний
+    успешный результат из _proxy_rep_cache (для подбора прокси при подключении/импорте,
+    чтобы не дёргать чекер на каждый аккаунт). «Проверить IP» вызывает без кеша — всегда свежо."""
+    norm = _resolve_proxy_scheme(proxy)
+    key = norm or 'direct'
+    if use_cache:
+        c = _proxy_rep_cache.get(key)
+        if c and (time.time() - c.get('_ts', 0)) < _PROXY_REP_TTL:
+            return {k: v for k, v in c.items() if k != '_ts'}
+    res = _check_proxy_uncached(proxy)
+    if use_cache and res.get('ok'):
+        _proxy_rep_cache[key] = {**res, '_ts': time.time()}
+    return res
+
+
+def pick_best_proxy(candidates: list[str]) -> dict:
+    """Из списка прокси-кандидатов выбрать РАБОЧИЙ, предпочитая «чистый» по репутации.
+    Мёртвые (не коннектятся) пропускаем. Флаг datacenter/vpn от чекеров НЕнадёжен
+    (ISP-прокси часто ложно метятся как DC), поэтому это лишь мягкий приоритет: если
+    чистых нет — берём рабочий флагнутый (flagged=True). chosen=None — все мертвы."""
+    alive_any: str | None = None
+    checked: list[dict] = []
+    for url in candidates:
+        rep = check_proxy(url, use_cache=True)
+        checked.append({
+            "url": url, "ok": bool(rep.get("ok")), "ip": rep.get("ip", ""),
+            "country": rep.get("country", ""),
+            "datacenter": rep.get("datacenter"), "vpn": rep.get("vpn"),
+        })
+        if not rep.get("ok"):
+            continue  # мёртвый прокси — пропускаем
+        flagged = bool(rep.get("datacenter") or rep.get("vpn") or rep.get("proxy"))
+        if not flagged:
+            return {"chosen": url, "flagged": False, "checked": checked}  # живой и чистый — лучший
+        if alive_any is None:
+            alive_any = url
+    if alive_any:
+        return {"chosen": alive_any, "flagged": True, "checked": checked}
+    return {"chosen": None, "flagged": False, "checked": checked}
 
 
 # In-memory store for pending challenge sessions: username → {settings, api_path, proxy}

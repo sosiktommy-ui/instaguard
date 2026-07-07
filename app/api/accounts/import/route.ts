@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { loginByCookies, loginByCredentials } from '@/lib/instagram/client'
 import { getCurrentUser } from '@/lib/auth'
 import { normalizeCookies } from '@/lib/cookies'
+import { pickPoolProxy } from '@/lib/proxyPool'
 
 /**
  * Массовый импорт аккаунтов. Одна строка — один аккаунт. Два режима (mode):
@@ -18,16 +19,13 @@ interface RowResult { line: number; ok: boolean; username?: string; reason?: str
 // Похоже ли на 2FA-ключ (base32, ≥16 символов, без @) — для авто-распознавания в строке.
 const looksLikeTotp = (s: string) => /^[A-Za-z2-7]{16,}$/.test(s.replace(/[\s-]/g, ''))
 
-// Резолвим прокси ДО входа — как в одиночном добавлении. Возвращает { url, id } или причину отказа.
+// Резолвим прокси ДО входа — пропуская мёртвые, предпочитая рабочие (см. lib/proxyPool).
 async function resolveProxy(userId: string, allowNoProxy: boolean, cap: number): Promise<{ url: string | null; id: string | null; error?: string }> {
-  const pool = await prisma.proxy.findMany({
-    where: { userId, kind: 'pool' },
-    select: { id: true, url: true, _count: { select: { accounts: true } } },
-    orderBy: { createdAt: 'asc' },
-  })
-  const free = pool.filter((p) => p._count.accounts < cap).sort((a, b) => a._count.accounts - b._count.accounts)[0]
-  if (free) return { url: free.url, id: free.id }
-  if (!allowNoProxy) return { url: null, id: null, error: 'нет свободных прокси в пуле' }
+  const pick = await pickPoolProxy(userId, cap)
+  if (pick.ok) return { url: pick.url, id: pick.id }
+  if (!allowNoProxy) {
+    return { url: null, id: null, error: pick.reason === 'all-dead' ? 'все свободные прокси в пуле не отвечают' : 'нет свободных прокси в пуле' }
+  }
   return { url: null, id: null }   // работа без прокси разрешена
 }
 
