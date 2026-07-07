@@ -107,6 +107,13 @@ export async function POST(req: NextRequest) {
           let clean = ''
 
           if (importMode === 'password') {
+            // Защита от перепутанного режима: куки-строку (мобильная сессия с Bearer/UA)
+            // нельзя парсить как «логин пароль» — иначе «логин:пароль:2fa» уходит в username,
+            // а UA — в password, и Instagram отвечает «can't find account» (видно в логах).
+            if (/Authorization=Bearer/i.test(line) || /\|\s*Instagram\s[\d.]+\s+Android/i.test(line)) {
+              results.push({ line: i + 1, ok: false, reason: 'Это строка КУКИ (мобильная сессия), а не логин/пароль — переключите режим на «🍪 Куки».' })
+              break
+            }
             // «логин пароль почта почта-пароль [2FA-ключ]» (разделитель — пробел или |)
             const parts = (line.includes('|') ? line.split('|') : line.split(/\s+/)).map((s) => s.trim()).filter(Boolean)
             const login = parts[0]

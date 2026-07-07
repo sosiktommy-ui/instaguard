@@ -23,12 +23,19 @@ export function ImportCookiesModal({ onClose, onDone }: { onClose: () => void; o
   const [error, setError]     = useState('')
   const [res, setRes]         = useState<{ imported: number; skipped: number; results: RowResult[] } | null>(null)
 
+  const lineCount = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).length
+
   const run = async () => {
     setLoading(true); setError(''); setRes(null)
+    // Клиентский таймаут — чтобы кнопка не «крутилась бесконечно», если пачка большая
+    // и вход к Instagram затянулся дольше, чем держит шлюз. Каждый вход — 15–40с.
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 90_000)
     try {
       const r = await fetch('/api/accounts/import', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, mode, role }),
+        signal: controller.signal,
       })
       // Читаем как текст: ответ может быть не-JSON (например, gateway-таймаут 502/504),
       // тогда покажем статус и тело, а не глухое «Ошибка импорта».
@@ -46,8 +53,13 @@ export function ImportCookiesModal({ onClose, onDone }: { onClose: () => void; o
       setRes(d)
       if (d.imported > 0) onDone(d.imported)
     } catch (e: any) {
-      setError(`Ошибка сети — ${e?.message ?? 'проверьте подключение'}`)
+      if (e?.name === 'AbortError') {
+        setError('Импорт идёт дольше 90с и был прерван. Импортируйте по 1 строке за раз — каждый вход к Instagram занимает 15–40с (проверка прокси + вход).')
+      } else {
+        setError(`Ошибка сети — ${e?.message ?? 'проверьте подключение'}`)
+      }
     } finally {
+      clearTimeout(timer)
       setLoading(false)
     }
   }
@@ -116,6 +128,11 @@ export function ImportCookiesModal({ onClose, onDone }: { onClose: () => void; o
             : 'login|pass|Mozilla/5.0 …|[{"name":"sessionid","value":"…"}]\nsessionid=abc123…; ds_user_id=1; csrftoken=…'}
         />
 
+        {lineCount > 2 && !res && (
+          <p className="text-[11.5px] text-warn bg-warn/10 rounded-xl px-3 py-2 mt-3 leading-snug">
+            ⚠️ {lineCount} строк за раз. Каждый вход к Instagram — 15–40с, большая пачка может упереться в таймаут шлюза. Надёжнее импортировать по 1–2 строки.
+          </p>
+        )}
         {error && <p className="text-bad text-[13px] text-center mt-3">{error}</p>}
 
         {res && (
