@@ -5,6 +5,15 @@ import { getCurrentUser } from '@/lib/auth'
 import { normalizeCookies } from '@/lib/cookies'
 import { pickPoolProxy } from '@/lib/proxyPool'
 
+// host:port прокси без логина/пароля — чтобы в ошибке было видно, ЧЕРЕЗ КАКОЙ IP шёл вход
+// (сверить с вердиктом «Проверить IP»: датацентр этот адрес или резидентный).
+function proxyHostLabel(url: string | null): string {
+  if (!url) return 'без прокси (IP сервера)'
+  let s = url.replace(/^\w+:\/\//, '')
+  if (s.includes('@')) s = s.split('@').pop() as string
+  return s.split(':').slice(0, 2).join(':')
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { username, password, proxy, authMethod, cookies, role, sectionId, proxyMode, totpSecret } = await req.json()
@@ -78,7 +87,8 @@ export async function POST(req: NextRequest) {
         sessionData = result.sessionData
         clean = result.username
       } catch (e: any) {
-        return NextResponse.json({ error: e.message ?? 'Ошибка авторизации через куки' }, { status: 400 })
+        const msg = `${e.message ?? 'Ошибка авторизации через куки'}\n\n🌐 Вход шёл через прокси: ${proxyHostLabel(proxyUrl)}`
+        return NextResponse.json({ error: msg }, { status: 400 })
       }
     } else {
       if (!username || !password) {
@@ -97,7 +107,8 @@ export async function POST(req: NextRequest) {
         }
         sessionData = result.sessionData
       } catch (e: any) {
-        return NextResponse.json({ error: e.message ?? 'Неверный логин или пароль' }, { status: 400 })
+        const msg = `${e.message ?? 'Неверный логин или пароль'}\n\n🌐 Вход шёл через прокси: ${proxyHostLabel(proxyUrl)}`
+        return NextResponse.json({ error: msg }, { status: 400 })
       }
     }
 
