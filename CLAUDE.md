@@ -116,6 +116,18 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-07 (15)
+
+#### fix(прокси): хорошие прокси ошибочно метились «бан Instagram» на ошибке аккаунта
+
+Пользователь купил чистые резидентные/мобильные прокси (Poland, Netia/Multimedia), а они при входе помечались «🚫 бан Instagram». Причина — баг в `isInstagramBlacklist` (`lib/proxyPool.ts`): регэксп ловил `UserInvalidCredentials` — а это **общий** `exception_name` Instagram и для «**can't find account**» (аккаунт не найден, `invalid_user`), и для неверного пароля. Ответ «We can't find an account with rudywu19» содержит `UserInvalidCredentials` → код навсегда ставил свежему прокси `igBlocked:true` (ошибка АККАУНТА вешалась на ПРОКСИ), и снять метку было нечем.
+
+- **`lib/proxyPool.ts`:** `isInstagramBlacklist` сузил до реального IP-сигнала (`change your IP` / `blacklist` / `blocklist` / `чёрном списке`), убрал `UserInvalidCredentials`. Новый `isAccountNotFound` (`can't find account` / `invalid_user` / `switch_to_signup_flow`).
+- **`app/api/accounts/auth/route.ts`:** на «аккаунт не найден» прокси НЕ метится + понятное сообщение (проверьте, жив ли `instagram.com/<username>` в браузере; прекратите перебор). Пометка выжженным — только на реальный IP-бан.
+- **`app/api/proxies/check/route.ts`:** ручная перепроверка живого прокси снимает `igBlocked` (реабилитация ошибочно помеченных — «второй шанс»).
+
+⚠️ Это чинит ЛОЖНУЮ пометку, но НЕ сам вход. По логам: тот же аккаунт на одном прокси даёт «can't find account», на другом «change your IP» — противоречиво = **анти-бот-заглушки Instagram**, не буквальная правда. Реальные причины провала входа тех аккаунтов: (1) **гео-мисматч** — прокси Польша, аккаунты азиатские (id_ID); (2) аккаунты, вероятно, **отключены/выжжены перебором** (признак: «Sign up»/«Forgotten password»); (3) в пуле ещё остались старые датацентр-прокси `91.149.x` — их надо удалить. Проверено: `tsc --noEmit` чисто.
+
 ### 2026-07-07 (14)
 
 #### feat(логин): повтор кода + выбор почта/SMS + интерактивный 2FA + капча 2captcha — вход «до идеала»

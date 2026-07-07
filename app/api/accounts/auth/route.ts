@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { loginByCredentials, loginByCookies } from '@/lib/instagram/client'
 import { getCurrentUser } from '@/lib/auth'
 import { normalizeCookies } from '@/lib/cookies'
-import { pickPoolProxy, isInstagramBlacklist, markProxyBlocked } from '@/lib/proxyPool'
+import { pickPoolProxy, isInstagramBlacklist, isAccountNotFound, markProxyBlocked } from '@/lib/proxyPool'
 import { persistInstagramAccount } from '@/lib/accountPersist'
 
 // host:port прокси без логина/пароля — чтобы в ошибке было видно, ЧЕРЕЗ КАКОЙ IP шёл вход
@@ -127,10 +127,14 @@ export async function POST(req: NextRequest) {
         sessionData = result.sessionData
       } catch (e: any) {
         const raw = String(e?.message ?? 'Неверный логин или пароль')
-        const burned = isInstagramBlacklist(raw)
-        if (burned && proxyId) await markProxyBlocked(proxyId)   // IP выжжен Instagram — подбор его больше не даст
-        const hint = burned
-          ? '\n\n♻️ Этот IP помечен как выжженный Instagram и больше не будет предлагаться. Нажмите «Авторизоваться» ещё раз — подберётся ДРУГОЙ IP. Если так по всем прокси — они выжжены перебором; нужен свежий мобильный прокси или вход по «Куки».'
+        const notFound = isAccountNotFound(raw)
+        // Прокси метим выжженным ТОЛЬКО на реальный IP-бан, и НИКОГДА на ошибку аккаунта.
+        const burned = !notFound && isInstagramBlacklist(raw)
+        if (burned && proxyId) await markProxyBlocked(proxyId)
+        const hint = notFound
+          ? `\n\n⚠️ Instagram не находит аккаунт @${clean} — ПРОКСИ ТУТ НИ ПРИ ЧЁМ (его не помечаем). Обычно это значит: аккаунт отключён/удалён/переименован, ЛИБО Instagram временно так отвечает на анти-бот. Проверьте: откройте instagram.com/${clean} в браузере — если «страница недоступна», аккаунт мёртв и войти нельзя ничем. Прекратите перебор входа — он ускоряет блокировку.`
+          : burned
+          ? '\n\n♻️ Этот IP помечен как выжженный Instagram и больше не будет предлагаться. Нажмите «Авторизоваться» ещё раз — подберётся ДРУГОЙ IP. Если так по ВСЕМ прокси, а аккаунт точно живой — прокси не в стране аккаунта (гео) или выжжены перебором; попробуйте вход по «Куки».'
           : ''
         const msg = `${raw}\n\n🌐 Вход шёл через прокси: ${proxyHostLabel(proxyUrl)}${hint}`
         return NextResponse.json({ error: msg }, { status: 400 })

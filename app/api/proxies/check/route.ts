@@ -39,6 +39,9 @@ export async function POST(req: NextRequest) {
               status: 'alive', lastCheckedAt: new Date(),
               ip: res.ip ?? null, country: res.country ?? null, isp: res.isp ?? null, scheme: res.scheme ?? null,
               datacenter: res.datacenter ?? null, vpn: res.vpn ?? null, mobile: res.mobile ?? null, flagged,
+              // Ручная перепроверка = «дать прокси второй шанс»: снимаем метку выжженного
+              // Instagram (её могли поставить ошибочно на ошибке аккаунта, а не IP).
+              igBlocked: false,
             }
           : { status: 'dead', lastCheckedAt: new Date(), flagged: null },
       }).catch(() => null)

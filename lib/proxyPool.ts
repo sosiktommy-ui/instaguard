@@ -22,10 +22,18 @@ const MAX_CANDIDATES = 30
 
 type Cand = { id: string; url: string; status: string | null; flagged: boolean | null; igBlocked: boolean | null; load: number }
 
-// «Instagram выжег этот IP»: ответ входа содержит blacklist / UserInvalidCredentials /
-// «change your IP». Сигнал сильнее репутации ipapi.is (резидентный по ISP, но забанен IG).
+// «Instagram выжег этот IP»: ТОЛЬКО явный сигнал про IP («change your IP … blacklist»).
+// НЕ ловим UserInvalidCredentials — это общий exception_name Instagram и для «аккаунт не
+// найден», и для неверного пароля. Раньше по нему ошибочно метились как «выжженные» ХОРОШИЕ
+// свежие прокси на ошибке уровня аккаунта (баг: ошибка аккаунта ≠ бан IP).
 export function isInstagramBlacklist(msg: string): boolean {
-  return /чёрном списке|blacklist|blocklist|change your ip|UserInvalidCredentials/i.test(msg || '')
+  return /чёрном списке|blacklist|blocklist|change your ip/i.test(msg || '')
+}
+
+// «Instagram не находит аккаунт» (invalid_user) — проблема АККАУНТА (отключён / удалён /
+// переименован ИЛИ анти-бот-заглушка), а НЕ прокси. Такой ответ не должен метить IP.
+export function isAccountNotFound(msg: string): boolean {
+  return /can'?t find (an )?account|find an account with|invalid_user|switch_to_signup_flow/i.test(msg || '')
 }
 
 // Пометить прокси как выжженный Instagram — подбор перестанет его предлагать.
