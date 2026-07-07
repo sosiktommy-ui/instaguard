@@ -28,14 +28,22 @@ function proxyHostLabel(url: string | null): string {
 }
 
 // Резолвим прокси ДО входа — пропуская мёртвые, предпочитая рабочие (см. lib/proxyPool).
-async function resolveProxy(userId: string, allowNoProxy: boolean, cap: number): Promise<{ url: string | null; id: string | null; error?: string }> {
-  const pick = await pickPoolProxy(userId, cap)
+// excludeIds — прокси, которые уже пробовали в ЭТОЙ строке (ретрай на другом IP).
+async function resolveProxy(userId: string, allowNoProxy: boolean, cap: number, excludeIds: string[] = []): Promise<{ url: string | null; id: string | null; error?: string }> {
+  const pick = await pickPoolProxy(userId, cap, excludeIds)
   if (pick.ok) return { url: pick.url, id: pick.id }
   if (!allowNoProxy) {
     return { url: null, id: null, error: pick.reason === 'all-dead' ? 'все свободные прокси в пуле не отвечают' : 'нет свободных прокси в пуле' }
   }
   return { url: null, id: null }   // работа без прокси разрешена
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const randMs = (minMs: number, maxMs: number) => Math.round(minMs + Math.random() * (maxMs - minMs))
+
+// «Instagram просит сменить IP» — сигнал по конкретному IP, а не по паролю/куки.
+// Стоит попробовать ЭТУ ЖЕ строку ещё раз с другим прокси, прежде чем сдаться.
+const isIpBlacklistError = (msg: string) => /чёрном списке|blacklist|change your ip/i.test(msg)
 
 export async function POST(req: NextRequest) {
   try {
@@ -64,65 +72,86 @@ export async function POST(req: NextRequest) {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]
 
-      // Прокси до входа (общий для обоих режимов)
-      const px = await resolveProxy(user.id, allowNoProxy, cap)
-      if (px.error) { results.push({ line: i + 1, ok: false, reason: px.error }); continue }
+      // Пауза между строками. Много НОВЫХ логинов подряд с одного IP — для Instagram
+      // отдельный сигнал фермы аккаунтов, не менее весомый, чем качество самого прокси
+      // (наблюдение из антибан-аудита похожего бота: стабильность важнее скорости).
+      // Куки — не событие входа (ниже риск), пауза короче.
+      if (i > 0) await sleep(importMode === 'password' ? randMs(20_000, 45_000) : randMs(5_000, 15_000))
 
-      try {
-        let sessionData: object
-        let clean = ''
+      const triedProxyIds: string[] = []
+      let rowDone = false
 
-        if (importMode === 'password') {
-          // «логин пароль почта почта-пароль [2FA-ключ]» (разделитель — пробел или |)
-          const parts = (line.includes('|') ? line.split('|') : line.split(/\s+/)).map((s) => s.trim()).filter(Boolean)
-          const login = parts[0]
-          const password = parts[1]
-          if (!login || !password) { results.push({ line: i + 1, ok: false, reason: 'нет логина или пароля' }); continue }
-          // 2FA-ключ — первый «похожий на base32» токен после пароля (почта/почта-пароль отсеются по @/#)
-          const totp = parts.slice(2).find((p) => looksLikeTotp(p))
-          const r = await loginByCredentials(login, password, px.url || undefined, totp)
-          if (r.needsChallenge || !r.sessionData) {
-            results.push({ line: i + 1, ok: false, reason: 'Instagram требует подтверждение (challenge) — добавьте вручную' })
-            continue
-          }
-          sessionData = r.sessionData
-          clean = login.replace(/^@/, '').trim().toLowerCase()
-        } else {
-          // Полная мобильная сессия (login:pass:2fa|UA|device-ids|заголовки с Bearer) —
-          // передаём ВСЮ строку как есть: воркеру нужны и UA, и device-ids, и заголовки.
-          // Иначе формат «логин|пароль|UA|куки»: куки — всё с 4-й части. Иначе вся строка = куки.
-          let cookiesRaw: string
-          if (line.includes('Authorization=Bearer')) {
-            cookiesRaw = line
+      // До 2 попыток: если Instagram явно жалуется на IP (блэклист), пробуем ЕЩЁ РАЗ
+      // с другим прокси из пула, прежде чем сдаться — часто дело именно в конкретном IP.
+      for (let attempt = 0; attempt < 2 && !rowDone; attempt++) {
+        if (attempt > 0) await sleep(randMs(3_000, 7_000))
+
+        const px = await resolveProxy(user.id, allowNoProxy, cap, triedProxyIds)
+        if (px.error) { results.push({ line: i + 1, ok: false, reason: px.error }); break }
+        if (px.id) triedProxyIds.push(px.id)
+
+        try {
+          let sessionData: object
+          let clean = ''
+
+          if (importMode === 'password') {
+            // «логин пароль почта почта-пароль [2FA-ключ]» (разделитель — пробел или |)
+            const parts = (line.includes('|') ? line.split('|') : line.split(/\s+/)).map((s) => s.trim()).filter(Boolean)
+            const login = parts[0]
+            const password = parts[1]
+            if (!login || !password) { results.push({ line: i + 1, ok: false, reason: 'нет логина или пароля' }); break }
+            // 2FA-ключ — первый «похожий на base32» токен после пароля (почта/почта-пароль отсеются по @/#)
+            const totp = parts.slice(2).find((p) => looksLikeTotp(p))
+            const r = await loginByCredentials(login, password, px.url || undefined, totp)
+            if (r.needsChallenge || !r.sessionData) {
+              results.push({ line: i + 1, ok: false, reason: 'Instagram требует подтверждение (challenge) — добавьте вручную' })
+              break
+            }
+            sessionData = r.sessionData
+            clean = login.replace(/^@/, '').trim().toLowerCase()
           } else {
-            const parts = line.split('|')
-            cookiesRaw = parts.length >= 4 ? parts.slice(3).join('|') : line
+            // Полная мобильная сессия (login:pass:2fa|UA|device-ids|заголовки с Bearer) —
+            // передаём ВСЮ строку как есть: воркеру нужны и UA, и device-ids, и заголовки.
+            // Иначе формат «логин|пароль|UA|куки»: куки — всё с 4-й части. Иначе вся строка = куки.
+            let cookiesRaw: string
+            if (line.includes('Authorization=Bearer')) {
+              cookiesRaw = line
+            } else {
+              const parts = line.split('|')
+              cookiesRaw = parts.length >= 4 ? parts.slice(3).join('|') : line
+            }
+            const norm = normalizeCookies(cookiesRaw)
+            if (norm.error) { results.push({ line: i + 1, ok: false, reason: norm.error }); break }
+            const res = await loginByCookies(norm.cookies, px.url || undefined)
+            sessionData = res.sessionData
+            clean = res.username.replace(/^@/, '').trim().toLowerCase()
           }
-          const norm = normalizeCookies(cookiesRaw)
-          if (norm.error) { results.push({ line: i + 1, ok: false, reason: norm.error }); continue }
-          const res = await loginByCookies(norm.cookies, px.url || undefined)
-          sessionData = res.sessionData
-          clean = res.username.replace(/^@/, '').trim().toLowerCase()
-        }
 
-        const existing = await prisma.instagramAccount.findFirst({ where: { username: clean, userId: user.id } })
-        if (existing) {
-          await prisma.instagramAccount.update({
-            where: { id: existing.id },
-            data: { sessionData, status: 'ACTIVE', lastChecked: new Date(), proxy: px.url, proxyId: px.id, role: accountRole, sectionId: validSection },
-          })
-        } else {
-          await prisma.instagramAccount.create({
-            data: {
-              userId: user.id, username: clean, role: accountRole,
-              sessionData, proxy: px.url, proxyId: px.id, status: 'ACTIVE', sectionId: validSection,
-            },
-          })
+          const existing = await prisma.instagramAccount.findFirst({ where: { username: clean, userId: user.id } })
+          if (existing) {
+            await prisma.instagramAccount.update({
+              where: { id: existing.id },
+              data: { sessionData, status: 'ACTIVE', lastChecked: new Date(), proxy: px.url, proxyId: px.id, role: accountRole, sectionId: validSection },
+            })
+          } else {
+            await prisma.instagramAccount.create({
+              data: {
+                userId: user.id, username: clean, role: accountRole,
+                sessionData, proxy: px.url, proxyId: px.id, status: 'ACTIVE', sectionId: validSection,
+              },
+            })
+          }
+          imported++
+          results.push({ line: i + 1, ok: true, username: clean })
+          rowDone = true
+        } catch (e: any) {
+          const msg = String(e?.message ?? 'ошибка входа')
+          const canRetry = attempt === 0 && Boolean(px.url) && isIpBlacklistError(msg)
+          if (!canRetry) {
+            results.push({ line: i + 1, ok: false, reason: `${msg} · 🌐 через прокси: ${proxyHostLabel(px.url)}` })
+          }
+          // canRetry=true — молча идём на attempt=1 с другим прокси (excludeIds уже обновлён)
         }
-        imported++
-        results.push({ line: i + 1, ok: true, username: clean })
-      } catch (e: any) {
-        results.push({ line: i + 1, ok: false, reason: `${e?.message ?? 'ошибка входа'} · 🌐 через прокси: ${proxyHostLabel(px.url)}` })
       }
     }
 

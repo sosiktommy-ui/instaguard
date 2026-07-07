@@ -15,9 +15,9 @@ export type PoolPick =
 
 const MAX_CANDIDATES = 30   // верхняя граница на всякий случай (воркер останавливается раньше — на первом чистом)
 
-export async function pickPoolProxy(userId: string, cap: number): Promise<PoolPick> {
+export async function pickPoolProxy(userId: string, cap: number, excludeIds: string[] = []): Promise<PoolPick> {
   const pool = await prisma.proxy.findMany({
-    where: { userId, kind: 'pool' },
+    where: { userId, kind: 'pool', ...(excludeIds.length ? { id: { notIn: excludeIds } } : {}) },
     select: { id: true, url: true, _count: { select: { accounts: true } } },
     orderBy: { createdAt: 'asc' },
   })

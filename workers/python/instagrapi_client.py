@@ -1,5 +1,6 @@
 import os
 import base64
+import hashlib
 import json
 import logging
 import random
@@ -197,6 +198,102 @@ _DEFAULT_DEVICE = {
     "cpu": "qcom",
     "version_code": "314665256",
 }
+
+
+# ─── Стабильный отпечаток устройства на аккаунт ──────────────────────────────
+# Урок из антибан-аудита похожего Playwright-бота (autofacebook, BAN-1/BAN-11):
+# «то же самое железо, но новый отпечаток при каждой попытке» — сигнал фермы аккаунтов
+# сильнее, чем просто плохой прокси. Реальный телефон не меняется от входа к входу.
+# Раньше login_by_credentials/login_by_cookies создавали пустой Client() и instagrapi
+# сам генерировал СЛУЧАЙНОЕ устройство/uuid при каждом вызове — при ретрае (challenge,
+# неверный код, повторный импорт) аккаунт «менял телефон» посреди попытки логина.
+# Здесь устройство/uuid детерминированы по username — тот же «телефон» на каждый вход,
+# ретрай и будущий ре-логин того же аккаунта, а у разных аккаунтов — разные.
+_DEVICE_POOL = [
+    {"manufacturer": "samsung", "model": "SM-G991B", "device": "o1s",         "cpu": "exynos2100", "dpi": "560dpi", "resolution": "1440x3200", "android_version": 31, "android_release": "12"},
+    {"manufacturer": "samsung", "model": "SM-A525F", "device": "a52q",       "cpu": "qcom",       "dpi": "393dpi", "resolution": "1080x2400", "android_version": 30, "android_release": "11"},
+    {"manufacturer": "xiaomi",  "model": "M2101K6G", "device": "spes",       "cpu": "qcom",       "dpi": "440dpi", "resolution": "1080x2400", "android_version": 30, "android_release": "11"},
+    {"manufacturer": "OnePlus", "model": "IN2020",   "device": "OnePlus8Pro","cpu": "qcom",       "dpi": "560dpi", "resolution": "1440x3168", "android_version": 29, "android_release": "10"},
+    {"manufacturer": "google",  "model": "Pixel 6",  "device": "oriole",     "cpu": "exynos",     "dpi": "420dpi", "resolution": "1080x2400", "android_version": 32, "android_release": "12"},
+    {"manufacturer": "huawei",  "model": "ELS-NX9",  "device": "HWELS",      "cpu": "kirin990",   "dpi": "480dpi", "resolution": "1200x2640", "android_version": 29, "android_release": "10"},
+]
+_UUID_NS = _uuid.UUID('6f9619ff-8b86-d011-b42d-00c04fc964ff')  # фиксированный namespace — только для детерминизма
+
+
+def _seed_int(seed: str) -> int:
+    return int(hashlib.sha256(seed.encode()).hexdigest(), 16)
+
+
+def _stable_uuid(username: str, tag: str) -> str:
+    return str(_uuid.uuid5(_UUID_NS, f'{username}:{tag}'))
+
+
+def _stable_android_device_id(username: str) -> str:
+    return 'android-' + hashlib.sha256(f'{username}:android_device_id'.encode()).hexdigest()[:16]
+
+
+def _stable_device_settings(username: str) -> dict:
+    """Тот же профиль устройства для этого username при каждом вызове."""
+    idx = _seed_int(f'{username}:device') % len(_DEVICE_POOL)
+    device = dict(_DEVICE_POOL[idx])
+    device["app_version"] = _DEFAULT_DEVICE["app_version"]
+    device["version_code"] = _DEFAULT_DEVICE["version_code"]
+    return device
+
+
+def _stable_uuids_block(username: str) -> dict:
+    return {
+        "phone_id":          _stable_uuid(username, "phone_id"),
+        "uuid":              _stable_uuid(username, "uuid"),
+        "client_session_id": _rand_uuid(),   # id конкретной сессии — по делу меняется каждый вход
+        "advertising_id":    _stable_uuid(username, "adid"),
+        "android_device_id": _stable_android_device_id(username),
+        "request_id":        _rand_uuid(),
+        "tray_session_id":   _rand_uuid(),
+    }
+
+
+# Страна exit-IP прокси → локаль устройства. Несовпадение локали и гео IP — отдельный
+# сигнал бота (см. autofacebook BAN-11: таймзона/локаль брались из гео прокси, а не
+# захардкожены). Список — крупнейшие рынки; неизвестная страна → нейтральный en_US.
+_COUNTRY_LOCALE = {
+    'US': 'en_US', 'GB': 'en_GB', 'PL': 'pl_PL', 'DE': 'de_DE', 'FR': 'fr_FR',
+    'ES': 'es_ES', 'IT': 'it_IT', 'UA': 'uk_UA', 'RU': 'ru_RU', 'NL': 'nl_NL',
+    'PT': 'pt_PT', 'BR': 'pt_BR', 'MX': 'es_MX', 'CA': 'en_CA', 'AU': 'en_AU',
+    'TR': 'tr_TR', 'IN': 'en_IN', 'ID': 'id_ID', 'CZ': 'cs_CZ', 'RO': 'ro_RO',
+}
+
+
+def _locale_for_proxy(proxy: str | None) -> tuple[str, str]:
+    """Локаль/страна под гео exit-IP прокси. При сбое проверки — нейтральный en_US/US
+    (не блокирует логин — это мягкое улучшение отпечатка, а не обязательное условие)."""
+    if not proxy:
+        return 'en_US', 'US'
+    try:
+        rep = check_proxy(proxy, use_cache=True)
+        cc = (rep.get('country') or '').upper()
+        if len(cc) == 2 and cc in _COUNTRY_LOCALE:
+            return _COUNTRY_LOCALE[cc], cc
+    except Exception as e:
+        logger.warning("locale-by-proxy lookup failed: %s", e)
+    return 'en_US', 'US'
+
+
+def _apply_stable_fingerprint(cl: 'Client', username: str, proxy: str | None) -> None:
+    """Проставить стабильное устройство/uuid/локаль ДО login()/восстановления сессии —
+    ровно так же, как рекомендует сам instagrapi (settings ДО login, чтобы IG видел
+    тот же 'телефон', а не новый при каждой попытке). Отказоустойчиво: при любой
+    ошибке просто не трогаем cl — логин пойдёт со случайным устройством, как раньше."""
+    try:
+        locale, country = _locale_for_proxy(proxy)
+        cl.set_settings({
+            "uuids": _stable_uuids_block(username),
+            "device_settings": _stable_device_settings(username),
+            "locale": locale,
+            "country": country,
+        })
+    except Exception as e:
+        logger.warning("stable fingerprint setup failed for @%s (продолжаю со случайным устройством): %s", username, e)
 
 
 def _rand_uuid() -> str:
@@ -423,6 +520,7 @@ def login_by_credentials(username: str, password: str, proxy: str | None = None,
     cl = Client()
     if proxy:
         cl.set_proxy(_resolve_proxy_scheme(proxy))
+    _apply_stable_fingerprint(cl, username, proxy)
 
     try:
         if totp_secret:
@@ -613,14 +711,26 @@ def login_by_cookies(cookies: dict, proxy: str | None = None) -> tuple[dict, str
         if not ds_uid:
             m = re.match(r'^(\d+)', session_id)
             ds_uid = m.group(1) if m else ''
-        cl.set_settings({
+        settings = {
             "cookies": cookies,
             "authorization_data": {
                 "ds_user_id": ds_uid,
                 "sessionid": session_id,
                 "should_use_header_over_cookies": True,
             },
-        })
+        }
+        # Стабильный отпечаток по ds_user_id (постоянный numeric ID аккаунта — надёжнее
+        # username) — та же логика, что в login_by_credentials, см. комментарий там.
+        try:
+            seed_key = ds_uid or session_id[:24]
+            locale, country = _locale_for_proxy(proxy)
+            settings["uuids"] = _stable_uuids_block(seed_key)
+            settings["device_settings"] = _stable_device_settings(seed_key)
+            settings["locale"] = locale
+            settings["country"] = country
+        except Exception as e:
+            logger.warning("stable fingerprint setup (cookies) failed (продолжаю без него): %s", e)
+        cl.set_settings(settings)
     else:
         cl.private.cookies.update(cookies)
     return cl.get_settings(), _verify_and_username(cl)
