@@ -11,7 +11,7 @@
 | Frontend + Backend | Next.js 15.5.19 (App Router) |
 | БД | PostgreSQL (Railway) + Prisma 5.22.0 |
 | Очереди | BullMQ + Redis (Railway) |
-| Instagram-автоматизация | Python FastAPI + instagrapi 2.1.3 (отдельный Railway-сервис) |
+| Instagram-автоматизация | Python FastAPI + instagrapi 2.18.3 (отдельный Railway-сервис) |
 | Состояние клиента | Zustand с persist (`instaguard-store` v4) |
 | Стили | Tailwind CSS, Apple/iOS дизайн-система |
 | Деплой | Railway (Nixpacks для Next.js, Dockerfile для Python) |
@@ -103,7 +103,7 @@ components/
 workers/python/
   worker.py                      — FastAPI-приложение
   instagrapi_client.py           — обёртки над instagrapi
-  requirements.txt               — instagrapi==2.1.3, Pillow, fastapi, uvicorn
+  requirements.txt               — instagrapi==2.18.3, Pillow, fastapi, uvicorn
   Dockerfile                     — python:3.11-slim, слушает $PORT
   railway.json                   — builder: DOCKERFILE
 
@@ -115,6 +115,15 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 ---
 
 ## История изменений
+
+### 2026-07-06 (8)
+
+#### chore: обновление instagrapi 2.1.3 → 2.18.3 (устаревший API — вероятная причина, что вход не проходил)
+
+- **Причина:** вход не проходил ни по кукам, ни по паролю даже с чистым резидентным прокси в стране аккаунта (пользователь подтвердил прокси). Библиотека была версии **2.1.3 при актуальной 2.18.3** (отставание ~16 версий). Старый instagrapi тянет задеприкейченные Instagram эндпоинты (тот самый публичный GraphQL `query_hash` из фикса (7)) и мог ловить `login_required` на живой сессии из-за устаревшего подписывания приватного API.
+- **`workers/python/requirements.txt`:** `instagrapi==2.1.3` → `==2.18.3` (⚠️ **нужен редеплой Python-сервиса**).
+- **Совместимость проверена по исходникам 2.18.3:** структура settings обратно совместима (`init()` читает `device_settings`/`uuids`/`cookies`/`authorization_data`/`mid`/`rur`/`claim`/`locale`/`country` через `.get()`, только `cookies` обязателен — мы его даём; `device_settings` те же 10 полей). Исключения `ChallengeRequired`/`TwoFactorRequired`/`LoginRequired`/`ClientError` на месте (импорт воркера не падает при старте). Формат Instagram-UA (который парсит `_parse_user_agent`) — это UA приложения Instagram, а не instagrapi, порядок полей не зависит от версии. pydantic 2 уже тянет FastAPI 0.115 — конфликта нет.
+- ⚠️ **После редеплоя нужен тест** (локально instagrapi не проверить — он делает реальные запросы к Instagram). Если воркер не стартует или метод изменил сигнатуру — увидим в логах Railway и откатим/подберём версию.
 
 ### 2026-07-06 (7)
 
