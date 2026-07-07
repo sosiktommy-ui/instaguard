@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { loginByCookies, loginByCredentials } from '@/lib/instagram/client'
 import { getCurrentUser } from '@/lib/auth'
 import { normalizeCookies } from '@/lib/cookies'
-import { pickPoolProxy } from '@/lib/proxyPool'
+import { pickPoolProxy, markProxyBlocked } from '@/lib/proxyPool'
 
 /**
  * Массовый импорт аккаунтов. Одна строка — один аккаунт. Два режима (mode):
@@ -81,9 +81,9 @@ export async function POST(req: NextRequest) {
       const triedProxyIds: string[] = []
       let rowDone = false
 
-      // До 2 попыток: если Instagram явно жалуется на IP (блэклист), пробуем ЕЩЁ РАЗ
-      // с другим прокси из пула, прежде чем сдаться — часто дело именно в конкретном IP.
-      for (let attempt = 0; attempt < 2 && !rowDone; attempt++) {
+      // До 3 попыток: если Instagram жалуется на IP (блэклист), помечаем этот IP выжженным
+      // и пробуем ДРУГОЙ прокси из пула — часто дело именно в конкретном IP, а не в аккаунте.
+      for (let attempt = 0; attempt < 3 && !rowDone; attempt++) {
         if (attempt > 0) await sleep(randMs(3_000, 7_000))
 
         const px = await resolveProxy(user.id, allowNoProxy, cap, triedProxyIds)
@@ -146,11 +146,13 @@ export async function POST(req: NextRequest) {
           rowDone = true
         } catch (e: any) {
           const msg = String(e?.message ?? 'ошибка входа')
-          const canRetry = attempt === 0 && Boolean(px.url) && isIpBlacklistError(msg)
+          // IP выжжен Instagram — помечаем, чтобы подбор его больше не давал (ни этой строке, ни следующим).
+          if (isIpBlacklistError(msg) && px.id) await markProxyBlocked(px.id)
+          const canRetry = attempt < 2 && Boolean(px.url) && isIpBlacklistError(msg)
           if (!canRetry) {
             results.push({ line: i + 1, ok: false, reason: `${msg} · 🌐 через прокси: ${proxyHostLabel(px.url)}` })
           }
-          // canRetry=true — молча идём на attempt=1 с другим прокси (excludeIds уже обновлён)
+          // canRetry=true — молча идём на следующую попытку с ДРУГИМ прокси (excludeIds уже обновлён)
         }
       }
     }

@@ -63,6 +63,9 @@ model Proxy {
   vpn           Boolean?
   mobile        Boolean?
   flagged       Boolean?                         // datacenter || vpn || proxy — «Instagram забанит»
+  igBlocked     Boolean?                         // Instagram при входе вернул blacklist/UserInvalidCredentials
+                                                 // — этот IP реально выжжен на стороне IG (сильнее ipapi.is);
+                                                 // подбор такой прокси избегает.
 
   user     User               @relation(fields: [userId], references: [id])
   accounts InstagramAccount[]

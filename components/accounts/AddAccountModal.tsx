@@ -166,7 +166,7 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in" onClick={onClose}>
-      <div className="card w-full max-w-md p-7 animate-scale-in" onClick={(e) => e.stopPropagation()}>
+      <div className="card w-full max-w-md p-7 animate-scale-in max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-5">
           <h2 className="text-[22px] font-semibold tracking-tight">Подключить аккаунт</h2>
           <button onClick={onClose} className="text-subt hover:text-ink"><X size={22} /></button>

@@ -18,7 +18,7 @@ interface ProxyItem {
   id: string; url: string; kind: string; label: string | null; accountCount: number; accounts: AccRef[]
   // Здоровье прокси (сохранённый результат последней проверки — «Проверить все прокси»)
   status?: string; lastCheckedAt?: string | null; ip?: string | null; country?: string | null; isp?: string | null; scheme?: string | null
-  datacenter?: boolean | null; vpn?: boolean | null; mobile?: boolean | null; flagged?: boolean | null
+  datacenter?: boolean | null; vpn?: boolean | null; mobile?: boolean | null; flagged?: boolean | null; igBlocked?: boolean | null
 }
 interface MainAccount { id: string; username: string; role: string; status: string; proxyId: string | null }
 
@@ -187,9 +187,10 @@ function Proxies() {
   }
 
   // Категория здоровья прокси (живой результат этой сессии важнее сохранённого в БД).
-  const statusOf = (p: ProxyItem): 'checking' | 'dead' | 'flagged' | 'alive' | 'unchecked' => {
+  const statusOf = (p: ProxyItem): 'checking' | 'blocked' | 'dead' | 'flagged' | 'alive' | 'unchecked' => {
     const live = ipCheck[p.id]
     if (live?.loading) return 'checking'
+    if (p.igBlocked) return 'blocked'   // Instagram выжег этот IP — сильнее любой ipapi-репутации
     const c = live ?? persistedToIpInfo(p)
     if (!c) return 'unchecked'
     if (c.error) return 'dead'
@@ -203,6 +204,7 @@ function Proxies() {
     const meta: Record<typeof s, { cls: string; text: string }> = {
       checking:  { cls: 'bg-brand/10 text-brand', text: 'проверяю…' },
       unchecked: { cls: 'bg-canvas text-subt border border-line/50', text: 'не проверен' },
+      blocked:   { cls: 'bg-bad/15 text-bad', text: '🚫 бан Instagram' },
       dead:      { cls: 'bg-bad/10 text-bad', text: '🔴 не отвечает' },
       flagged:   { cls: 'bg-bad/10 text-bad', text: '🔴 датацентр/VPN' },
       alive:     { cls: 'bg-ok/10 text-ok', text: '✅ живой' },
@@ -376,11 +378,12 @@ function Proxies() {
 
       {/* Здоровье пула — сводка по последней проверке (кнопка «Проверить все» в шапке) */}
       {proxies.length > 0 && (() => {
-        const hs = proxies.reduce((a, p) => { a[statusOf(p)]++; return a }, { checking: 0, dead: 0, flagged: 0, alive: 0, unchecked: 0 } as Record<string, number>)
+        const hs = proxies.reduce((a, p) => { a[statusOf(p)]++; return a }, { checking: 0, blocked: 0, dead: 0, flagged: 0, alive: 0, unchecked: 0 } as Record<string, number>)
         return (
           <div className="card card-3d gloss px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12.5px]">
             <span className="font-medium text-ink inline-flex items-center gap-1.5"><ShieldCheck className="w-3.5 h-3.5 text-brand" /> Здоровье пула:</span>
             <span className="text-ok font-medium">✅ {hs.alive} годных</span>
+            {hs.blocked > 0 && <span className="text-bad font-medium">🚫 {hs.blocked} бан Instagram</span>}
             <span className="text-bad font-medium">🔴 {hs.flagged} датацентр/VPN</span>
             <span className="text-subt">⚪ {hs.dead} не отвечают</span>
             <span className="text-subt">❔ {hs.unchecked} не проверены</span>

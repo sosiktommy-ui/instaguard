@@ -4,78 +4,99 @@ import { pickProxy } from '@/lib/instagram/client'
 /**
  * Подбор пулового прокси для подключения аккаунта.
  *
- * Опирается на СОХРАНЁННОЕ здоровье прокси (результат кнопки «Проверить все» на вкладке «Прокси»):
- *  1. Заведомо годный (status=alive, не датацентр) берётся СРАЗУ, без обращения к воркеру —
- *     это убирает главный баг входа: при мёртвых кандидатах live-проверка упиралась в таймаут
- *     воркера (75с), и pickPoolProxy молча брал первый попавшийся (часто датацентр) прокси →
- *     вход падал в blacklist. Теперь известный-годный прокси = быстрый путь без таймаута.
- *  2. Заведомо мёртвые (status=dead) исключаются полностью — не пытаемся входить через мёртвый IP.
- *  3. Непроверенные (status=unknown) проверяются вживую воркером; узнанное здоровье тут же
- *     сохраняется в БД, чтобы в следующий раз сработал быстрый путь (без «Проверить все» вручную).
- *  4. Если остались только флагнутые (датацентр/VPN) — берём наименее занятый, но честно flagged=true.
+ * Опирается на СОХРАНЁННОЕ здоровье прокси:
+ *  1. Заведомо годный (status=alive, не датацентр, не выжжен Instagram) берётся СРАЗУ, без
+ *     обращения к воркеру — убирает главный баг: при мёртвых кандидатах live-проверка упиралась
+ *     в таймаут (75с), и подбор молча брал первый попавшийся (часто датацентр) прокси.
+ *  2. РОТАЦИЯ среди равнозагруженных годных: раньше всегда возвращался «первый годный», поэтому
+ *     ВСЕ аккаунты шли через один и тот же IP — если он выжжен Instagram, умирали все подряд.
+ *     Теперь выбор случайный среди наименее занятых → аккаунты распределяются по разным IP.
+ *  3. Заведомо мёртвые (status=dead) и выжженные Instagram (igBlocked) исключаются.
+ *  4. Непроверенные (status=unknown) проверяются вживую; узнанное здоровье сохраняется в БД.
  */
 export type PoolPick =
   | { ok: true; url: string; id: string; flagged: boolean }
   | { ok: false; reason: 'no-capacity' | 'all-dead' }
 
-const MAX_CANDIDATES = 30   // сколько непроверенных максимум отдаём воркеру за раз
+const MAX_CANDIDATES = 30
 
-type Cand = { id: string; url: string; status: string | null; flagged: boolean | null; load: number }
+type Cand = { id: string; url: string; status: string | null; flagged: boolean | null; igBlocked: boolean | null; load: number }
+
+// «Instagram выжег этот IP»: ответ входа содержит blacklist / UserInvalidCredentials /
+// «change your IP». Сигнал сильнее репутации ipapi.is (резидентный по ISP, но забанен IG).
+export function isInstagramBlacklist(msg: string): boolean {
+  return /чёрном списке|blacklist|blocklist|change your ip|UserInvalidCredentials/i.test(msg || '')
+}
+
+// Пометить прокси как выжженный Instagram — подбор перестанет его предлагать.
+export async function markProxyBlocked(id: string | null | undefined): Promise<void> {
+  if (!id) return
+  await prisma.proxy.update({ where: { id }, data: { igBlocked: true, lastCheckedAt: new Date() } }).catch(() => null)
+}
+
+// Случайный среди наименее занятых — ротация, чтобы не сажать все аккаунты на один IP.
+function pickRotating(list: Cand[]): Cand {
+  const minLoad = Math.min(...list.map((p) => p.load))
+  const least = list.filter((p) => p.load === minLoad)
+  return least[Math.floor(Math.random() * least.length)]
+}
 
 export async function pickPoolProxy(userId: string, cap: number, excludeIds: string[] = []): Promise<PoolPick> {
   const pool = await prisma.proxy.findMany({
     where: { userId, kind: 'pool', ...(excludeIds.length ? { id: { notIn: excludeIds } } : {}) },
-    select: { id: true, url: true, status: true, flagged: true, _count: { select: { accounts: true } } },
+    select: { id: true, url: true, status: true, flagged: true, igBlocked: true, _count: { select: { accounts: true } } },
     orderBy: { createdAt: 'asc' },
   })
   const free: Cand[] = pool
     .filter((p) => p._count.accounts < cap)
-    .map((p) => ({ id: p.id, url: p.url, status: p.status, flagged: p.flagged, load: p._count.accounts }))
-    .sort((a, b) => a.load - b.load)   // наименее занятый — первым
+    .map((p) => ({ id: p.id, url: p.url, status: p.status, flagged: p.flagged, igBlocked: p.igBlocked, load: p._count.accounts }))
   if (!free.length) return { ok: false, reason: 'no-capacity' }
 
-  const aliveClean = free.filter((p) => p.status === 'alive' && p.flagged !== true)
-  const unknown    = free.filter((p) => p.status !== 'alive' && p.status !== 'dead')  // 'unknown' / null
-  const aliveFlag  = free.filter((p) => p.status === 'alive' && p.flagged === true)
+  const notBurned = free.filter((p) => !p.igBlocked)
+  const aliveClean = notBurned.filter((p) => p.status === 'alive' && p.flagged !== true)
+  const unknown    = notBurned.filter((p) => p.status !== 'alive' && p.status !== 'dead')
+  const aliveFlag  = notBurned.filter((p) => p.status === 'alive' && p.flagged === true)
+  const burned     = free.filter((p) => p.igBlocked)
   // status === 'dead' — исключаем полностью
 
-  // 1) Быстрый путь — заведомо годный прокси, без обращения к воркеру (нет риска таймаута).
+  // 1) Годный (не датацентр, не IG-бан) — сразу, с ротацией, без обращения к воркеру.
   if (aliveClean.length) {
-    const p = aliveClean[0]
+    const p = pickRotating(aliveClean)
     return { ok: true, url: p.url, id: p.id, flagged: false }
   }
 
-  // 2) Непроверенные — проверяем вживую (воркер пропускает мёртвые, предпочитает чистый).
+  // 2) Непроверенные — live-проверка (воркер пропустит мёртвые), с сохранением здоровья.
   if (unknown.length) {
     const idByUrl = new Map(free.map((p) => [p.url, p.id]))
     try {
       const res = await pickProxy(unknown.slice(0, MAX_CANDIDATES).map((p) => p.url))
-      void persistChecked(res.checked, idByUrl)   // запоминаем здоровье → в следующий раз быстрый путь
+      void persistChecked(res.checked, idByUrl)
       if (res.chosen) {
         const p = unknown.find((f) => f.url === res.chosen) ?? unknown[0]
         return { ok: true, url: p.url, id: p.id, flagged: Boolean(res.flagged) }
       }
-      // все непроверенные оказались мертвы → падаем ниже (флагнутые / all-dead)
     } catch {
-      // Воркер недоступен — НЕ блокируем вход: берём наименее занятый непроверенный.
-      // Заведомо мёртвые уже исключены по сохранённому статусу, так что это не хуже прежнего фолбэка.
-      const p = unknown[0]
+      const p = pickRotating(unknown)
       return { ok: true, url: p.url, id: p.id, flagged: false }
     }
   }
 
-  // 3) Остались только флагнутые (датацентр/VPN) — лучше, чем ничего, но честно помечаем flagged.
+  // 3) Только датацентр/VPN (не IG-бан) — с ротацией, честно flagged.
   if (aliveFlag.length) {
-    const p = aliveFlag[0]
+    const p = pickRotating(aliveFlag)
     return { ok: true, url: p.url, id: p.id, flagged: true }
   }
 
-  // 4) Всё мёртвое
+  // 4) Остались только выжженные Instagram — последний шанс (вдруг IG снял бан); честно flagged.
+  if (burned.length) {
+    const p = pickRotating(burned)
+    return { ok: true, url: p.url, id: p.id, flagged: true }
+  }
+
   return { ok: false, reason: 'all-dead' }
 }
 
-// Сохранить в БД здоровье прокси, узнанное воркером при live-подборе (status/ip/страна/репутация).
-// Обновляем ТОЛЬКО по известным id (прокси текущего пользователя) — не задевая чужие записи.
+// Сохранить в БД здоровье, узнанное воркером при live-подборе. Обновляем только по известным id.
 async function persistChecked(
   checked: Array<{ url: string; ok: boolean; ip?: string; country?: string; datacenter?: boolean | null; vpn?: boolean | null }>,
   idByUrl: Map<string, string>,

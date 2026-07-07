@@ -15,7 +15,7 @@ export async function GET() {
         select: {
           id: true, url: true, kind: true, label: true,
           status: true, lastCheckedAt: true, ip: true, country: true, isp: true, scheme: true,
-          datacenter: true, vpn: true, mobile: true, flagged: true,
+          datacenter: true, vpn: true, mobile: true, flagged: true, igBlocked: true,
           accounts: { select: { id: true, username: true, role: true, status: true }, orderBy: { username: 'asc' } },
         },
       }),
@@ -26,7 +26,7 @@ export async function GET() {
         id: p.id, url: p.url, kind: p.kind, label: p.label,
         status: p.status, lastCheckedAt: p.lastCheckedAt,
         ip: p.ip, country: p.country, isp: p.isp, scheme: p.scheme,
-        datacenter: p.datacenter, vpn: p.vpn, mobile: p.mobile, flagged: p.flagged,
+        datacenter: p.datacenter, vpn: p.vpn, mobile: p.mobile, flagged: p.flagged, igBlocked: p.igBlocked,
         accountCount: p.accounts.length,
         accounts: p.accounts.map((a) => ({ id: a.id, username: a.username, role: a.role, status: a.status })),
       })),

@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { loginByCredentials, loginByCookies } from '@/lib/instagram/client'
 import { getCurrentUser } from '@/lib/auth'
 import { normalizeCookies } from '@/lib/cookies'
-import { pickPoolProxy } from '@/lib/proxyPool'
+import { pickPoolProxy, isInstagramBlacklist, markProxyBlocked } from '@/lib/proxyPool'
 
 // host:port прокси без логина/пароля — чтобы в ошибке было видно, ЧЕРЕЗ КАКОЙ IP шёл вход
 // (сверить с вердиктом «Проверить IP»: датацентр этот адрес или резидентный).
@@ -87,7 +87,9 @@ export async function POST(req: NextRequest) {
         sessionData = result.sessionData
         clean = result.username
       } catch (e: any) {
-        const msg = `${e.message ?? 'Ошибка авторизации через куки'}\n\n🌐 Вход шёл через прокси: ${proxyHostLabel(proxyUrl)}`
+        const raw = String(e?.message ?? 'Ошибка авторизации через куки')
+        if (isInstagramBlacklist(raw) && proxyId) await markProxyBlocked(proxyId)
+        const msg = `${raw}\n\n🌐 Вход шёл через прокси: ${proxyHostLabel(proxyUrl)}`
         return NextResponse.json({ error: msg }, { status: 400 })
       }
     } else {
@@ -107,7 +109,13 @@ export async function POST(req: NextRequest) {
         }
         sessionData = result.sessionData
       } catch (e: any) {
-        const msg = `${e.message ?? 'Неверный логин или пароль'}\n\n🌐 Вход шёл через прокси: ${proxyHostLabel(proxyUrl)}`
+        const raw = String(e?.message ?? 'Неверный логин или пароль')
+        const burned = isInstagramBlacklist(raw)
+        if (burned && proxyId) await markProxyBlocked(proxyId)   // IP выжжен Instagram — подбор его больше не даст
+        const hint = burned
+          ? '\n\n♻️ Этот IP помечен как выжженный Instagram и больше не будет предлагаться. Нажмите «Авторизоваться» ещё раз — подберётся ДРУГОЙ IP. Если так по всем прокси — они выжжены перебором; нужен свежий мобильный прокси или вход по «Куки».'
+          : ''
+        const msg = `${raw}\n\n🌐 Вход шёл через прокси: ${proxyHostLabel(proxyUrl)}${hint}`
         return NextResponse.json({ error: msg }, { status: 400 })
       }
     }
