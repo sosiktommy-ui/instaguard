@@ -16,8 +16,20 @@ import { pickPoolProxy, markProxyBlocked } from '@/lib/proxyPool'
 
 interface RowResult { line: number; ok: boolean; username?: string; reason?: string }
 
-// Похоже ли на 2FA-ключ (base32, ≥16 символов, без @) — для авто-распознавания в строке.
-const looksLikeTotp = (s: string) => /^[A-Za-z2-7]{16,}$/.test(s.replace(/[\s-]/g, ''))
+// 2FA-ключ из хвоста строки (токены после пароля): либо ХВОСТ из групп base32 по 4 символа
+// (OJDU 3SXQ HPJG …), либо один длинный base32-токен. Почта/почта-пароль (с @/#/точками)
+// не мешают — они не base32-группы. Та же логика, что в ручной вставке (AddAccountModal).
+function extractTotpKey(tail: string[]): string | undefined {
+  const isGroup = (t: string) => /^[A-Za-z2-7]{4}$/.test(t)
+  const isLong = (t: string) => /^[A-Za-z2-7]{16,}$/.test(t.replace(/[\s-]/g, ''))
+  const groups: string[] = []
+  let end = tail.length
+  while (end > 0 && isGroup(tail[end - 1])) { groups.unshift(tail[end - 1]); end-- }
+  if (groups.length >= 2) return groups.join('')
+  const last = tail[tail.length - 1]
+  if (last && isLong(last)) return last.replace(/[\s-]/g, '')
+  return undefined
+}
 
 // host:port прокси без логина/пароля — чтобы в причине отказа было видно, через какой IP шёл вход.
 function proxyHostLabel(url: string | null): string {
@@ -100,8 +112,8 @@ export async function POST(req: NextRequest) {
             const login = parts[0]
             const password = parts[1]
             if (!login || !password) { results.push({ line: i + 1, ok: false, reason: 'нет логина или пароля' }); break }
-            // 2FA-ключ — первый «похожий на base32» токен после пароля (почта/почта-пароль отсеются по @/#)
-            const totp = parts.slice(2).find((p) => looksLikeTotp(p))
+            // 2FA-ключ (в т.ч. разбитый на группы «OJDU 3SXQ …») — из токенов после пароля.
+            const totp = extractTotpKey(parts.slice(2))
             const r = await loginByCredentials(login, password, px.url || undefined, totp)
             if (r.needsChallenge || !r.sessionData) {
               results.push({ line: i + 1, ok: false, reason: 'Instagram требует подтверждение (challenge) — добавьте вручную' })
