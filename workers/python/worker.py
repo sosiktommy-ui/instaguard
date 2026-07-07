@@ -19,6 +19,19 @@ def _check_secret(x_worker_secret: str):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+@app.get("/health")
+def health():
+    """Публичный health-check: подтверждает, что воркер жив и КАКОЙ билд/версия instagrapi
+    реально задеплоены. Открой <worker-url>/health в браузере. Если build не совпадает с
+    ожидаемым — значит новый деплой воркера НЕ применился (упала сборка на Railway)."""
+    try:
+        import instagrapi
+        ver = getattr(instagrapi, "__version__", "unknown")
+    except Exception as e:
+        ver = f"import-error: {e}"
+    return {"ok": True, "build": "2026-07-07-diag", "instagrapi": ver}
+
+
 class SessionPayload(BaseModel):
     sessionData: dict
     proxy: str | None = None
