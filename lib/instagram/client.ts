@@ -92,6 +92,12 @@ export async function loginByCookies(cookies: object, proxy?: string) {
   return workerFetch<{ sessionData: object; username: string }>('/login-cookies', { cookies, proxy })
 }
 
+export async function checkProxy(proxy?: string) {
+  return workerFetch<{ ok: boolean; proxyUsed: boolean; ip?: string; country?: string; city?: string; isp?: string; error?: string }>(
+    '/check-proxy', { proxy }
+  )
+}
+
 export async function getAccountInfo(session: object, proxy?: string) {
   return workerFetch<{ username: string; follower_count: number; following_count: number; media_count: number }>(
     '/account-info', { sessionData: session, proxy }

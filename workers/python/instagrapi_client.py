@@ -34,6 +34,33 @@ def _normalize_proxy(proxy: str | None) -> str | None:
     # host:port  →  http://host:port
     return f'http://{proxy}'
 
+def check_proxy(proxy: str | None = None) -> dict:
+    """Проверить прокси: вернуть исходящий IP, страну и провайдера (как их видит внешний мир).
+    Показывает, РАБОТАЕТ ли прокси и какой у него IP — чтобы понять, используется ли он при
+    входе и не дата-центровый/чёрносписочный ли это IP. Без proxy — вернёт IP самого сервера."""
+    import requests
+    norm = _normalize_proxy(proxy)
+    proxies = {"http": norm, "https": norm} if norm else None
+    # Несколько сервисов на случай, если один недоступен через прокси.
+    services = ["https://ipinfo.io/json", "http://ip-api.com/json"]
+    last_err = None
+    for url in services:
+        try:
+            r = requests.get(url, proxies=proxies, timeout=20)
+            j = r.json()
+            # ipinfo: {ip, city, region, country, org}; ip-api: {query, country, city, isp, org, as}
+            ip = j.get("ip") or j.get("query") or ""
+            country = j.get("country") or j.get("countryCode") or ""
+            city = j.get("city") or ""
+            isp = j.get("org") or j.get("isp") or j.get("as") or ""
+            logger.info("check_proxy: proxy_used=%s ip=%s country=%s isp=%s", bool(norm), ip, country, isp)
+            return {"ok": True, "proxyUsed": bool(norm), "ip": ip, "country": country, "city": city, "isp": isp}
+        except Exception as e:
+            last_err = e
+            logger.warning("check_proxy via %s failed: %s", url, e)
+    return {"ok": False, "proxyUsed": bool(norm), "error": f"{type(last_err).__name__}: {last_err}"}
+
+
 # In-memory store for pending challenge sessions: username → {settings, api_path, proxy}
 _challenge_sessions: dict[str, dict] = {}
 

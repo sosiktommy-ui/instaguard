@@ -50,6 +50,10 @@ class CookiePayload(BaseModel):
     proxy: str | None = None
 
 
+class CheckProxyPayload(BaseModel):
+    proxy: str | None = None
+
+
 class ActionPayload(BaseModel):
     sessionData: dict
     userId: str
@@ -159,6 +163,12 @@ def login_cookies(payload: CookiePayload, x_worker_secret: str = Header(...)):
             except Exception:
                 pass
         raise HTTPException(status_code=400, detail=detail)
+
+
+@app.post("/check-proxy")
+def check_proxy(payload: CheckProxyPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    return ig.check_proxy(payload.proxy)
 
 
 @app.post("/account-info")

@@ -35,6 +35,7 @@ function Proxies() {
   const [attachFor, setAttachFor] = useState<string | null>(null)  // id прокси, у которого открыт выбор аккаунта
   const [attachSel, setAttachSel] = useState('')                    // выбранный в пикере аккаунт
   const [newAcctProxy, setNewAcctProxy] = useState<string | null>(null)  // presetProxy для модалки нового аккаунта
+  const [ipCheck, setIpCheck] = useState<Record<string, { loading?: boolean; ip?: string; country?: string; isp?: string; error?: string }>>({})  // результат «Проверить IP» по id прокси
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -88,6 +89,39 @@ function Proxies() {
     else setMsg('Не удалось отвязать')
   }
 
+  // «Проверить IP»: спрашивает воркер, какой исходящий IP/страна/провайдер у прокси —
+  // видно, работает ли прокси и не дата-центровый/чёрносписочный ли это IP.
+  const runCheck = async (p: ProxyItem) => {
+    setIpCheck((s) => ({ ...s, [p.id]: { loading: true } }))
+    try {
+      const r = await fetch('/api/proxies/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proxyId: p.id }) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok || d.ok === false) setIpCheck((s) => ({ ...s, [p.id]: { error: d.error ?? 'прокси не отвечает' } }))
+      else setIpCheck((s) => ({ ...s, [p.id]: { ip: d.ip, country: d.country, isp: d.isp } }))
+    } catch { setIpCheck((s) => ({ ...s, [p.id]: { error: 'ошибка сети' } })) }
+  }
+
+  // Блок «Проверить IP» — общий для пуловых и приватных карточек
+  const ipCheckBlock = (p: ProxyItem) => {
+    const c = ipCheck[p.id]
+    return (
+      <div className="mt-2.5 pt-2.5 border-t border-line/40 flex items-center gap-2 flex-wrap">
+        <button onClick={() => runCheck(p)} disabled={c?.loading}
+          className="inline-flex items-center gap-1.5 text-[11.5px] font-medium text-subt hover:text-brand disabled:opacity-50 transition-colors">
+          <RefreshCw className={cn('w-3 h-3', c?.loading && 'animate-spin')} /> Проверить IP
+        </button>
+        {c?.error && <span className="text-[11px] text-bad">✕ {c.error}</span>}
+        {c?.ip && (
+          <span className="text-[11px] inline-flex items-center gap-1.5 flex-wrap">
+            <span className="font-mono text-ink">{c.ip}</span>
+            {c.country && <span className="px-1.5 py-0.5 rounded-md bg-canvas border border-line/50 text-subt">{c.country}</span>}
+            {c.isp && <span className="text-subt truncate max-w-[220px]" title={c.isp}>{c.isp}</span>}
+          </span>
+        )}
+      </div>
+    )
+  }
+
   const usageColor = (n: number) => (n >= cap ? 'text-bad' : n >= Math.ceil(cap * 0.7) ? 'text-warn' : 'text-ok')
 
   // Чипы привязанных аккаунтов (в приватных — с кнопкой «отвязать»)
@@ -132,6 +166,7 @@ function Proxies() {
         <button onClick={() => setPendingDel(p)} className="text-subt hover:text-bad p-2 shrink-0" title="Удалить прокси"><Trash2 className="w-4 h-4" /></button>
       </div>
       <div className="mt-2.5 pt-2.5 border-t border-line/40">{accountList(p.accounts)}</div>
+      {ipCheckBlock(p)}
     </div>
   )
 
@@ -183,6 +218,8 @@ function Proxies() {
             <p className="text-[11px] text-subt mt-1.5">Нет доступных аккаунтов. Добавьте новый через «Новый аккаунт».</p>
           )}
         </div>
+
+        {ipCheckBlock(p)}
       </div>
     )
   }
