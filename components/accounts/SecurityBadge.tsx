@@ -21,7 +21,7 @@ interface AccLike {
   role?: string | null
 }
 
-interface SecCtx { draftCount?: number; allowNoDrafts?: boolean }
+interface SecCtx { draftCount?: number; allowNoDrafts?: boolean; totalFires?: number }
 
 // Флагманский бейдж «Индекс безопасности». size='lg' — с подписью и /100.
 // При наведении — разбор по факторам (что снижает счёт, что в порядке), не просто число.

@@ -1373,7 +1373,7 @@ function AccountCard({ acc, campaigns, activeTypes, onOpen, onOpenLog, index = 0
           <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
             <span className={cn('w-1.5 h-1.5 rounded-full', PLATE_DOT[ps])} />
             <span className="text-[10.5px] text-subt">{PLATE_LABEL[ps]}</span>
-            <SecurityBadge acc={acc} ctx={{ draftCount, allowNoDrafts }} />
+            <SecurityBadge acc={acc} ctx={{ draftCount, allowNoDrafts, totalFires: fires }} />
             <Tooltip content={acc.proxy ? 'Прокси подключён' : 'Без прокси — высокий риск бана'}>
               <span className={cn('inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-md',
                 acc.proxy ? 'text-ok bg-ok/10' : 'text-bad bg-bad/10')}>

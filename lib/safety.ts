@@ -31,6 +31,7 @@ export function securityIndex(acc: {
 }, ctx?: {
   draftCount?: number      // сколько живых черновых (HELPER) у владельца — глобально
   allowNoDrafts?: boolean   // включено ли «работать без черновых» (основной парсит сам)
+  totalFires?: number       // сколько раз кампании этого аккаунта сработали за всё время
 }): Safety {
   const factors: SafetyFactor[] = []
   const push = (ok: boolean, label: string, delta: number) => factors.push({ ok, label, delta: ok ? 0 : delta })
@@ -70,8 +71,9 @@ export function securityIndex(acc: {
     push(true, 'Дневные лимиты далеки от потолка', 0)
   }
 
-  // 5. Прокси — без него все действия идут с «домашнего» IP бота, риск бана заметно выше
-  if (!acc.proxy) push(false, 'Нет прокси', 20)
+  // 5. Прокси — без него все действия идут с «домашнего» IP бота, риск бана заметно выше.
+  // Это один из самых прямых сигналов для Instagram — штраф весомый.
+  if (!acc.proxy) push(false, 'Нет прокси', 35)
   else push(true, 'Прокси подключён', 0)
 
   // 5b. Черновые (парсеры) берут на себя палевную работу (скрейп, лайки, подписки),
@@ -81,10 +83,10 @@ export function securityIndex(acc: {
       push(true, `Черновые подключены (${ctx.draftCount}) — основной защищён`, 0)
     } else if (ctx.allowNoDrafts) {
       // «Работать без черновых» включено → основной сам парсит = прямой риск бана
-      push(false, 'Нет черновых: основной парсит сам — риск бана', 25)
+      push(false, 'Нет черновых: основной парсит сам — прямой риск бана', 45)
     } else {
-      // Черновых нет, но парсинг основным выключен → бан не грозит, зато кампании стоят
-      push(false, 'Нет черновых — кампании стоят (основной защищён, но не работает)', 10)
+      // Черновых нет вообще → без хотя бы одного автоматизация не запускается совсем
+      push(false, 'Нет черновых — автоматизация не запущена', 25)
     }
   }
 
@@ -98,7 +100,21 @@ export function securityIndex(acc: {
     else push(true, 'Проверялся недавно', 0)
   }
 
-  // 7. Прогрев — молодой аккаунт работает на сниженных лимитах (это защита, не штраф).
+  // 7. Частота срабатываний — очень активная автоматизация (много кампаний, короткие задержки)
+  // выглядит для Instagram как спам-паттерн, даже если формально в рамках дневных лимитов.
+  if (ctx?.totalFires !== undefined) {
+    const created = acc.createdAt ? new Date(acc.createdAt) : null
+    const ageDays = created && Number.isFinite(created.getTime())
+      ? Math.max(1, (Date.now() - created.getTime()) / 86_400_000)
+      : 1
+    const perDay = ctx.totalFires / ageDays
+    if (ctx.totalFires === 0) push(true, 'Пока не срабатывал', 0)
+    else if (perDay >= 40) push(false, `Очень частые срабатывания (${perDay.toFixed(1)}/день) — похоже на спам-паттерн для Instagram`, 30)
+    else if (perDay >= 15) push(false, `Много срабатываний в день (${perDay.toFixed(1)})`, 15)
+    else push(true, `Частота срабатываний в норме (${perDay.toFixed(1)}/день)`, 0)
+  }
+
+  // 8. Прогрев — молодой аккаунт работает на сниженных лимитах (это защита, не штраф).
   const wpct = warmupPct(acc.createdAt)
   if (wpct < 100) push(true, `Прогрев: лимиты ${wpct}% (аккаунт разгоняется)`, 0)
   else push(true, 'Прогрет — лимиты на 100%', 0)

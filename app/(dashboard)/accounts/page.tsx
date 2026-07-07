@@ -220,7 +220,7 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
                 <span className={cn('flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-0.5 rounded-full', st.pill)}>
                   <span className={cn('w-1.5 h-1.5 rounded-full', st.dot)} /> {st.t}
                 </span>
-                {ra && <SecurityBadge acc={ra} ctx={secCtx} size="lg" />}
+                {ra && <SecurityBadge acc={ra} ctx={{ ...secCtx, totalFires }} size="lg" />}
                 {ra?.lastChecked && (
                   <span className="flex items-center gap-1 text-[11px] text-subt">
                     <Calendar className="w-3 h-3" /> {new Date(ra.lastChecked).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
@@ -624,7 +624,7 @@ function Accounts() {
                           status === 'ACTIVE' ? 'bg-ok' : status === 'BLOCKED' ? 'bg-bad' : 'bg-warn')} />
                         {status === 'ACTIVE' ? 'Активен' : status === 'BLOCKED' ? 'Заблокирован' : 'Пауза'}
                       </span>
-                      {ra && <SecurityBadge acc={ra} ctx={secCtx} />}
+                      {ra && <SecurityBadge acc={ra} ctx={{ ...secCtx, totalFires: st.runs }} />}
                     </div>
                   </div>
 
