@@ -80,12 +80,35 @@ export async function viewStories(session: object, userId: string, like = false,
   return workerFetch<{ status: string; viewed: number; liked: number }>('/user-stories', { sessionData: session, userId, like, proxy })
 }
 
+export interface LoginResult {
+  sessionData?: object
+  needsChallenge?: boolean
+  needs2fa?: boolean
+  stepName?: string
+  username?: string
+  contact?: { email?: string; phone?: string }
+  methods?: string[]        // доступные каналы challenge: 'email' | 'sms'
+  sentTo?: string | null    // куда отправлен код: 'email' | 'sms'
+  method?: string           // для 2FA: 'sms' | 'app'
+  phone?: string            // для 2FA: маскированный номер
+}
+
 export async function loginByCredentials(username: string, password: string, proxy?: string, totpSecret?: string) {
-  return workerFetch<{ sessionData?: object; needsChallenge?: boolean; stepName?: string; username?: string }>('/login', { username, password, proxy, totpSecret })
+  return workerFetch<LoginResult>('/login', { username, password, proxy, totpSecret })
 }
 
 export async function submitChallengeCode(username: string, code: string) {
   return workerFetch<{ sessionData: object }>('/login-challenge', { username, code })
+}
+
+/** Повторно отправить код challenge (или сменить канал: 'email' | 'sms'). */
+export async function resendChallengeCode(username: string, method: 'email' | 'sms' = 'email') {
+  return workerFetch<{ ok: boolean; sentTo: string; stepName: string }>('/challenge-resend', { username, method })
+}
+
+/** Подтвердить вход по коду 2FA (SMS/приложение), когда 2FA-ключ не задан. */
+export async function submitTwoFactorCode(username: string, code: string) {
+  return workerFetch<{ sessionData: object }>('/login-2fa', { username, code })
 }
 
 export async function loginByCookies(cookies: object, proxy?: string) {

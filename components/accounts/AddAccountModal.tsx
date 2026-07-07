@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { X, AtSign, Lock, Globe, Loader2, FolderTree } from 'lucide-react'
+import { X, AtSign, Lock, Globe, Loader2, FolderTree, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useStore } from '@/lib/store'
 import { cn } from '@/lib/utils'
@@ -46,8 +46,27 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
   const [proxy, setProxy]       = useState(presetProxy ?? '')
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState('')
-  const [step, setStep]         = useState<'form' | 'auth'>('form')
+  const [step, setStep]         = useState<'form' | 'auth' | 'challenge'>('form')
   const [pasteNote, setPasteNote] = useState('')
+
+  // Challenge (код с почты/SMS при входе с нового устройства) ИЛИ 2FA — контекст из ответа
+  // 202 роута /api/accounts/auth, с которым возвращаемся на /challenge после ввода кода.
+  const [challenge, setChallenge] = useState<{
+    kind: 'challenge' | '2fa'
+    username: string
+    proxyId: string | null
+    role: string
+    sectionId: string | null
+    stepName: string
+    sentTo?: string | null
+    methods?: string[]
+    contact?: { email?: string; phone?: string }
+    method?: string   // 2fa: 'sms' | 'app'
+    phone?: string     // 2fa: маскированный номер
+  } | null>(null)
+  const [code, setCode] = useState('')
+  const [resending, setResending] = useState(false)
+  const [resendNote, setResendNote] = useState('')
 
   // Умная вставка: если вставили строку «логин пароль 2FA-ключ» — раскладываем по полям
   const onCredsPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
@@ -151,6 +170,29 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
         body: JSON.stringify(body),
       })
       const data = await res.json()
+
+      // Instagram запросил код (challenge с почты/SMS или 2FA) → шаг ввода кода.
+      if (res.status === 202 && (data.needsChallenge || data.needs2fa)) {
+        setChallenge({
+          kind: data.needs2fa ? '2fa' : 'challenge',
+          username: data.username,
+          proxyId: data.proxyId ?? null,
+          role: data.role ?? 'RESPONDER',
+          sectionId: data.sectionId ?? null,
+          stepName: data.stepName ?? '',
+          sentTo: data.sentTo ?? null,
+          methods: data.methods ?? [],
+          contact: data.contact,
+          method: data.method,
+          phone: data.phone,
+        })
+        setCode('')
+        setError('')
+        setResendNote('')
+        setStep('challenge')
+        return
+      }
+
       if (!res.ok) { setError(data.error ?? 'Ошибка авторизации'); setStep('form'); return }
 
       addAccount({ id: data.account.id, username: data.account.username, followers: 0 })
@@ -163,6 +205,71 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
       setLoading(false)
     }
   }
+
+  // Шаг 2: пользователь ввёл код из письма/SMS → подтверждаем и сохраняем аккаунт.
+  const submitCode = async () => {
+    if (!challenge || !code.trim()) return
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch('/api/accounts/auth/challenge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: challenge.username,
+          code: code.trim(),
+          proxyId: challenge.proxyId,
+          role: challenge.role,
+          sectionId: challenge.sectionId,
+          mode: challenge.kind === '2fa' ? '2fa' : undefined,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.error ?? 'Неверный код подтверждения'); return }
+
+      addAccount({ id: data.account.id, username: data.account.username, followers: 0 })
+      onAdded(data.account.username)
+      onClose()
+    } catch {
+      setError('Ошибка сети — проверьте подключение')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Повторно отправить код challenge (или на другой канал: 'email' | 'sms').
+  const resendCode = async (method: 'email' | 'sms') => {
+    if (!challenge) return
+    setResending(true); setResendNote(''); setError('')
+    try {
+      const res = await fetch('/api/accounts/auth/resend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: challenge.username, method }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.error ?? 'Не удалось отправить код повторно'); return }
+      setChallenge({ ...challenge, sentTo: data.sentTo })
+      setResendNote(data.sentTo === 'sms' ? '✓ Код отправлен повторно по SMS' : '✓ Код отправлен повторно на почту')
+    } catch {
+      setError('Ошибка сети — проверьте подключение')
+    } finally {
+      setResending(false)
+    }
+  }
+
+  // Куда Instagram отправил код — чтобы подсказать пользователю, где искать.
+  const chDest = (() => {
+    if (!challenge) return ''
+    if (challenge.kind === '2fa') {
+      return challenge.method === 'app'
+        ? 'из приложения-аутентификатора'
+        : `по SMS${challenge.phone ? ` на ${challenge.phone}` : ''}`
+    }
+    if (challenge.sentTo === 'email') return `на почту${challenge.contact?.email ? ` ${challenge.contact.email}` : ''}`
+    if (challenge.sentTo === 'sms') return `по SMS${challenge.contact?.phone ? ` на ${challenge.contact.phone}` : ''}`
+    return 'на почту или по SMS'
+  })()
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in" onClick={onClose}>
@@ -218,6 +325,66 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
             <Loader2 className="w-10 h-10 text-brand animate-spin" />
             <div className="font-medium">Авторизация в Instagram…</div>
             <div className="text-[13px] text-subt">Это может занять 15–30 секунд</div>
+          </div>
+        ) : step === 'challenge' ? (
+          <div className="space-y-4">
+            <div className="flex flex-col items-center text-center gap-2 pt-1">
+              <div className="w-12 h-12 rounded-2xl bg-brand/10 flex items-center justify-center">
+                <ShieldCheck className="w-6 h-6 text-brand" />
+              </div>
+              <div className="font-semibold text-[17px]">
+                {challenge?.kind === '2fa' ? 'Двухфакторная аутентификация' : 'Подтверждение входа'}
+              </div>
+              <div className="text-[13px] text-subt leading-relaxed">
+                {challenge?.kind === '2fa'
+                  ? <>Введите код двухфакторной аутентификации {chDest} для <b>@{challenge?.username}</b>.</>
+                  : <>Instagram отправил код подтверждения {chDest} аккаунта <b>@{challenge?.username}</b>. Введите его ниже.</>}
+              </div>
+            </div>
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
+              onKeyDown={(e) => e.key === 'Enter' && submitCode()}
+              autoFocus inputMode="numeric"
+              className="field text-center tracking-[0.4em] text-[20px] font-mono"
+              placeholder="——————"
+            />
+
+            {/* Повтор / выбор канала — только для challenge (у 2FA источник кода фиксирован) */}
+            {challenge?.kind === 'challenge' && (
+              <div className="text-[12px] text-subt text-center leading-relaxed">
+                Не пришёл код?{' '}
+                <button type="button" disabled={resending}
+                  onClick={() => resendCode(challenge.sentTo === 'sms' ? 'sms' : 'email')}
+                  className="text-brand font-medium hover:underline disabled:opacity-50">
+                  {resending ? 'Отправляю…' : 'Отправить ещё раз'}
+                </button>
+                {challenge.methods?.includes('sms') && challenge.methods?.includes('email') && (
+                  <>
+                    {' · '}
+                    <button type="button" disabled={resending}
+                      onClick={() => resendCode(challenge.sentTo === 'sms' ? 'email' : 'sms')}
+                      className="text-brand font-medium hover:underline disabled:opacity-50">
+                      {challenge.sentTo === 'sms' ? 'Прислать на почту' : 'Прислать по SMS'}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+            {resendNote && <div className="text-[12px] text-ok text-center">{resendNote}</div>}
+
+            {error && <div className="text-bad text-[12.5px] whitespace-pre-wrap break-words bg-bad/[0.06] rounded-2xl p-3 max-h-56 overflow-y-auto leading-relaxed">{error}</div>}
+            <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed">
+              {challenge?.kind === '2fa'
+                ? 'Код из приложения обновляется каждые 30 секунд. Не закрывайте это окно.'
+                : 'Код приходит в течение минуты. Проверьте папку «Спам». Не закрывайте это окно.'}
+            </div>
+            <div className="flex gap-3">
+              <Button variant="secondary" className="flex-1" onClick={() => { setStep('form'); setError(''); setCode(''); setResendNote('') }} disabled={loading}>Назад</Button>
+              <Button className="flex-1" onClick={submitCode} disabled={loading || !code.trim()}>
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Подтвердить'}
+              </Button>
+            </div>
           </div>
         ) : mode === 'password' ? (
           <div className="space-y-4">

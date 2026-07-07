@@ -116,6 +116,34 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-07 (14)
+
+#### feat(логин): повтор кода + выбор почта/SMS + интерактивный 2FA + капча 2captcha — вход «до идеала»
+
+Продолжение записи (13). ⚠️ **Нужен редеплой Python-воркера** (проверить: `<worker-url>/health` → `"build":"2026-07-07-stage5-login"`, `"captcha":true` если ключ задан).
+
+- **Капча (2captcha).** `_try_solve_recaptcha` уже был подключён в `login_by_credentials` (шаг `recaptcha`/`captcha`) и `2captcha-python` уже в `requirements.txt` — не хватало только ключа. ⚠️ Ключ задаётся **переменной окружения `TWOCAPTCHA_API_KEY`** на Python-сервисе (Railway → Variables). В код НЕ хардкодить (утечёт в git). `/health` показывает `captcha:true`, когда ключ подхвачен.
+- **Повтор кода + выбор канала (challenge).** `select_verify_method` теперь захватывает доступные каналы (маскированные email/телефон из `step_data`) и куда отправлен код (`sentTo`); по умолчанию шлёт на почту, если её нет — на SMS. Новый воркер-эндпоинт `POST /challenge-resend {username, method}` (`resend_challenge_code`), Next.js-роут `app/api/accounts/auth/resend/route.ts`, клиент `resendChallengeCode`. В модалке — «Не пришёл код? Отправить ещё раз · Прислать по SMS/на почту».
+- **Интерактивный 2FA (без ключа).** Раньше `TwoFactorRequired` без 2FA-ключа = ошибка «отключите 2FA». Теперь при отсутствии ключа воркер сохраняет `two_factor_identifier` (`kind:'2fa'` в challenge-хранилище) и возвращает `needs2fa` (202); новый `POST /login-2fa` (`submit_2fa_code`) подтверждает вход по коду из SMS/приложения (ручной вызов `accounts/two_factor_login/`, `verification_method` 1=SMS/3=app). ⚠️ **Экспериментально** — путь 2FA-по-SMS не протестирован локально (нужен реальный аккаунт). Путь с 2FA-ключом (TOTP) НЕ тронут — регрессии нет.
+- **UI (`AddAccountModal`)** — шаг `'challenge'` теперь обслуживает и challenge, и 2FA (заголовок/текст/подсказка по `kind`), показывает КУДА отправлен код (`chDest`: почта/SMS + маскированный контакт), кнопки повтора/смены канала, `submitCode` шлёт `mode:'2fa'` для 2FA.
+- **`app/api/accounts/auth/route.ts`** — 202 теперь несёт `needs2fa`/`contact`/`methods`/`sentTo`/`method`/`phone`. **`.../challenge/route.ts`** — параметр `mode` выбирает `submitTwoFactorCode` vs `submitChallengeCode`.
+
+Проверено: `tsc --noEmit` чисто, `python -m py_compile` чисто. End-to-end — только после деплоя (нужны реальный аккаунт + чистый прокси). Напоминание: challenge/2FA-флоу срабатывает лишь когда вход ДОШЁЛ до запроса кода — с выжженным датацентр-прокси он падает раньше на «IP blacklist».
+
+### 2026-07-07 (13)
+
+#### feat(логин): достроен ввод кода подтверждения (challenge) в UI — вход «как в LeadFeed»
+
+По мотивам разбора leadfeed.ru: их вход = логин/пароль → индивидуальный прокси → Instagram шлёт код на почту/SMS («новое устройство») → пользователь вводит код → готово. У нас **бэкенд этого флоу был готов на 90%, но оборван в UI**: воркер (`login_by_credentials` → `select_verify_method` запрашивает код, `submit_challenge_code`, persist challenge на диск), `worker.py` (`/login` 202 + `/login-challenge`), `lib/instagram/client.ts` (`submitChallengeCode`) и `accounts/auth` (отдаёт 202 `needsChallenge`) — всё было. Но `AddAccountModal` не обрабатывал 202: `res.ok` для 202 = true → код проваливался в `addAccount(data.account.id)` с `data.account===undefined` → падал в catch → «Ошибка сети». И **не было Next.js-роута** для отправки кода (браузеру нельзя бить в воркер напрямую — нужен секрет). Итог: при запросе кода вход просто «умирал».
+
+Достроено (⚠️ **редеплой Python НЕ нужен** — воркер уже всё умеет, билд `2026-07-07-stage3`):
+- **`lib/accountPersist.ts` (новый):** `persistInstagramAccount()` — единая точка сохранения аккаунта для всех путей входа (пароль/куки/код), чтобы поля не разъезжались.
+- **`app/api/accounts/auth/route.ts`:** сохранение через хелпер; в ответ 202 добавлен КОНТЕКСТ (`proxyId`, `role`, `sectionId`) — с ним клиент вернётся на /challenge. `proxyUrl` (с логином:паролем прокси) клиенту НЕ отдаём — только `proxyId`, по нему /challenge достаёт URL из БД сам.
+- **`app/api/accounts/auth/challenge/route.ts` (новый):** принимает `{username, code, proxyId?, role?, sectionId?}`, скоуп по юзеру сессии, `proxyId`→URL из БД (только свой прокси), `submitChallengeCode()` → воркер, затем `persistInstagramAccount()`. Выжженный по коду IP метится `markProxyBlocked`.
+- **`components/accounts/AddAccountModal.tsx`:** новый шаг `'challenge'` — на 202 показывает «Instagram отправил код {на почту/по SMS} @username» (направление из `stepName`), поле для кода (numeric, до 8 цифр), «Подтвердить»/«Назад», обработка неверного кода. `submitCode()` бьёт в новый роут.
+
+⚠️ **Важно:** challenge-флоу — это НОРМАЛЬНОЕ «новое устройство → код» (как у LeadFeed на ЧИСТОМ IP). Он НЕ лечит блокировку по IP: с выжженным датацентр-прокси вход падает РАНЬШЕ, на «IP blacklist», до шага с кодом. Ценность раскрывается только с чистым резидентным/мобильным прокси. Проверено: `tsc --noEmit` чисто. Реальный прогон — только после деплоя (нужны настоящий аккаунт + чистый прокси, локально IG-запросы не воспроизвести).
+
 ### 2026-07-07 (12)
 
 #### fix(логин): диагноз по реальному ответу IG — ротация прокси + пометка выжженных Instagram IP + скролл модалки

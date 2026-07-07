@@ -29,7 +29,8 @@ def health():
         ver = getattr(instagrapi, "__version__", "unknown")
     except Exception as e:
         ver = f"import-error: {e}"
-    return {"ok": True, "build": "2026-07-07-stage3", "instagrapi": ver, "app_version": ig._IG_APP_VERSION}
+    return {"ok": True, "build": "2026-07-07-stage5-login", "instagrapi": ver, "app_version": ig._IG_APP_VERSION,
+            "captcha": bool(ig.TWOCAPTCHA_KEY)}
 
 
 class SessionPayload(BaseModel):
@@ -131,6 +132,16 @@ class ChallengeCodePayload(BaseModel):
     code: str
 
 
+class ChallengeResendPayload(BaseModel):
+    username: str
+    method: str = 'email'   # 'email' (по умолчанию) | 'sms'
+
+
+class TwoFactorPayload(BaseModel):
+    username: str
+    code: str
+
+
 class LikersPayload(BaseModel):
     sessionData: dict
     username: str
@@ -219,8 +230,8 @@ def login(payload: LoginPayload, x_worker_secret: str = Header(...)):
     _check_secret(x_worker_secret)
     try:
         result = ig.login_by_credentials(payload.username, payload.password, payload.proxy, payload.totpSecret)
-        if result.get('needsChallenge'):
-            # 202 = challenge required, not an error
+        if result.get('needsChallenge') or result.get('needs2fa'):
+            # 202 = требуется код (challenge с почты/SMS или 2FA), не ошибка
             return JSONResponse(status_code=202, content=result)
         return result
     except Exception as e:
@@ -283,6 +294,26 @@ def login_challenge(payload: ChallengeCodePayload, x_worker_secret: str = Header
         return result
     except Exception as e:
         logging.warning("Challenge code failed for %s: %s", payload.username, e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/challenge-resend")
+def challenge_resend(payload: ChallengeResendPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        return ig.resend_challenge_code(payload.username, payload.method)
+    except Exception as e:
+        logging.warning("Challenge resend failed for %s: %s", payload.username, e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/login-2fa")
+def login_2fa(payload: TwoFactorPayload, x_worker_secret: str = Header(...)):
+    _check_secret(x_worker_secret)
+    try:
+        return ig.submit_2fa_code(payload.username, payload.code)
+    except Exception as e:
+        logging.warning("2FA code failed for %s: %s", payload.username, e)
         raise HTTPException(status_code=400, detail=str(e))
 
 

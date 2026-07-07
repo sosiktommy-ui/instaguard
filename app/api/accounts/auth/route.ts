@@ -4,6 +4,7 @@ import { loginByCredentials, loginByCookies } from '@/lib/instagram/client'
 import { getCurrentUser } from '@/lib/auth'
 import { normalizeCookies } from '@/lib/cookies'
 import { pickPoolProxy, isInstagramBlacklist, markProxyBlocked } from '@/lib/proxyPool'
+import { persistInstagramAccount } from '@/lib/accountPersist'
 
 // host:port прокси без логина/пароля — чтобы в ошибке было видно, ЧЕРЕЗ КАКОЙ IP шёл вход
 // (сверить с вердиктом «Проверить IP»: датацентр этот адрес или резидентный).
@@ -99,12 +100,28 @@ export async function POST(req: NextRequest) {
       clean = username.replace(/^@/, '').trim().toLowerCase()
       try {
         const result = await loginByCredentials(clean, password, proxyUrl || undefined, typeof totpSecret === 'string' && totpSecret.trim() ? totpSecret.trim() : undefined)
-        if (result.needsChallenge || !result.sessionData) {
+        if (result.needsChallenge || result.needs2fa || !result.sessionData) {
+          // Instagram запросил код: challenge (почта/SMS «новое устройство») ИЛИ 2FA.
+          // Возвращаем 202 + КОНТЕКСТ, с которым клиент вернётся на /challenge после ввода
+          // кода (сохранить аккаунт с тем же прокси/ролью/разделом). proxyUrl (с логином:
+          // паролем прокси) НЕ отдаём — только proxyId (по нему /challenge достанет URL из БД).
+          const is2fa = Boolean(result.needs2fa)
           return NextResponse.json({
-            needsChallenge: true,
+            needsChallenge: is2fa ? undefined : true,
+            needs2fa: is2fa || undefined,
             stepName: result.stepName,
+            contact: result.contact,
+            methods: result.methods,
+            sentTo: result.sentTo,
+            method: result.method,
+            phone: result.phone,
             username: result.username ?? clean,
-            error: 'Instagram требует подтверждение (challenge). Введите код из письма/SMS.',
+            proxyId,
+            role: accountRole,
+            sectionId: validSection,
+            error: is2fa
+              ? 'Instagram запросил код двухфакторной аутентификации (2FA).'
+              : 'Instagram требует подтверждение (challenge). Введите код из письма/SMS.',
           }, { status: 202 })
         }
         sessionData = result.sessionData
@@ -120,25 +137,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const existing = await prisma.instagramAccount.findFirst({ where: { username: clean, userId: user.id } })
-
-    const account = existing
-      ? await prisma.instagramAccount.update({
-          where: { id: existing.id },
-          data: { sessionData, status: 'ACTIVE', lastChecked: new Date(), proxy: proxyUrl, proxyId, role: accountRole, sectionId: validSection },
-        })
-      : await prisma.instagramAccount.create({
-          data: {
-            userId: user.id,
-            username: clean,
-            role: accountRole,
-            sessionData,
-            proxy: proxyUrl,
-            proxyId,
-            status: 'ACTIVE',
-            sectionId: validSection,
-          },
-        })
+    const account = await persistInstagramAccount({
+      userId: user.id,
+      username: clean,
+      sessionData,
+      proxyUrl,
+      proxyId,
+      role: accountRole,
+      sectionId: validSection,
+    })
 
     return NextResponse.json({ ok: true, account: { id: account.id, username: account.username, status: account.status } })
   } catch (e: any) {

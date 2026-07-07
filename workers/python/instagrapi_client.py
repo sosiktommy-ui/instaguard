@@ -652,14 +652,36 @@ def login_by_credentials(username: str, password: str, proxy: str | None = None,
         return {'sessionData': cl.get_settings()}
 
     except TwoFactorRequired:
-        # Instagram запросил 2FA. Если есть ключ — повторяем вход с кодом; иначе пробрасываем.
+        # Instagram запросил 2FA. Если есть ключ — генерируем код и входим сразу.
         if totp_secret:
             try:
                 cl.login(username, password, verification_code=_totp_code(cl, totp_secret))
                 return {'sessionData': cl.get_settings()}
             except Exception as e2:
                 raise Exception(f"2FA код не принят — проверьте 2FA-ключ ({e2})")
-        raise
+
+        # Ключа нет — интерактивный ввод кода (SMS / приложение), как в LeadFeed.
+        # Сохраняем two_factor_identifier + устройство и ждём код от пользователя.
+        tfi = (cl.last_json or {}).get('two_factor_info', {}) or {}
+        identifier = tfi.get('two_factor_identifier')
+        if not identifier:
+            raise  # не смогли получить идентификатор — прежнее поведение (проброс ошибки)
+        sms_on = bool(tfi.get('sms_two_factor_on'))
+        totp_on = bool(tfi.get('totp_two_factor_on'))
+        phone = tfi.get('obfuscated_phone_number') or ''
+        _save_challenge(username, {
+            'kind': '2fa',
+            'settings': cl.get_settings(),
+            'proxy': proxy,
+            'two_factor_identifier': identifier,
+            'username': username,
+            'sms_on': sms_on,
+            'totp_on': totp_on,
+            'phone': phone,
+        })
+        method = 'app' if (totp_on and not sms_on) else 'sms'
+        logger.info("2FA required for @%s (method=%s) — ждём код от пользователя", username, method)
+        return {'needs2fa': True, 'method': method, 'phone': phone, 'username': username}
 
     except ChallengeRequired:
         challenge = cl.last_json.get('challenge', {})
@@ -711,27 +733,56 @@ def login_by_credentials(username: str, password: str, proxy: str | None = None,
                 except Exception as e:
                     logger.warning("Captcha submit failed: %s", e)
 
+        # Какие каналы доступны и куда (маскированные email/телефон) — чтобы показать в UI
+        # и дать выбор/повтор. step_data приходит в ответе GET challenge.
+        step_data = challenge_data.get('step_data') or {}
+        email_masked = step_data.get('email') or ''
+        phone_masked = step_data.get('phone_number') or ''
+        methods = []
+        if email_masked:
+            methods.append('email')
+        if phone_masked:
+            methods.append('sms')
+
+        sent_to = None
         if step_name == 'select_verify_method':
-            # Trigger code send to email (choice=1)
+            # По умолчанию отправляем на почту (choice=1); если её нет — на SMS (choice=0).
+            default_choice = '1' if email_masked else '0'
             try:
                 send_resp = cl.private.post(
                     f'https://i.instagram.com{api_path}',
-                    data={'choice': '1'}
+                    data={'choice': default_choice}
                 ).json()
                 step_name = send_resp.get('step_name', step_name)
-                logger.info("Email code requested, next step=%s", step_name)
+                sent_to = 'email' if default_choice == '1' else 'sms'
+                logger.info("Code requested via %s, next step=%s", sent_to, step_name)
             except Exception as e:
-                logger.warning("Could not request email code: %s", e)
+                logger.warning("Could not request code: %s", e)
 
-        # Сохраняем challenge-сессию (память + диск) — submit_challenge_code продолжит,
+        if not sent_to:
+            # Если IG сразу поставил шаг verify_email/verify_sms — код уже ушёл на этот канал
+            if 'email' in step_name:
+                sent_to = 'email'
+            elif 'sms' in step_name or 'phone' in step_name:
+                sent_to = 'sms'
+
+        # Сохраняем challenge-сессию (память + диск) — submit_challenge_code/resend продолжат,
         # даже если процесс воркера перезапустится до ввода кода.
         _save_challenge(username, {
+            'kind': 'challenge',
             'settings': cl.get_settings(),
             'api_path': api_path,
             'proxy': proxy,
+            'contact': {'email': email_masked, 'phone': phone_masked},
+            'methods': methods,
+            'sent_to': sent_to,
         })
 
-        return {'needsChallenge': True, 'stepName': step_name, 'username': username}
+        return {
+            'needsChallenge': True, 'stepName': step_name, 'username': username,
+            'contact': {'email': email_masked, 'phone': phone_masked},
+            'methods': methods, 'sentTo': sent_to,
+        }
 
     except Exception as e:
         # Прикрепляем сырой ответ Instagram к ошибке — «снимок» для диагностики в UI.
@@ -748,6 +799,8 @@ def submit_challenge_code(username: str, code: str) -> dict:
     pending = _load_challenge(username)
     if not pending:
         raise Exception("Нет активного challenge. Начните авторизацию заново.")
+    if pending.get('kind') == '2fa':
+        raise Exception("Этот аккаунт запросил код 2FA, а не challenge — введите код двухфакторной аутентификации.")
 
     cl = Client()
     if pending.get('proxy'):
@@ -777,6 +830,77 @@ def submit_challenge_code(username: str, code: str) -> dict:
 
     except Exception as e:
         raise Exception(f"Ошибка подтверждения: {e}")
+
+
+def resend_challenge_code(username: str, method: str = 'email') -> dict:
+    """Повторно отправить код challenge (или сменить канал: email/sms).
+    method: 'email' (choice=1) | 'sms' (choice=0)."""
+    pending = _load_challenge(username)
+    if not pending or pending.get('kind') == '2fa':
+        raise Exception("Нет активного challenge. Начните авторизацию заново.")
+
+    cl = Client()
+    if pending.get('proxy'):
+        cl.set_proxy(_resolve_proxy_scheme(pending['proxy']))
+    cl.set_settings(pending['settings'])
+
+    choice = '0' if method == 'sms' else '1'
+    try:
+        resp = cl.private.post(
+            f'https://i.instagram.com{pending["api_path"]}',
+            data={'choice': choice}
+        ).json()
+    except Exception as e:
+        raise Exception(f"Не удалось отправить код повторно: {e}")
+
+    sent_to = 'sms' if choice == '0' else 'email'
+    pending['sent_to'] = sent_to
+    pending['settings'] = cl.get_settings()
+    _save_challenge(username, pending)
+    logger.info("Challenge code resent via %s for @%s", sent_to, username)
+    return {'ok': True, 'sentTo': sent_to, 'stepName': resp.get('step_name', '')}
+
+
+def submit_2fa_code(username: str, code: str) -> dict:
+    """Подтвердить вход по коду двухфакторной аутентификации (SMS/приложение), когда
+    2FA-ключ не задан. Использует сохранённый two_factor_identifier. Returns {'sessionData'}.
+    ⚠️ Экспериментально — протестировать на реальном аккаунте с 2FA-по-SMS после деплоя."""
+    pending = _load_challenge(username)
+    if not pending or pending.get('kind') != '2fa':
+        raise Exception("Нет активного запроса 2FA. Начните авторизацию заново.")
+
+    cl = Client()
+    if pending.get('proxy'):
+        cl.set_proxy(_resolve_proxy_scheme(pending['proxy']))
+    cl.set_settings(pending['settings'])
+    cl.username = username
+
+    identifier = pending['two_factor_identifier']
+    code_clean = re.sub(r'\D', '', code or '')
+    # verification_method: 1 = SMS, 3 = приложение (TOTP). Берём по тому, что включено у аккаунта.
+    method = '1' if pending.get('sms_on') else '3'
+    data = {
+        "verification_code": code_clean,
+        "phone_id": cl.phone_id,
+        "two_factor_identifier": identifier,
+        "username": username,
+        "trust_this_device": "0",
+        "guid": cl.uuid,
+        "device_id": cl.android_device_id,
+        "verification_method": method,
+    }
+    try:
+        # login=True — instagrapi обработает ответ входа (проставит authorization_data).
+        cl.private_request("accounts/two_factor_login/", data, login=True)
+    except Exception as e:
+        try:
+            e.ig_snapshot = cl.last_json
+        except Exception:
+            pass
+        raise Exception(f"2FA код не принят: {e}")
+
+    _clear_challenge(username)
+    return {'sessionData': cl.get_settings()}
 
 
 def _verify_and_username(cl: Client) -> str:
