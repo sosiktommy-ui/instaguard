@@ -116,6 +116,13 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-07 (3)
+
+#### feat: приём веб-куки из таблицы DevTools + надёжный вход по веб-сессии
+
+- **`lib/cookies.ts`:** новый разбор **табличного экспорта** (DevTools → Application → Cookies, или браузер): строка на куку, колонки через таб/2+ пробела (`name value domain path …`). Раньше такой вставленный формат не понимался (не JSON, не `k=v`) → ломался. Теперь `fromWhitespaceTable()` берёт 1-й столбец как имя, 2-й как значение; пробуется до `k=v`-парсера, `k=v; k=v` по-прежнему не задевается (регрессии нет). Проверено на реальной вставке (9 куки, sessionid/ds_user_id/csrftoken извлечены верно).
+- **Воркер `login_by_cookies` (обычные веб-куки, ⚠️ редеплой Python):** если в куках есть `sessionid` — строим `authorization_data` из него (`ds_user_id`+`sessionid`+`should_use_header_over_cookies`), чтобы instagrapi слал валидный **Bearer-заголовок**. На «голые» куки приватный API часто отвечает `login_required`, а с Bearer — ок (как штатный `login_by_sessionid`, но без задеприкейченного GraphQL — username берём через `account_info`).
+
 ### 2026-07-07 (2)
 
 #### diag: диагноз «вход не проходит» = IP в чёрном списке + кнопка «Проверить IP» у прокси

@@ -59,6 +59,22 @@ function fromCookieHeader(s: string): Record<string, string> {
   return out
 }
 
+/**
+ * Табличный экспорт из DevTools (вкладка Application → Cookies) или браузера:
+ * одна строка на куку, колонки через таб или 2+ пробела:
+ *   name <TAB> value <TAB> domain <TAB> path <TAB> expires <TAB> size …
+ * Берём первый столбец как имя куки, второй — как значение.
+ */
+function fromWhitespaceTable(s: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const line of s.split(/[\n\r]+/)) {
+    const cells = line.split(/\t|\s{2,}/).map((c) => c.trim()).filter(Boolean)
+    // имя куки — короткий токен без пробелов/«=»; значение — второй столбец
+    if (cells.length >= 2 && /^[A-Za-z0-9_.\-]+$/.test(cells[0])) out[cells[0]] = cells[1]
+  }
+  return out
+}
+
 /** Регистронезависимый поиск значения куки по имени. */
 function pick(dict: Record<string, string>, name: string): string {
   const lower = name.toLowerCase()
@@ -86,12 +102,18 @@ export function normalizeCookies(raw: string): NormalizedCookies {
     } else {
       for (const [k, v] of Object.entries(obj)) if (v != null && typeof v !== 'object') dict[k] = String(v)
     }
-  } else if (s.includes('=')) {
-    // 3) cookie-заголовок / строка k=v
-    dict = fromCookieHeader(s)
   } else {
-    // 4) один сырой токен → это sessionid
-    dict = { sessionid: s }
+    // Не JSON. Пробуем табличный экспорт (DevTools/браузер: name<TAB>value<TAB>domain…)
+    const table = fromWhitespaceTable(s)
+    if (pick(table, 'sessionid')) {
+      dict = table
+    } else if (s.includes('=')) {
+      // cookie-заголовок / строка k=v
+      dict = fromCookieHeader(s)
+    } else {
+      // один сырой токен → это sessionid
+      dict = { sessionid: s }
+    }
   }
 
   const sessionid = pick(dict, 'sessionid')

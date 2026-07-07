@@ -487,9 +487,27 @@ def login_by_cookies(cookies: dict, proxy: str | None = None) -> tuple[dict, str
         cl.set_settings(settings)
         return cl.get_settings(), _verify_and_username(cl)
 
-    # Обычные куки (словарь sessionid/csrftoken/… либо один sessionid)
+    # Обычные (веб) куки: словарь sessionid/csrftoken/ds_user_id/… либо один sessionid.
     cl = _new_client()
-    cl.private.cookies.update(cookies)
+    session_id = cookies.get('sessionid', '') if isinstance(cookies, dict) else ''
+    if session_id:
+        # Строим authorization_data из sessionid → instagrapi шлёт валидный Bearer-заголовок.
+        # На «голые» куки приватный API нередко отвечает login_required, а с Bearer — ок
+        # (так же поступает штатный login_by_sessionid).
+        ds_uid = cookies.get('ds_user_id', '')
+        if not ds_uid:
+            m = re.match(r'^(\d+)', session_id)
+            ds_uid = m.group(1) if m else ''
+        cl.set_settings({
+            "cookies": cookies,
+            "authorization_data": {
+                "ds_user_id": ds_uid,
+                "sessionid": session_id,
+                "should_use_header_over_cookies": True,
+            },
+        })
+    else:
+        cl.private.cookies.update(cookies)
     return cl.get_settings(), _verify_and_username(cl)
 
 
