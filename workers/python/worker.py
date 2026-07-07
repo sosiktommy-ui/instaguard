@@ -29,7 +29,7 @@ def health():
         ver = getattr(instagrapi, "__version__", "unknown")
     except Exception as e:
         ver = f"import-error: {e}"
-    return {"ok": True, "build": "2026-07-07-diag", "instagrapi": ver}
+    return {"ok": True, "build": "2026-07-07-stage3", "instagrapi": ver, "app_version": ig._IG_APP_VERSION}
 
 
 class SessionPayload(BaseModel):
@@ -254,6 +254,11 @@ def login(payload: LoginPayload, x_worker_secret: str = Header(...)):
             detail = "Слишком много запросов — подождите несколько минут и попробуйте снова."
         elif err_type == "LoginRequired":
             detail = "Instagram не принял авторизацию. Попробуйте через несколько минут."
+        elif err_type in ("ProxyError", "ConnectionError", "ConnectError", "SSLError", "ReadTimeout",
+                          "ConnectTimeout", "Timeout", "ClientConnectionError", "MaxRetryError", "NewConnectionError"):
+            detail = (f"Прокси/сеть не отвечает ({err_type}) — прокси мёртв, перегружен или заблокирован "
+                      f"Instagram (пробовали несколько раз с паузами). Проверьте его на вкладке «Прокси» → "
+                      f"«Проверить все» или смените на резидентный/мобильный в стране аккаунта.")
         else:
             detail = f"{err_type}: {err}"
 

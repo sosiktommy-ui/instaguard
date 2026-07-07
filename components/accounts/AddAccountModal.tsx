@@ -187,6 +187,12 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
           ))}
         </div>
 
+        {mode === 'password' && (
+          <div className="text-[11.5px] text-warn bg-warn/10 rounded-xl px-3 py-2 mb-5 leading-snug">
+            ⚠️ Вход по паролю Instagram отклоняет чаще (challenge/blacklist), особенно с нового IP. Если войти не удаётся — надёжнее режим <b>«Куки»</b> (сессия уже создана с чистого IP аккаунта).
+          </div>
+        )}
+
         {/* Раздел / подраздел (папка). Создаются на главном экране кнопкой «+ Раздел». */}
         {step === 'form' && roots.length > 0 && (
           <div className="mb-4">

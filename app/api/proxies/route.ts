@@ -14,6 +14,8 @@ export async function GET() {
         orderBy: { createdAt: 'asc' },
         select: {
           id: true, url: true, kind: true, label: true,
+          status: true, lastCheckedAt: true, ip: true, country: true, isp: true, scheme: true,
+          datacenter: true, vpn: true, mobile: true, flagged: true,
           accounts: { select: { id: true, username: true, role: true, status: true }, orderBy: { username: 'asc' } },
         },
       }),
@@ -22,6 +24,9 @@ export async function GET() {
       accountsPerProxy: settings?.accountsPerProxy ?? 3,
       proxies: proxies.map((p) => ({
         id: p.id, url: p.url, kind: p.kind, label: p.label,
+        status: p.status, lastCheckedAt: p.lastCheckedAt,
+        ip: p.ip, country: p.country, isp: p.isp, scheme: p.scheme,
+        datacenter: p.datacenter, vpn: p.vpn, mobile: p.mobile, flagged: p.flagged,
         accountCount: p.accounts.length,
         accounts: p.accounts.map((a) => ({ id: a.id, username: a.username, role: a.role, status: a.status })),
       })),

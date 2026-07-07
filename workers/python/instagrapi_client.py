@@ -5,6 +5,7 @@ import json
 import logging
 import random
 import re
+import tempfile
 import time
 import urllib.parse
 import uuid as _uuid
@@ -177,17 +178,63 @@ def pick_best_proxy(candidates: list[str]) -> dict:
     return {"chosen": None, "flagged": False, "checked": checked}
 
 
-# In-memory store for pending challenge sessions: username → {settings, api_path, proxy}
+# Хранилище ожидающих challenge-сессий: username → {settings, api_path, proxy}.
+# In-memory (быстрый путь того же процесса) + дублирование на диск, чтобы challenge
+# переживал перезапуск процесса воркера между /login (202) и /login-challenge —
+# иначе пользователь получал «Нет активного challenge» после рестарта воркера.
 _challenge_sessions: dict[str, dict] = {}
+_CHALLENGE_DIR = os.path.join(tempfile.gettempdir(), 'ig_challenges')
+
+
+def _challenge_path(username: str) -> str:
+    safe = re.sub(r'[^A-Za-z0-9_.-]', '_', username or 'unknown')
+    return os.path.join(_CHALLENGE_DIR, f'{safe}.json')
+
+
+def _save_challenge(username: str, data: dict) -> None:
+    _challenge_sessions[username] = data
+    try:
+        os.makedirs(_CHALLENGE_DIR, exist_ok=True)
+        with open(_challenge_path(username), 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+    except Exception as e:
+        logger.warning("challenge persist failed for @%s: %s", username, e)
+
+
+def _load_challenge(username: str) -> dict | None:
+    c = _challenge_sessions.get(username)
+    if c:
+        return c
+    try:
+        with open(_challenge_path(username), 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _clear_challenge(username: str) -> None:
+    _challenge_sessions.pop(username, None)
+    try:
+        os.remove(_challenge_path(username))
+    except Exception:
+        pass
 
 # Instagram reCAPTCHA site key (used in challenge pages)
 _IG_RECAPTCHA_SITEKEY = '6LenUD0UAAAAABGHhh5oqMVnHlC2tDHWwHkM79Nl'
 
 
+# Версия приложения Instagram (Android). Устаревшая версия сама по себе повышает шанс
+# checkpoint/bad_password. Взята актуальная и КОНСИСТЕНТНАЯ пара app_version+version_code
+# (ровно как в примере реального UA в _parse_user_agent ниже: 359.2.0.64.89 … 671551917).
+# Оба значения переопределяются переменными окружения — можно поднять до текущей версии
+# без правки кода: IG_APP_VERSION / IG_VERSION_CODE.
+_IG_APP_VERSION = os.getenv("IG_APP_VERSION", "359.2.0.64.89")
+_IG_VERSION_CODE = os.getenv("IG_VERSION_CODE", "671551917")
+
 # Дефолтное устройство instagrapi — используется, только если User-Agent не удалось
 # распознать (лишь бы в device_settings всегда был app_version и остальные ключи).
 _DEFAULT_DEVICE = {
-    "app_version": "269.0.0.18.75",
+    "app_version": _IG_APP_VERSION,
     "android_version": 26,
     "android_release": "8.0.0",
     "dpi": "480dpi",
@@ -196,7 +243,7 @@ _DEFAULT_DEVICE = {
     "device": "devitron",
     "model": "6T Dev",
     "cpu": "qcom",
-    "version_code": "314665256",
+    "version_code": _IG_VERSION_CODE,
 }
 
 
@@ -509,6 +556,74 @@ def _totp_code(cl: Client, secret: str) -> str:
     return cl.totp_generate_code(seed)
 
 
+# ─── Сетевые ошибки vs логические (бан/челлендж) ─────────────────────────────
+# Урок autofacebook #5: ротирующие/резидентные прокси часто дают короткий сбой
+# (407 / сброс соединения / таймаут) и восстанавливаются через несколько секунд.
+# Такой сбой НЕЛЬЗЯ трактовать как «неверный пароль» и нельзя валить весь вход —
+# надо подождать и повторить на ТОМ ЖЕ прокси. Логические ошибки (2FA/challenge/
+# bad_password) пробрасываем сразу, без ретраев.
+_NETWORK_EXC_NAMES = {
+    "ProxyError", "ConnectionError", "ConnectError", "ConnectTimeout", "ReadTimeout",
+    "Timeout", "SSLError", "ClientConnectionError", "ChunkedEncodingError",
+    "RemoteDisconnected", "ProtocolError", "MaxRetryError", "NewConnectionError",
+}
+_LOGIN_NET_BACKOFF = [0, 6, 15]  # сек: сразу → +6с → +15с (даём прокси «прогреться»/ротироваться)
+
+
+def _is_network_error(e: Exception) -> bool:
+    return type(e).__name__ in _NETWORK_EXC_NAMES
+
+
+def _instagram_reachable(proxy: str | None) -> tuple[bool, str | None]:
+    """Доходит ли прокси ДО Instagram (а не только до ipify/ipapi). Урок autofacebook #1:
+    открытый порт ≠ рабочий прокси — мёртвый exit-IP отвечает мгновенно, но не гонит трафик
+    к целевому сайту. ЛЮБОЙ HTTP-ответ Instagram = доходит. Сбой УСТАНОВКИ соединения = НЕ
+    доходит; ReadTimeout (соединение есть, IG просто тормозит) считаем доходит — чтобы не
+    заблокировать валидный вход на медленном мобильном прокси. 2 попытки."""
+    import requests
+    norm = _resolve_proxy_scheme(proxy)
+    proxies = {"http": norm, "https": norm} if norm else None
+    err = None
+    for attempt in range(2):
+        try:
+            requests.get("https://www.instagram.com/", proxies=proxies, timeout=15,
+                         headers={"User-Agent": f"Instagram {_IG_APP_VERSION} Android"})
+            return True, None
+        except Exception as e:
+            name = type(e).__name__
+            if name in ("ReadTimeout", "ChunkedEncodingError"):
+                return True, None  # соединение установилось — прокси жив, IG медленный
+            err = f"{name}: {e}"
+            if attempt == 0:
+                time.sleep(3)
+    return False, err
+
+
+def _login_with_retry(cl: 'Client', username: str, password: str, verification_code: str | None = None) -> None:
+    """cl.login() с ретраем ТОЛЬКО на сетевых сбоях (прокси моргнул). Логические ошибки
+    (TwoFactorRequired / ChallengeRequired / BadPassword) пробрасываются сразу."""
+    last: Exception | None = None
+    for i, back in enumerate(_LOGIN_NET_BACKOFF):
+        if back:
+            time.sleep(back)
+        try:
+            if verification_code:
+                cl.login(username, password, verification_code=verification_code)
+            else:
+                cl.login(username, password)
+            return
+        except (TwoFactorRequired, ChallengeRequired):
+            raise
+        except Exception as e:
+            if _is_network_error(e):
+                last = e
+                logger.warning("login: сетевой сбой (попытка %d/%d) @%s: %s", i + 1, len(_LOGIN_NET_BACKOFF), username, e)
+                continue
+            raise
+    if last:
+        raise last
+
+
 def login_by_credentials(username: str, password: str, proxy: str | None = None, totp_secret: str | None = None) -> dict:
     """
     Returns {'sessionData': dict} on success.
@@ -520,14 +635,20 @@ def login_by_credentials(username: str, password: str, proxy: str | None = None,
     cl = Client()
     if proxy:
         cl.set_proxy(_resolve_proxy_scheme(proxy))
+        # Пре-флайт: доходит ли прокси ДО Instagram? Мёртвый/заблокированный exit-IP отдаёт
+        # мгновенную ошибку соединения — честнее сказать это, чем ловить непонятный bad_password.
+        reachable, rerr = _instagram_reachable(proxy)
+        if not reachable:
+            raise Exception(f"Прокси не доходит до Instagram (мёртвый или заблокирован): {rerr}. "
+                            f"Проверьте прокси на вкладке «Прокси» → «Проверить все».")
     _apply_stable_fingerprint(cl, username, proxy)
 
     try:
         if totp_secret:
             # Аккаунт с 2FA: сразу передаём сгенерированный код
-            cl.login(username, password, verification_code=_totp_code(cl, totp_secret))
+            _login_with_retry(cl, username, password, verification_code=_totp_code(cl, totp_secret))
         else:
-            cl.login(username, password)
+            _login_with_retry(cl, username, password)
         return {'sessionData': cl.get_settings()}
 
     except TwoFactorRequired:
@@ -602,12 +723,13 @@ def login_by_credentials(username: str, password: str, proxy: str | None = None,
             except Exception as e:
                 logger.warning("Could not request email code: %s", e)
 
-        # Store challenge session so submit_challenge_code can continue
-        _challenge_sessions[username] = {
+        # Сохраняем challenge-сессию (память + диск) — submit_challenge_code продолжит,
+        # даже если процесс воркера перезапустится до ввода кода.
+        _save_challenge(username, {
             'settings': cl.get_settings(),
             'api_path': api_path,
             'proxy': proxy,
-        }
+        })
 
         return {'needsChallenge': True, 'stepName': step_name, 'username': username}
 
@@ -623,7 +745,7 @@ def login_by_credentials(username: str, password: str, proxy: str | None = None,
 
 def submit_challenge_code(username: str, code: str) -> dict:
     """Submit the verification code received by email/SMS. Returns {'sessionData': dict}."""
-    pending = _challenge_sessions.get(username)
+    pending = _load_challenge(username)
     if not pending:
         raise Exception("Нет активного challenge. Начните авторизацию заново.")
 
@@ -647,7 +769,7 @@ def submit_challenge_code(username: str, code: str) -> dict:
 
         if status == 'ok' or action == 'close':
             cl.get_timeline_feed()
-            del _challenge_sessions[username]
+            _clear_challenge(username)
             return {'sessionData': cl.get_settings()}
 
         msg = resp_data.get('message', str(resp_data))
@@ -685,6 +807,13 @@ def login_by_cookies(cookies: dict, proxy: str | None = None) -> tuple[dict, str
     Проверка/username — через приватный account_info() (НЕ через login_by_sessionid/
     публичный GraphQL: его query_hash Instagram задеприкейтил → 400 «invalid request»)."""
     norm_proxy = _resolve_proxy_scheme(proxy)
+
+    if proxy:
+        # Пре-флайт: доходит ли прокси до Instagram (см. login_by_credentials).
+        reachable, rerr = _instagram_reachable(proxy)
+        if not reachable:
+            raise Exception(f"Прокси не доходит до Instagram (мёртвый или заблокирован): {rerr}. "
+                            f"Проверьте прокси на вкладке «Прокси» → «Проверить все».")
 
     def _new_client() -> Client:
         c = Client()

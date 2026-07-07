@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Globe, Plus, Trash2, RefreshCw, Info, Users, ChevronDown, ChevronUp, Sliders, Layers, Link2, X, UserPlus, Link as LinkIcon } from 'lucide-react'
+import { Globe, Plus, Trash2, RefreshCw, Info, Users, ChevronDown, ChevronUp, Sliders, Layers, Link2, X, UserPlus, Link as LinkIcon, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import ClientOnly from '@/components/common/ClientOnly'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
@@ -14,18 +14,23 @@ import { TONE } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 
 interface AccRef { id: string; username: string; role: string; status: string }
-interface ProxyItem { id: string; url: string; kind: string; label: string | null; accountCount: number; accounts: AccRef[] }
+interface ProxyItem {
+  id: string; url: string; kind: string; label: string | null; accountCount: number; accounts: AccRef[]
+  // Здоровье прокси (сохранённый результат последней проверки — «Проверить все прокси»)
+  status?: string; lastCheckedAt?: string | null; ip?: string | null; country?: string | null; isp?: string | null; scheme?: string | null
+  datacenter?: boolean | null; vpn?: boolean | null; mobile?: boolean | null; flagged?: boolean | null
+}
 interface MainAccount { id: string; username: string; role: string; status: string; proxyId: string | null }
 
 // Результат «Проверить IP»: исходящий IP + флаги репутации от воркера (ipapi.is)
 type IpInfo = {
   loading?: boolean; ip?: string; country?: string; isp?: string; scheme?: string; error?: string
-  datacenter?: boolean | null; vpn?: boolean | null; proxy?: boolean | null; mobile?: boolean | null
+  datacenter?: boolean | null; vpn?: boolean | null; proxy?: boolean | null; mobile?: boolean | null; flagged?: boolean | null
 }
 
 // Вердикт по флагам: годится прокси для Instagram или нет
 function proxyVerdict(r: IpInfo): { text: string; cls: string } {
-  if (r.datacenter || r.vpn || r.proxy) return { text: '🔴 датацентр/VPN — Instagram забанит', cls: 'text-bad' }
+  if (r.datacenter || r.vpn || r.proxy || r.flagged) return { text: '🔴 датацентр/VPN — Instagram забанит', cls: 'text-bad' }
   if (r.mobile) return { text: '✅ мобильный — отлично', cls: 'text-ok' }
   if (r.datacenter === false) return { text: '✅ резидентный — годится', cls: 'text-ok' }
   return { text: 'ℹ репутация неизвестна — сверьте на ipqualityscore', cls: 'text-subt' }
@@ -54,6 +59,8 @@ function Proxies() {
   const [bulkText, setBulkText] = useState('')
   const [bulkRunning, setBulkRunning] = useState(false)
   const [bulkRes, setBulkRes] = useState<Array<IpInfo & { src: string }>>([])
+  const [checkAllRunning, setCheckAllRunning] = useState(false)  // идёт массовая проверка сохранённых прокси
+  const [checkAllDone, setCheckAllDone] = useState(0)            // сколько уже проверено (для прогресса на кнопке)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -145,21 +152,84 @@ function Proxies() {
     setBulkRunning(false)
   }
 
+  // Проверить ВСЕ сохранённые прокси разом (пуловые + приватные), параллельность 4.
+  // Каждый результат сохраняется в БД (эндпоинт /api/proxies/check при proxyId) → подбор при
+  // входе потом сразу пропускает мёртвые/датацентр без повторной live-проверки всего пула.
+  const runCheckAll = async () => {
+    const all = proxies
+    if (!all.length || checkAllRunning) return
+    setCheckAllRunning(true); setCheckAllDone(0)
+    setIpCheck((s) => { const n = { ...s }; all.forEach((p) => { n[p.id] = { loading: true } }); return n })
+    let idx = 0
+    const worker = async () => {
+      while (idx < all.length) {
+        const p = all[idx++]
+        await runCheck(p)
+        setCheckAllDone((d) => d + 1)
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(4, all.length) }, worker))
+    setCheckAllRunning(false)
+    load()  // подтянуть сохранённые статусы для бейджей на карточках
+  }
+
   // Короткий хост из строки прокси (для подписи в таблице)
   const proxyHost = (s: string) => (s.split(/[:@]/)[0] || s).slice(0, 24)
 
-  // Блок «Проверить IP» — общий для пуловых и приватных карточек
+  // Сохранённый (из БД) результат последней проверки → форма IpInfo для показа на карточке.
+  const persistedToIpInfo = (p: ProxyItem): IpInfo | undefined => {
+    if (!p.status || p.status === 'unknown') return undefined
+    if (p.status === 'dead') return { error: 'не отвечает (посл. проверка)' }
+    return {
+      ip: p.ip ?? undefined, country: p.country ?? undefined, isp: p.isp ?? undefined, scheme: p.scheme ?? undefined,
+      datacenter: p.datacenter, vpn: p.vpn, mobile: p.mobile, flagged: p.flagged,
+    }
+  }
+
+  // Категория здоровья прокси (живой результат этой сессии важнее сохранённого в БД).
+  const statusOf = (p: ProxyItem): 'checking' | 'dead' | 'flagged' | 'alive' | 'unchecked' => {
+    const live = ipCheck[p.id]
+    if (live?.loading) return 'checking'
+    const c = live ?? persistedToIpInfo(p)
+    if (!c) return 'unchecked'
+    if (c.error) return 'dead'
+    if (c.datacenter || c.vpn || c.proxy || c.flagged) return 'flagged'
+    return 'alive'
+  }
+
+  // Компактный цветной бейдж статуса на карточке прокси.
+  const statusChip = (p: ProxyItem) => {
+    const s = statusOf(p)
+    const meta: Record<typeof s, { cls: string; text: string }> = {
+      checking:  { cls: 'bg-brand/10 text-brand', text: 'проверяю…' },
+      unchecked: { cls: 'bg-canvas text-subt border border-line/50', text: 'не проверен' },
+      dead:      { cls: 'bg-bad/10 text-bad', text: '🔴 не отвечает' },
+      flagged:   { cls: 'bg-bad/10 text-bad', text: '🔴 датацентр/VPN' },
+      alive:     { cls: 'bg-ok/10 text-ok', text: '✅ живой' },
+    }
+    const c = ipCheck[p.id] ?? persistedToIpInfo(p)
+    const extra = s === 'alive' && c ? (c.mobile ? ' · мобильный' : c.datacenter === false ? ' · резидент' : '') : ''
+    return (
+      <span className={cn('inline-flex items-center px-2 py-0.5 rounded-lg text-[11px] font-medium shrink-0', meta[s].cls)}
+        title={p.lastCheckedAt ? `Проверено: ${new Date(p.lastCheckedAt).toLocaleString('ru-RU')}` : undefined}>
+        {meta[s].text}{extra}
+      </span>
+    )
+  }
+
+  // Блок «Проверить IP» — общий для пуловых и приватных карточек.
+  // Показывает живой результат этой сессии, а если его нет — сохранённый из БД (посл. проверка).
   const ipCheckBlock = (p: ProxyItem) => {
-    const c = ipCheck[p.id]
-    const v = c && (c.ip || c.datacenter != null) ? proxyVerdict(c) : null
+    const c: IpInfo = ipCheck[p.id] ?? persistedToIpInfo(p) ?? {}
+    const v = (c.ip || c.datacenter != null || c.flagged != null) ? proxyVerdict(c) : null
     return (
       <div className="mt-2.5 pt-2.5 border-t border-line/40 flex items-center gap-2 flex-wrap">
-        <button onClick={() => runCheck(p)} disabled={c?.loading}
+        <button onClick={() => runCheck(p)} disabled={c.loading}
           className="inline-flex items-center gap-1.5 text-[11.5px] font-medium text-subt hover:text-brand disabled:opacity-50 transition-colors">
-          <RefreshCw className={cn('w-3 h-3', c?.loading && 'animate-spin')} /> Проверить IP
+          <RefreshCw className={cn('w-3 h-3', c.loading && 'animate-spin')} /> Проверить IP
         </button>
-        {c?.error && <span className="text-[11px] text-bad">✕ {c.error}</span>}
-        {c?.ip && (
+        {c.error && <span className="text-[11px] text-bad">✕ {c.error}</span>}
+        {c.ip && (
           <span className="text-[11px] inline-flex items-center gap-1.5 flex-wrap">
             <span className="font-mono text-ink">{c.ip}</span>
             {c.country && <span className="px-1.5 py-0.5 rounded-md bg-canvas border border-line/50 text-subt">{c.country}</span>}
@@ -206,7 +276,10 @@ function Proxies() {
       <div className="flex items-center gap-3">
         <IconTile icon={Globe} color={TONE.brand} size={36} />
         <div className="flex-1 min-w-0">
-          <div className="font-mono text-[13px] truncate">{p.url}</div>
+          <div className="flex items-center gap-2">
+            <div className="font-mono text-[13px] truncate">{p.url}</div>
+            {statusChip(p)}
+          </div>
           <div className="text-[11px] text-subt mt-0.5 flex items-center gap-1">
             <Users className="w-3 h-3" />
             привязано: <span className={cn('font-semibold tabular-nums', usageColor(p.accountCount))}>{p.accountCount}/{cap}</span>
@@ -229,7 +302,10 @@ function Proxies() {
         <div className="flex items-center gap-3">
           <IconTile icon={LinkIcon} color={TONE.alt} size={36} />
           <div className="flex-1 min-w-0">
-            <div className="font-mono text-[13px] truncate">{p.url}</div>
+            <div className="flex items-center gap-2">
+              <div className="font-mono text-[13px] truncate">{p.url}</div>
+              {statusChip(p)}
+            </div>
             <div className="text-[11px] text-subt mt-0.5 flex items-center gap-1">
               <Users className="w-3 h-3" /> привязано: <span className="font-semibold tabular-nums text-ink">{p.accountCount}</span>
             </div>
@@ -277,6 +353,11 @@ function Proxies() {
   return (
     <div className="space-y-5">
       <PageHeader icon={Globe} color={TONE.brand} title="Прокси" subtitle="Пуловые (общие, авто-привязка) и приватные (для одного аккаунта)" tourId="page">
+        <Button size="sm" onClick={runCheckAll} disabled={checkAllRunning || proxies.length === 0}
+          title="Проверить все сохранённые прокси: IP, страна, датацентр/резидент. Результат сохранится и попадёт в подбор при входе.">
+          <ShieldCheck className={cn('w-4 h-4', checkAllRunning && 'animate-pulse')} />
+          {checkAllRunning ? `Проверяю ${checkAllDone}/${proxies.length}…` : 'Проверить все'}
+        </Button>
         <button onClick={load} className="p-2 text-subt hover:text-ink transition-colors" title="Обновить">
           <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
         </button>
@@ -292,6 +373,22 @@ function Proxies() {
           <StatCard key={s.label} icon={s.icon} color={s.color} value={s.value} label={s.label} tip={s.tip} delay={i * 60} />
         ))}
       </div>
+
+      {/* Здоровье пула — сводка по последней проверке (кнопка «Проверить все» в шапке) */}
+      {proxies.length > 0 && (() => {
+        const hs = proxies.reduce((a, p) => { a[statusOf(p)]++; return a }, { checking: 0, dead: 0, flagged: 0, alive: 0, unchecked: 0 } as Record<string, number>)
+        return (
+          <div className="card card-3d gloss px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12.5px]">
+            <span className="font-medium text-ink inline-flex items-center gap-1.5"><ShieldCheck className="w-3.5 h-3.5 text-brand" /> Здоровье пула:</span>
+            <span className="text-ok font-medium">✅ {hs.alive} годных</span>
+            <span className="text-bad font-medium">🔴 {hs.flagged} датацентр/VPN</span>
+            <span className="text-subt">⚪ {hs.dead} не отвечают</span>
+            <span className="text-subt">❔ {hs.unchecked} не проверены</span>
+            {hs.checking > 0 && <span className="text-brand font-medium">⏳ {hs.checking} проверяю…</span>}
+            <Hint text="Нажмите «Проверить все» вверху справа — бот определит по каждому прокси исходящий IP, страну и репутацию (датацентр/VPN — Instagram банит; резидентный/мобильный — годится). Результат сохраняется и учитывается при подборе прокси на входе." />
+          </div>
+        )
+      })()}
 
       {/* Подробное описание */}
       <div className="card card-3d gloss p-4 flex gap-3 text-[13px] text-subt leading-relaxed">

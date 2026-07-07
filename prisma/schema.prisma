@@ -50,6 +50,20 @@ model Proxy {
   label     String?
   createdAt DateTime @default(now())
 
+  // Здоровье прокси — результат последней проверки («Проверить все прокси»).
+  // Хранится, чтобы подбор при входе сразу пропускал мёртвые/датацентр без live-перепроверки
+  // всего пула на каждом логине (иначе таймаут воркера → тихий фолбэк на плохой прокси).
+  status        String    @default("unknown")  // unknown | alive | dead
+  lastCheckedAt DateTime?
+  ip            String?
+  country       String?
+  isp           String?
+  scheme        String?                          // http | socks5 | socks4
+  datacenter    Boolean?                         // флаги репутации от ipapi.is (как видит Instagram)
+  vpn           Boolean?
+  mobile        Boolean?
+  flagged       Boolean?                         // datacenter || vpn || proxy — «Instagram забанит»
+
   user     User               @relation(fields: [userId], references: [id])
   accounts InstagramAccount[]
 
