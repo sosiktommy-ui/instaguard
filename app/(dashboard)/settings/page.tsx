@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { ShieldAlert, Globe, ChevronDown, List, Users, BarChart3, Settings as SettingsIcon, HelpCircle, Radar } from 'lucide-react'
+import { ShieldAlert, Globe, ChevronDown, List, Users, BarChart3, Settings as SettingsIcon, HelpCircle, Radar, Cpu } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import ClientOnly from '@/components/common/ClientOnly'
 import { PageHeader } from '@/components/common/PageHeader'
@@ -78,7 +78,31 @@ const HELP: { icon: any; color: string; title: string; text: string; features: s
   },
 ]
 
-interface Settings { accountsPerProxy: number; allowNoProxy: boolean; allowNoDrafts: boolean; likeByDraft: boolean; storyByDraft: boolean }
+interface Settings {
+  accountsPerProxy: number; allowNoProxy: boolean; allowNoDrafts: boolean; likeByDraft: boolean; storyByDraft: boolean
+  parsingSource: string; actionEngine: string; browserHeadful: boolean
+}
+
+// Радио-группа: список карточек-вариантов (заголовок + пояснение)
+function Radio<T extends string>({ value, options, onChange }: { value: T; options: { v: T; label: string; desc: string }[]; onChange: (v: T) => void }) {
+  return (
+    <div className="space-y-2">
+      {options.map((o) => (
+        <button key={o.v} onClick={() => onChange(o.v)}
+          className={cn('w-full text-left flex items-start gap-3 rounded-2xl border p-3 transition-colors',
+            value === o.v ? 'border-brand bg-brand/[0.06]' : 'border-line/50 hover:bg-black/[0.02]')}>
+          <span className={cn('mt-0.5 w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center', value === o.v ? 'border-brand' : 'border-subt/40')}>
+            {value === o.v && <span className="w-2 h-2 rounded-full bg-brand" />}
+          </span>
+          <span className="min-w-0">
+            <span className="block text-[13.5px] font-medium">{o.label}</span>
+            <span className="block text-[12px] text-subt leading-snug mt-0.5">{o.desc}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  )
+}
 
 // Переключатель (тумблер)
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
@@ -94,7 +118,7 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void 
 }
 
 function SettingsScreen() {
-  const [s, setS] = useState<Settings>({ accountsPerProxy: 3, allowNoProxy: false, allowNoDrafts: false, likeByDraft: false, storyByDraft: false })
+  const [s, setS] = useState<Settings>({ accountsPerProxy: 3, allowNoProxy: false, allowNoDrafts: false, likeByDraft: false, storyByDraft: false, parsingSource: 'api', actionEngine: 'browser', browserHeadful: false })
   const [capInput, setCapInput] = useState('3')
   const [msg, setMsg] = useState('')
   const [openHelp, setOpenHelp] = useState<number | null>(null)
@@ -134,16 +158,47 @@ function SettingsScreen() {
         <Toggle on={s.allowNoProxy} onChange={(v) => patch({ allowNoProxy: v })} />
       </div>
 
-      {/* Парсинг вынесен в скрейпер-API — черновые аккаунты и их настройки больше не нужны */}
-      <div className={rowCls}>
-        <IconTile icon={Radar} color={TONE.brand} size={40} />
-        <div className="flex-1 min-w-0">
-          <div className="font-semibold text-[15px]">Парсинг через API</div>
-          <div className="text-[13px] text-subt mt-1 leading-relaxed">
-            Подписчиков, комментарии и лайки теперь собирает скрейпер-API — черновые аккаунты больше не нужны,
-            а все действия (директ, лайк, подписка, сторис) выполняет основной аккаунт. Статус и проверка связи —
-            на вкладке <b>«Парсинг (API)»</b>.
+      {/* Движок действий: браузер (эмуль) или legacy (instagrapi) — plan.md §7.6 */}
+      <div className="card card-3d gloss p-5">
+        <div className="flex items-start gap-4">
+          <IconTile icon={Cpu} color={TONE.brand} size={40} />
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-[15px]">Движок входа и действий</div>
+            <div className="text-[13px] text-subt mt-1 leading-relaxed">
+              Чем логиниться и выполнять действия (директ/лайк/подписка/сторис).
+            </div>
           </div>
+        </div>
+        <div className="mt-3">
+          <Radio value={s.actionEngine} onChange={(v) => patch({ actionEngine: v })} options={[
+            { v: 'browser', label: '🌐 Браузер (эмуль) — рекомендуется', desc: 'Вход и действия через реальный Chromium (Playwright). Instagram пускает даже там, где приватный API отбивает. Требует задеплоенного браузерного воркера (BROWSER_WORKER_URL); без него автоматически используется legacy.' },
+            { v: 'legacy', label: '⚙️ Legacy (instagrapi)', desc: 'Старый путь через приватный API. Легче по ресурсам, но Instagram часто отбивает вход (UserInvalidCredentials/checkpoint). Аварийный откат.' },
+          ]} />
+        </div>
+      </div>
+
+      {/* Источник парсинга: API / черновые / микс — plan.md §7.6 */}
+      <div className="card card-3d gloss p-5">
+        <div className="flex items-start gap-4">
+          <IconTile icon={Radar} color={TONE.pink} size={40} />
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-[15px]">Источник парсинга</div>
+            <div className="text-[13px] text-subt mt-1 leading-relaxed">
+              Откуда брать подписчиков/комментарии/лайки для триггеров.
+            </div>
+          </div>
+        </div>
+        <div className="mt-3">
+          <Radio value={s.parsingSource} onChange={(v) => patch({ parsingSource: v })} options={[
+            { v: 'api', label: 'Только API (HikerAPI) — по умолчанию', desc: 'Данные читает скрейпер-API — свои аккаунты и прокси для парсинга не нужны. Требует ключ HIKER_API_KEY.' },
+            { v: 'drafts', label: 'Только черновые', desc: 'Парсят черновые (HELPER) аккаунты браузером. API не используется. Черновым нужны свои прокси (риск бана).' },
+            { v: 'drafts_then_api', label: 'Черновые + API запасной', desc: 'Основной источник — черновые; если живого чернового нет — автоматически HikerAPI.' },
+          ]} />
+          {(s.parsingSource === 'drafts' || s.parsingSource === 'drafts_then_api') && (
+            <div className="text-[12px] text-warn bg-warn/10 rounded-xl px-3 py-2 mt-2 leading-snug">
+              ⚠️ Режимы с черновыми ещё дорабатываются (Фаза 3): контур парсинга черновыми возвращается. Пока фактический источник — API; выбор сохраняется и включится, когда контур будет готов.
+            </div>
+          )}
         </div>
       </div>
 
