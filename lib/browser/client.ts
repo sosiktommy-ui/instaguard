@@ -1,7 +1,9 @@
 // Обёртка над браузерным воркером (эмуль). Зеркалит формы ответов lib/instagram/client.ts,
 // но сессия аккаунта = Playwright storageState (browserState), а не instagrapi-настройки.
 // См. plan.md §4.4/§6.
-const BROWSER_WORKER_URL = process.env.BROWSER_WORKER_URL ?? ''
+// Канонично — BROWSER_WORKER_URL; принимаем и BROWSER_URL как частый вариант написания,
+// чтобы опечатка в имени переменной не оставляла движок молча на legacy.
+const BROWSER_WORKER_URL = process.env.BROWSER_WORKER_URL ?? process.env.BROWSER_URL ?? ''
 const BROWSER_WORKER_SECRET = process.env.BROWSER_WORKER_SECRET ?? ''
 // Браузер медленнее приватного API (вход 30–60с) — таймаут выше, чем у Python-воркера.
 const TIMEOUT_MS = Number(process.env.BROWSER_WORKER_TIMEOUT_MS) || 120_000
