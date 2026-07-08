@@ -36,9 +36,27 @@ function parseSellerLine(text: string): { username: string; password: string; to
  * Единый переиспользуемый попап подключения Instagram-аккаунта.
  * Используется и на вкладке «Аккаунты», и на главном экране (кнопка «+ Аккаунт»).
  */
-export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: () => void; onAdded: (username: string) => void; presetProxy?: string }) {
+export function AddAccountModal({
+  onClose, onAdded, presetProxy,
+  role = 'RESPONDER',
+  title = 'Подключить аккаунт',
+  subtitle,
+  defaultMode = 'password',
+}: {
+  onClose: () => void
+  onAdded: (username: string) => void
+  presetProxy?: string
+  /** Роль создаваемого аккаунта. HELPER — черновой (парсер), RESPONDER — основной (шлёт). */
+  role?: 'RESPONDER' | 'HELPER'
+  /** Заголовок окна (для черновых — «Черновой аккаунт»). */
+  title?: string
+  /** Подзаголовок под заголовком (необязательно). */
+  subtitle?: string
+  /** Режим по умолчанию: для черновых удобнее 'cookies' (безопаснее для парсинга). */
+  defaultMode?: AuthMode
+}) {
   const addAccount = useStore((s) => s.addAccount)
-  const [mode, setMode]         = useState<AuthMode>('password')
+  const [mode, setMode]         = useState<AuthMode>(defaultMode)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [totp, setTotp]         = useState('')   // 2FA-ключ (base32), если у аккаунта включена 2FA
@@ -104,6 +122,9 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
   const proxyOk = proxyMode !== 'auto' || poolFree > 0
   const canSubmit = credsOk && proxyOk
 
+  // Для черновых (parser) куки безопаснее — показываем их первыми и помечаем «рекомендуется».
+  const modeOrder: AuthMode[] = defaultMode === 'cookies' ? ['cookies', 'password'] : ['password', 'cookies']
+
   // Общий блок выбора прокси (одинаков для логина и куки).
   // Если задан presetProxy (открыли с вкладки «Прокси» → «+ аккаунт на этот прокси») —
   // прокси зафиксирован, переключатель не показываем.
@@ -161,8 +182,8 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
       const sectionId = subId || secId || undefined
       const proxyVal = proxyMode === 'unique' ? (proxy.trim() || undefined) : undefined
       const body = mode === 'cookies'
-        ? { authMethod: 'cookies', cookies: cookies.trim(), proxy: proxyVal, proxyMode, sectionId }
-        : { username: username.replace(/^@/, '').trim(), password, totpSecret: totp.trim() || undefined, proxy: proxyVal, proxyMode, sectionId }
+        ? { authMethod: 'cookies', cookies: cookies.trim(), proxy: proxyVal, proxyMode, sectionId, role }
+        : { username: username.replace(/^@/, '').trim(), password, totpSecret: totp.trim() || undefined, proxy: proxyVal, proxyMode, sectionId, role }
 
       const res = await fetch('/api/accounts/auth', {
         method: 'POST',
@@ -195,7 +216,8 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
 
       if (!res.ok) { setError(data.error ?? 'Ошибка авторизации'); setStep('form'); return }
 
-      addAccount({ id: data.account.id, username: data.account.username, followers: 0 })
+      // Черновые (HELPER) не пишем в основной стор-список — они живут на своей вкладке.
+      if (role !== 'HELPER') addAccount({ id: data.account.id, username: data.account.username, followers: 0 })
       onAdded(data.account.username)
       onClose()
     } catch {
@@ -227,7 +249,8 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Неверный код подтверждения'); return }
 
-      addAccount({ id: data.account.id, username: data.account.username, followers: 0 })
+      // Черновые (HELPER) не пишем в основной стор-список — они живут на своей вкладке.
+      if (role !== 'HELPER') addAccount({ id: data.account.id, username: data.account.username, followers: 0 })
       onAdded(data.account.username)
       onClose()
     } catch {
@@ -274,9 +297,12 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in" onClick={onClose}>
       <div className="card w-full max-w-md p-7 animate-scale-in max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="text-[22px] font-semibold tracking-tight">Подключить аккаунт</h2>
-          <button onClick={onClose} className="text-subt hover:text-ink"><X size={22} /></button>
+        <div className="flex items-start justify-between mb-5">
+          <div>
+            <h2 className="text-[22px] font-semibold tracking-tight">{title}</h2>
+            {subtitle && <p className="text-[13px] text-subt mt-0.5">{subtitle}</p>}
+          </div>
+          <button onClick={onClose} className="text-subt hover:text-ink shrink-0"><X size={22} /></button>
         </div>
 
         {/* Mode toggle */}
@@ -285,11 +311,11 @@ export function AddAccountModal({ onClose, onAdded, presetProxy }: { onClose: ()
           <Hint text="Логин/Пароль — стандартный вход, Instagram может запросить подтверждение с нового IP. Куки — вход по уже действующей сессии браузера (sessionid), без пароля." />
         </div>
         <div className="flex gap-1 p-1 bg-canvas rounded-2xl mb-5">
-          {(['password', 'cookies'] as AuthMode[]).map((m) => (
+          {modeOrder.map((m) => (
             <button key={m} onClick={() => { setMode(m); setError('') }}
               className={cn('flex-1 py-2 text-[13px] font-medium rounded-xl transition-all',
                 mode === m ? 'bg-card shadow text-ink' : 'text-subt hover:text-ink')}>
-              {m === 'password' ? '🔑 Логин / Пароль' : '🍪 Куки'}
+              {m === 'password' ? '🔑 Логин / Пароль' : `🍪 Куки${defaultMode === 'cookies' ? ' (рекомендуется)' : ''}`}
             </button>
           ))}
         </div>

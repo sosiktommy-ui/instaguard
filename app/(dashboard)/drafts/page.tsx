@@ -1,14 +1,15 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Trash2, Globe, Zap, ShieldCheck, Loader2, AlertTriangle, Link2, X, AtSign, Lock, RotateCcw, Pencil, Check, Layers } from 'lucide-react'
+import { Plus, Trash2, Globe, Zap, RotateCcw, Pencil, Check, X, Layers, Cookie } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import ClientOnly from '@/components/common/ClientOnly'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
-import { Hint } from '@/components/common/Hint'
 import { PageHeader } from '@/components/common/PageHeader'
 import { IconTile } from '@/components/common/IconTile'
+import { AddAccountModal } from '@/components/accounts/AddAccountModal'
+import { ImportCookiesModal } from '@/components/accounts/ImportCookiesModal'
 import { TONE } from '@/lib/colors'
 
 interface HelperAccount {
@@ -20,142 +21,10 @@ interface HelperAccount {
   proxy: string | null
 }
 
-type AuthMode = 'cookies' | 'password'
-
-function AddHelperModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
-  const [mode, setMode] = useState<AuthMode>('cookies')
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [cookies, setCookies] = useState('')
-  const [proxy, setProxy] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  const canSubmit = mode === 'cookies' ? cookies.trim() : username.trim() && password.trim()
-
-  const save = async () => {
-    setLoading(true)
-    setError('')
-    try {
-      const body = mode === 'cookies'
-        ? { authMethod: 'cookies', cookies: cookies.trim(), proxy: proxy.trim() || undefined, role: 'HELPER' }
-        : { username: username.replace(/^@/, '').trim(), password, proxy: proxy.trim() || undefined, role: 'HELPER' }
-
-      const res = await fetch('/api/accounts/auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json()
-      if (!res.ok) { setError(data.error ?? 'Ошибка авторизации'); return }
-      onAdded()
-      onClose()
-    } catch {
-      setError('Ошибка сети')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in" onClick={onClose}>
-      <div className="card w-full max-w-md p-7 animate-scale-in" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-5">
-          <div>
-            <h2 className="text-[22px] font-semibold tracking-tight">Черновой аккаунт</h2>
-            <p className="text-[13px] text-subt mt-0.5">Для парсинга — не используется для отправки</p>
-          </div>
-          <button onClick={onClose} className="text-subt hover:text-ink"><X size={22} /></button>
-        </div>
-
-        {/* Mode toggle — куки первые */}
-        <div className="flex items-center gap-1.5 mb-2">
-          <span className="text-[11px] text-subt">Способ подключения</span>
-          <Hint text="Куки — вход без пароля по уже действующей сессии браузера, реже вызывает проверку/бан у Instagram. Логин/пароль надёжен, но выше риск запроса подтверждения входа." />
-        </div>
-        <div className="flex gap-1 p-1 bg-canvas rounded-2xl mb-5">
-          {(['cookies', 'password'] as AuthMode[]).map((m) => (
-            <button key={m} onClick={() => { setMode(m); setError('') }}
-              className={cn('flex-1 py-2 text-[13px] font-medium rounded-xl transition-all',
-                mode === m ? 'bg-card shadow text-ink' : 'text-subt hover:text-ink')}>
-              {m === 'cookies' ? '🍪 Куки (рекомендуется)' : '🔑 Логин / Пароль'}
-            </button>
-          ))}
-        </div>
-
-        {loading ? (
-          <div className="py-12 flex flex-col items-center gap-4 text-center">
-            <Loader2 className="w-10 h-10 text-brand animate-spin" />
-            <div className="font-medium">Авторизация…</div>
-            <div className="text-[13px] text-subt">15–30 секунд</div>
-          </div>
-        ) : mode === 'cookies' ? (
-          <div className="space-y-4">
-            <div>
-              <label className="text-[13px] text-subt font-medium block mb-2">Куки Instagram</label>
-              <textarea value={cookies} onChange={(e) => setCookies(e.target.value)}
-                autoFocus rows={5}
-                className="field font-mono text-[11px] resize-none leading-relaxed"
-                placeholder={'{"sessionid": "abc123...", "ds_user_id": "12345", "csrftoken": "..."}\n\nИли просто sessionid:\nabc123...'} />
-            </div>
-            <div>
-              <label className="text-[13px] text-subt font-medium block mb-2">Прокси (необязательно)</label>
-              <div className="relative">
-                <Globe className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
-                <input value={proxy} onChange={(e) => setProxy(e.target.value)}
-                  className="field pl-10 font-mono text-[13px]" placeholder="user:pass@host:port" />
-              </div>
-            </div>
-            <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed">
-              Экспортируйте куки с instagram.com через Cookie-Editor. Нужен как минимум <code className="font-mono bg-black/5 px-1 rounded">sessionid</code>.
-            </div>
-            {error && <p className="text-bad text-[13px] text-center">{error}</p>}
-            <div className="flex gap-3">
-              <Button variant="secondary" className="flex-1" onClick={onClose}>Отмена</Button>
-              <Button className="flex-1" onClick={save} disabled={!canSubmit}>Подключить</Button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div>
-              <label className="text-[13px] text-subt font-medium block mb-2">Instagram логин</label>
-              <div className="relative">
-                <AtSign className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
-                <input value={username} onChange={(e) => setUsername(e.target.value)}
-                  autoFocus className="field pl-10" placeholder="username" />
-              </div>
-            </div>
-            <div>
-              <label className="text-[13px] text-subt font-medium block mb-2">Пароль</label>
-              <div className="relative">
-                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
-                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-                  className="field pl-10" placeholder="••••••••" />
-              </div>
-            </div>
-            <div>
-              <label className="text-[13px] text-subt font-medium block mb-2">Прокси (необязательно)</label>
-              <div className="relative">
-                <Globe className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
-                <input value={proxy} onChange={(e) => setProxy(e.target.value)}
-                  className="field pl-10 font-mono text-[13px]" placeholder="user:pass@host:port" />
-              </div>
-            </div>
-            {error && <p className="text-bad text-[13px] text-center">{error}</p>}
-            <div className="flex gap-3">
-              <Button variant="secondary" className="flex-1" onClick={onClose}>Отмена</Button>
-              <Button className="flex-1" onClick={save} disabled={!canSubmit}>Авторизоваться</Button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 function Drafts() {
   const [accounts, setAccounts] = useState<HelperAccount[]>([])
   const [showAdd, setShowAdd] = useState(false)
+  const [showImport, setShowImport] = useState(false)
   const [editProxyId, setEditProxyId] = useState<string | null>(null)
   const [editProxyVal, setEditProxyVal] = useState('')
   const [msg, setMsg] = useState('')
@@ -198,6 +67,7 @@ function Drafts() {
   return (
     <div className="space-y-6">
       <PageHeader icon={Layers} color={TONE.alt} title="Черновые аккаунты" subtitle="Парсят подписчиков — основные только отправляют" tourId="page">
+        <Button variant="secondary" onClick={() => setShowImport(true)}><Cookie className="w-4 h-4" /> Импорт списком</Button>
         <Button onClick={() => setShowAdd(true)}><Plus className="w-4 h-4" /> Добавить</Button>
       </PageHeader>
 
@@ -210,7 +80,10 @@ function Drafts() {
           <p className="text-subt text-[13px] mt-1.5 max-w-xs">
             Черновые аккаунты парсят подписчиков и комментарии — основные аккаунты остаются чистыми.
           </p>
-          <Button className="mt-5" onClick={() => setShowAdd(true)}><Plus className="w-4 h-4" /> Добавить аккаунт</Button>
+          <div className="flex flex-wrap items-center justify-center gap-3 mt-5">
+            <Button onClick={() => setShowAdd(true)}><Plus className="w-4 h-4" /> Добавить аккаунт</Button>
+            <Button variant="secondary" onClick={() => setShowImport(true)}><Cookie className="w-4 h-4" /> Импорт списком</Button>
+          </div>
         </div>
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -290,7 +163,20 @@ function Drafts() {
         onCancel={() => setPendingDel(null)}
       />
 
-      {showAdd && <AddHelperModal onClose={() => setShowAdd(false)} onAdded={load} />}
+      {showAdd && (
+        <AddAccountModal
+          role="HELPER"
+          title="Черновой аккаунт"
+          subtitle="Для парсинга — не используется для отправки"
+          defaultMode="cookies"
+          onClose={() => setShowAdd(false)}
+          onAdded={() => load()}
+        />
+      )}
+
+      {showImport && (
+        <ImportCookiesModal lockedRole="HELPER" onClose={() => setShowImport(false)} onDone={() => load()} />
+      )}
     </div>
   )
 }
