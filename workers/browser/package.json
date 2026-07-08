@@ -1,0 +1,16 @@
+{
+  "name": "instaguard-browser-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Браузерный воркер (Playwright/Chromium) для входа и действий Instagram — «эмуль». См. plan.md §4.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "playwright": "1.48.0",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}

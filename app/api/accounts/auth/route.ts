@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { loginByCredentials, loginByCookies } from '@/lib/instagram/client'
+import { browserLogin, browserLoginByCookies } from '@/lib/browser/client'
+import { resolveEngine } from '@/lib/browser/engine'
 import { getCurrentUser } from '@/lib/auth'
 import { normalizeCookies } from '@/lib/cookies'
 import { pickPoolProxy, isInstagramBlacklist, isAccountNotFound, markProxyBlocked } from '@/lib/proxyPool'
 import { persistInstagramAccount } from '@/lib/accountPersist'
 
-// host:port прокси без логина/пароля — чтобы в ошибке было видно, ЧЕРЕЗ КАКОЙ IP шёл вход
-// (сверить с вердиктом «Проверить IP»: датацентр этот адрес или резидентный).
+// host:port прокси без логина/пароля — чтобы в ошибке было видно, ЧЕРЕЗ КАКОЙ IP шёл вход.
 function proxyHostLabel(url: string | null): string {
   if (!url) return 'без прокси (IP сервера)'
   let s = url.replace(/^\w+:\/\//, '')
@@ -17,19 +18,19 @@ function proxyHostLabel(url: string | null): string {
 
 export async function POST(req: NextRequest) {
   try {
-    const { username, password, proxy, authMethod, cookies, role, sectionId, proxyMode, totpSecret } = await req.json()
+    const { username, password, proxy, authMethod, cookies, role, sectionId, proxyMode, totpSecret, emailLogin, emailPassword } = await req.json()
     const accountRole: 'RESPONDER' | 'HELPER' | 'BOTH' = role === 'HELPER' ? 'HELPER' : 'RESPONDER'
     const section = typeof sectionId === 'string' && sectionId ? sectionId : null
+    const emLogin = typeof emailLogin === 'string' && emailLogin.trim() ? emailLogin.trim() : null
+    const emPass = typeof emailPassword === 'string' && emailPassword ? emailPassword : null
 
-    // Аккаунт принадлежит пользователю текущей сессии (мультитенант).
-    // ВАЖНО: пользователя и прокси определяем ДО логина, чтобы самый первый вход
-    // (самое палевное действие для свежего аккаунта) шёл уже через прокси, а не с IP сервера.
+    // Пользователя и прокси определяем ДО логина — первый вход должен идти уже через прокси.
     const user = await getCurrentUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Не авторизован' }, { status: 401 })
-    }
+    if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 })
 
-    // Раздел должен принадлежать этому же пользователю, иначе не назначаем
+    // Движок: браузер (эмуль), если воркер задеплоен и не выбран legacy; иначе legacy instagrapi.
+    const engine = await resolveEngine(user.id)
+
     let validSection: string | null = null
     if (section) {
       const sec = await prisma.section.findFirst({ where: { id: section, userId: user.id }, select: { id: true } })
@@ -37,7 +38,6 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Прокси: определяем ДО логина ──────────────────────────────────────────
-    // Строковый account.proxy используют воркеры; proxyId — для управления/пула.
     const settings = await prisma.userSettings.findUnique({ where: { userId: user.id } })
     const allowNoProxy = settings?.allowNoProxy ?? false
     const cap = settings?.accountsPerProxy ?? 3
@@ -45,48 +45,46 @@ export async function POST(req: NextRequest) {
 
     let proxyUrl: string | null = manualProxy
     let proxyId: string | null = null
-
-    // Нужно взять прокси из пула, если: явный «авто», ИЛИ прокси не задан вручную и
-    // работа без прокси НЕ разрешена (тогда подключаем автоматически из пула — «первый вход через прокси»).
     const needPool = proxyMode === 'auto' || (!manualProxy && !allowNoProxy)
 
     if (needPool) {
-      // Подбор: пропускаем мёртвые прокси, предпочитаем «чистые» (см. lib/proxyPool).
       const pick = await pickPoolProxy(user.id, cap)
-      if (pick.ok) {
-        proxyUrl = pick.url
-        proxyId = pick.id
-      } else if (proxyMode === 'auto' || !allowNoProxy) {
-        // Прокси обязателен, но нет пригодного → НЕ входим без прокси (иначе риск мгновенного бана).
+      if (pick.ok) { proxyUrl = pick.url; proxyId = pick.id }
+      else if (proxyMode === 'auto' || !allowNoProxy) {
         return NextResponse.json({
           error: pick.reason === 'all-dead'
             ? 'Все свободные прокси в пуле не отвечают. Нажмите «Проверить все» на вкладке «Прокси» — годные (✅) подсветятся, мёртвые/датацентр отсеются.'
             : 'В пуле нет свободных прокси. Добавьте прокси на вкладке «Прокси», укажите уникальный вручную, либо включите «Работать без прокси» в Настройках.',
         }, { status: 400 })
       }
-      // allowNoProxy=true и пригодного прокси нет → продолжаем без прокси (осознанно разрешено)
     } else if (manualProxy) {
-      // Уникальный (ручной) — заводим/переиспользуем индивидуальный прокси
       const found = await prisma.proxy.findFirst({ where: { userId: user.id, url: manualProxy } })
       const p = found ?? await prisma.proxy.create({ data: { userId: user.id, url: manualProxy, kind: 'individual' } })
       proxyId = p.id
     }
     // ──────────────────────────────────────────────────────────────────────────
 
-    let sessionData: object
+    let sessionData: object | null = null
+    let browserState: object | null = null
+    let loginMethod: 'browser' | 'cookies' | 'legacy' = 'legacy'
     let clean = ''
 
     if (authMethod === 'cookies') {
       if (!cookies) return NextResponse.json({ error: 'Куки обязательны' }, { status: 400 })
-
-      // Надёжный разбор: массив Cookie-Editor / JSON-объект / строка k=v / сырой sessionid / мобильная сессия.
-      const norm = normalizeCookies(typeof cookies === 'string' ? cookies : JSON.stringify(cookies))
-      if (norm.error) return NextResponse.json({ error: norm.error }, { status: 400 })
-
       try {
-        const result = await loginByCookies(norm.cookies, proxyUrl || undefined)
-        sessionData = result.sessionData
-        clean = result.username
+        if (engine === 'browser') {
+          // Браузер: принимаем storageState/куки как есть — воркер соберёт и проверит сессию.
+          const result = await browserLoginByCookies(typeof cookies === 'string' ? cookies : cookies, proxyUrl || undefined)
+          browserState = result.browserState
+          clean = result.username
+          loginMethod = 'cookies'
+        } else {
+          const norm = normalizeCookies(typeof cookies === 'string' ? cookies : JSON.stringify(cookies))
+          if (norm.error) return NextResponse.json({ error: norm.error }, { status: 400 })
+          const result = await loginByCookies(norm.cookies, proxyUrl || undefined)
+          sessionData = result.sessionData
+          clean = result.username
+        }
       } catch (e: any) {
         const raw = String(e?.message ?? 'Ошибка авторизации через куки')
         if (isInstagramBlacklist(raw) && proxyId) await markProxyBlocked(proxyId)
@@ -94,41 +92,57 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: msg }, { status: 400 })
       }
     } else {
-      if (!username || !password) {
-        return NextResponse.json({ error: 'Username и пароль обязательны' }, { status: 400 })
-      }
+      if (!username || !password) return NextResponse.json({ error: 'Username и пароль обязательны' }, { status: 400 })
       clean = username.replace(/^@/, '').trim().toLowerCase()
+      const totp = typeof totpSecret === 'string' && totpSecret.trim() ? totpSecret.trim() : undefined
       try {
-        const result = await loginByCredentials(clean, password, proxyUrl || undefined, typeof totpSecret === 'string' && totpSecret.trim() ? totpSecret.trim() : undefined)
-        if (result.needsChallenge || result.needs2fa || !result.sessionData) {
-          // Instagram запросил код: challenge (почта/SMS «новое устройство») ИЛИ 2FA.
-          // Возвращаем 202 + КОНТЕКСТ, с которым клиент вернётся на /challenge после ввода
-          // кода (сохранить аккаунт с тем же прокси/ролью/разделом). proxyUrl (с логином:
-          // паролем прокси) НЕ отдаём — только proxyId (по нему /challenge достанет URL из БД).
-          const is2fa = Boolean(result.needs2fa)
-          return NextResponse.json({
-            needsChallenge: is2fa ? undefined : true,
-            needs2fa: is2fa || undefined,
-            stepName: result.stepName,
-            contact: result.contact,
-            methods: result.methods,
-            sentTo: result.sentTo,
-            method: result.method,
-            phone: result.phone,
-            username: result.username ?? clean,
-            proxyId,
-            role: accountRole,
-            sectionId: validSection,
-            error: is2fa
-              ? 'Instagram запросил код двухфакторной аутентификации (2FA).'
-              : 'Instagram требует подтверждение (challenge). Введите код из письма/SMS.',
-          }, { status: 202 })
+        if (engine === 'browser') {
+          const result = await browserLogin(clean, password, proxyUrl || undefined, totp)
+          if (result.needsCheckpoint || result.needs2fa || !result.browserState) {
+            const is2fa = Boolean(result.needs2fa)
+            return NextResponse.json({
+              needsChallenge: is2fa ? undefined : true,
+              needs2fa: is2fa || undefined,
+              stepName: is2fa ? '2fa' : 'challenge',
+              sentTo: result.channel ?? null,
+              username: result.username ?? clean,
+              proxyId,
+              role: accountRole,
+              sectionId: validSection,
+              error: is2fa
+                ? 'Instagram запросил код двухфакторной аутентификации (2FA).'
+                : 'Instagram требует подтверждение (challenge). Введите код из письма/SMS.',
+            }, { status: 202 })
+          }
+          browserState = result.browserState
+          loginMethod = 'browser'
+        } else {
+          const result = await loginByCredentials(clean, password, proxyUrl || undefined, totp)
+          if (result.needsChallenge || result.needs2fa || !result.sessionData) {
+            const is2fa = Boolean(result.needs2fa)
+            return NextResponse.json({
+              needsChallenge: is2fa ? undefined : true,
+              needs2fa: is2fa || undefined,
+              stepName: result.stepName,
+              contact: result.contact,
+              methods: result.methods,
+              sentTo: result.sentTo,
+              method: result.method,
+              phone: result.phone,
+              username: result.username ?? clean,
+              proxyId,
+              role: accountRole,
+              sectionId: validSection,
+              error: is2fa
+                ? 'Instagram запросил код двухфакторной аутентификации (2FA).'
+                : 'Instagram требует подтверждение (challenge). Введите код из письма/SMS.',
+            }, { status: 202 })
+          }
+          sessionData = result.sessionData
         }
-        sessionData = result.sessionData
       } catch (e: any) {
         const raw = String(e?.message ?? 'Неверный логин или пароль')
         const notFound = isAccountNotFound(raw)
-        // Прокси метим выжженным ТОЛЬКО на реальный IP-бан, и НИКОГДА на ошибку аккаунта.
         const burned = !notFound && isInstagramBlacklist(raw)
         if (burned && proxyId) await markProxyBlocked(proxyId)
         const hint = notFound
@@ -145,10 +159,14 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       username: clean,
       sessionData,
+      browserState,
+      loginMethod,
       proxyUrl,
       proxyId,
       role: accountRole,
       sectionId: validSection,
+      emailLogin: emLogin,
+      emailPassword: emPass,
     })
 
     return NextResponse.json({ ok: true, account: { id: account.id, username: account.username, status: account.status } })

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { X, AtSign, Lock, Globe, Loader2, FolderTree, ShieldCheck } from 'lucide-react'
+import { X, AtSign, Lock, Globe, Loader2, FolderTree, ShieldCheck, Mail } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useStore } from '@/lib/store'
 import { cn } from '@/lib/utils'
@@ -60,6 +60,8 @@ export function AddAccountModal({
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [totp, setTotp]         = useState('')   // 2FA-ключ (base32), если у аккаунта включена 2FA
+  const [emailLogin, setEmailLogin]       = useState('')  // почта аккаунта (для авто-подтверждения кода)
+  const [emailPassword, setEmailPassword] = useState('')  // пароль почты (только для IMAP)
   const [cookies, setCookies]   = useState('')
   const [proxy, setProxy]       = useState(presetProxy ?? '')
   const [loading, setLoading]   = useState(false)
@@ -183,7 +185,7 @@ export function AddAccountModal({
       const proxyVal = proxyMode === 'unique' ? (proxy.trim() || undefined) : undefined
       const body = mode === 'cookies'
         ? { authMethod: 'cookies', cookies: cookies.trim(), proxy: proxyVal, proxyMode, sectionId, role }
-        : { username: username.replace(/^@/, '').trim(), password, totpSecret: totp.trim() || undefined, proxy: proxyVal, proxyMode, sectionId, role }
+        : { username: username.replace(/^@/, '').trim(), password, totpSecret: totp.trim() || undefined, proxy: proxyVal, proxyMode, sectionId, role, emailLogin: emailLogin.trim() || undefined, emailPassword: emailPassword || undefined }
 
       const res = await fetch('/api/accounts/auth', {
         method: 'POST',
@@ -444,6 +446,24 @@ export function AddAccountModal({
                 <input value={totp} onChange={(e) => setTotp(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && save()}
                   className="field pl-10 font-mono text-[13px]" placeholder="напр. JBSWY3DPEHPK3PXP (необязательно)" />
+              </div>
+            </div>
+            <div>
+              <label className="text-[13px] text-subt font-medium mb-2 flex items-center gap-1.5">
+                Почта аккаунта <span className="text-subt/70 font-normal">(необязательно)</span>
+                <Hint text="Почта и её пароль нужны, чтобы автоматически прочитать код подтверждения (challenge), который Instagram шлёт на новое устройство. Если не задать — код вводится вручную. Пароль почты не показывается и используется только для чтения кода." />
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="relative">
+                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
+                  <input value={emailLogin} onChange={(e) => setEmailLogin(e.target.value)}
+                    className="field pl-9 text-[13px]" placeholder="email аккаунта" />
+                </div>
+                <div className="relative">
+                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-subt" />
+                  <input type="password" value={emailPassword} onChange={(e) => setEmailPassword(e.target.value)}
+                    className="field pl-9 text-[13px]" placeholder="пароль почты" />
+                </div>
               </div>
             </div>
             {pasteNote && <div className="text-[12px] text-ok bg-ok/10 rounded-2xl px-3 py-2">✓ {pasteNote}</div>}

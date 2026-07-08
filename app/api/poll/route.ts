@@ -8,6 +8,8 @@ import {
 // Парсинг подписчиков/комментариев/лайкнувших/подписок — через скрейпер-API (замена черновых).
 // Формы ответов 1:1 совпадают со старыми getFollowers/getComments/getLikers/getFollowing.
 import { scrapeFollowers, scrapeFollowing, scrapeComments, scrapeLikers, scraperConfigured } from '@/lib/scraper/hiker'
+import { resolveEngine } from '@/lib/browser/engine'
+import { runFollowerActionsBrowser } from '@/lib/browser/actions'
 import { Queue } from 'bullmq'
 import { loadCounters, consume, warmupFactor, scaleCaps, MAX_NEW_PER_POLL, type Counters, type ActionKind } from '@/lib/limits'
 import { getCurrentUser } from '@/lib/auth'
@@ -181,6 +183,32 @@ async function mergeStats(triggerId: string, incFired: Record<string, number>, i
 // Выполняет действия триггера-подписки для одной цели синхронно.
 // Считаем отдельно «сработало» (попытались) и «выполнено» (получилось).
 async function runFollowerActionsInline(job: any) {
+  // ── Браузерный движок (эмуль): действия по username через реальный Chromium (plan §4.6). ──
+  // Строго изолировано от legacy: включается только когда job.engine==='browser' и есть browserState.
+  if (job.engine === 'browser' && job.browserState) {
+    const r = await runFollowerActionsBrowser({
+      browserState: job.browserState, ownerUsername: job.ownerUsername, proxy: job.proxy,
+      followerUsername: job.followerUsername, text: job.text || undefined,
+      doFollow: job.doFollow, doLike: job.doLike, viewStories: job.viewStories, storyLike: job.storyLike,
+      fallbackFollow: job.fallbackFollow, fallbackLike: job.fallbackLike,
+    })
+    if (r.browserState) await prisma.instagramAccount.update({ where: { id: job.accountId }, data: { browserState: r.browserState as any } }).catch(() => null)
+    const attempted = Object.keys(r.incFired).length > 0
+    const success = Object.keys(r.incDone).length > 0
+    if (attempted) {
+      const level = success ? (r.errors.length ? 'WARN' : 'SUCCESS') : 'ERROR'
+      const message = success
+        ? `Сработал триггер «${job.triggerName}» → @${job.followerUsername}${r.errors.length ? ` (частично: ${r.errors.join('; ')})` : ''}`
+        : `Триггер «${job.triggerName}» → @${job.followerUsername}: действия не выполнены${r.errors.length ? ` (${r.errors.join('; ')})` : ''}`
+      await Promise.all([
+        prisma.log.create({ data: { accountId: job.accountId, level, message } }),
+        prisma.triggerRule.update({ where: { id: job.triggerId }, data: { fireCount: { increment: 1 }, stats: await mergeStats(job.triggerId, r.incFired, r.incDone) } }),
+      ])
+    }
+    if (r.brk) await prisma.instagramAccount.update({ where: { id: job.accountId }, data: { status: r.brk } }).catch(() => null)
+    return
+  }
+
   const session = job.sessionData as object          // основной: DM/фото/подписка/fallback
   const proxy = job.proxy ?? undefined
   // Лайк/сторис могут выполняться черновым (Настройки) — если сессия не передана, берём основного.
@@ -305,8 +333,8 @@ export async function POST(req: NextRequest) {
   // Прокси обязателен, если владелец НЕ включил «Работать без прокси» (по умолчанию — обязателен).
   const proxyRequired = (userId: string) => !allowNoProxy.get(userId)
 
-  // Основные, которым реально есть что делать (есть активные триггеры)
-  const workingMains = accounts.filter((a) => a.sessionData && a.triggersAsResponder.length)
+  // Основные, которым реально есть что делать (есть сессия — legacy ИЛИ браузерная — и активные триггеры)
+  const workingMains = accounts.filter((a) => (a.sessionData || a.browserState) && a.triggersAsResponder.length)
 
   // Парсинг идёт через скрейпер-API (HikerAPI). Если ключ не задан — парсить нечем: тревога + стоп.
   // (Стори-события читаются сессией основного и работали бы и без ключа, но без парсинга
@@ -331,7 +359,7 @@ export async function POST(req: NextRequest) {
   const dmQueue = getDmQueue()
 
   for (const account of accounts) {
-    if (!account.sessionData) continue
+    if (!account.sessionData && !account.browserState) continue
 
     // Прокси обязателен и не задан → НЕ работаем этим аккаунтом (защита от мгновенного бана).
     // Отключается тумблером «Работать без прокси» в Настройках.
@@ -357,6 +385,8 @@ export async function POST(req: NextRequest) {
 
     const session = account.sessionData as object
     const proxy = account.proxy ?? undefined
+    // Движок действий владельца: браузер (если воркер задеплоен и не выбран legacy), иначе legacy.
+    const engine = await resolveEngine(account.userId)
     const s: PollSummary = {
       accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0,
       triggersFound: triggers.length, totalComments: 0, newComments: 0, commentActions: 0, limited: 0,
@@ -462,7 +492,8 @@ export async function POST(req: NextRequest) {
           }
 
           const job = {
-            sessionData: account.sessionData, accountId: account.id,
+            sessionData: account.sessionData, browserState: account.browserState,
+            engine, ownerUsername: account.username, accountId: account.id,
             triggerId: trigger.id, triggerName: trigger.name,
             followerPk: target.pk, followerUsername: target.username,
             text: text.trim(), image: willDM ? image : undefined,
@@ -579,7 +610,9 @@ export async function POST(req: NextRequest) {
       // ── Поток стори-событий: ответы на мои сторис + упоминания (сессией основного) ──
       const snapStoryMeta = account.snapshots.find((sn) => sn.type === 'STORY')
       const storyElapsed = snapStoryMeta ? Date.now() - new Date(snapStoryMeta.createdAt).getTime() : Infinity
-      if (storyTriggers.length && (isManual || storyElapsed >= STORY_COOLDOWN_MS)) {
+      // Стори-события читает legacy-сессия основного (его личка). Для браузерных аккаунтов
+      // без sessionData этот поток пока пропускается (инбокс-чтение через браузер — Фаза 3/4).
+      if (storyTriggers.length && account.sessionData && (isManual || storyElapsed >= STORY_COOLDOWN_MS)) {
         // Входящие story-события видит только основной аккаунт (это его личка)
         const { events } = await getStoryEvents(session, proxy, STORY_EVENTS_AMOUNT)
         const hadBaseline = Boolean(snapStoryMeta)
@@ -603,7 +636,9 @@ export async function POST(req: NextRequest) {
       const commentElapsed = snapCommentsMeta
         ? Date.now() - new Date(snapCommentsMeta.createdAt).getTime()
         : Infinity
-      if (commentTriggers.length && (isManual || commentElapsed >= COMMENT_COOLDOWN_MS)) {
+      // Ответы/лайки/директ по комментам пока исполняет legacy-сессия (реплай требует postUrl
+      // из media_id — Фаза 4). Для браузерных аккаунтов без sessionData поток комментов пропускается.
+      if (commentTriggers.length && account.sessionData && (isManual || commentElapsed >= COMMENT_COOLDOWN_MS)) {
         const scraped = await scrape(() => scrapeComments(account.username, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA))
         if (scraped) {
         const { comments } = scraped

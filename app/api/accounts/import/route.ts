@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { loginByCookies, loginByCredentials } from '@/lib/instagram/client'
+import { browserLogin, browserLoginByCookies } from '@/lib/browser/client'
+import { resolveEngine } from '@/lib/browser/engine'
 import { getCurrentUser } from '@/lib/auth'
 import { normalizeCookies } from '@/lib/cookies'
 import { pickPoolProxy, markProxyBlocked } from '@/lib/proxyPool'
+import { persistInstagramAccount } from '@/lib/accountPersist'
 
 /**
  * Массовый импорт аккаунтов. Одна строка — один аккаунт. Два режима (mode):
@@ -14,7 +17,17 @@ import { pickPoolProxy, markProxyBlocked } from '@/lib/proxyPool'
  * Прокси подключается автоматически из пула, если не разрешена «работа без прокси» (защита от бана).
  */
 
-interface RowResult { line: number; ok: boolean; username?: string; reason?: string }
+interface RowResult {
+  line: number; ok: boolean; username?: string; reason?: string
+  // Аккаунт валиден, но Instagram запросил код (challenge/2FA). Воркер УЖЕ отправил код и
+  // сохранил сессию по username — строку можно «дожать», введя код (см. модалку импорта).
+  needsCode?: boolean
+  codeMode?: 'challenge' | '2fa'
+  proxyId?: string | null
+  role?: 'RESPONDER' | 'HELPER'
+  sentTo?: string | null      // куда ушёл код challenge: 'email' | 'sms'
+  method?: string | null      // для 2FA: 'sms' | 'app'
+}
 
 // 2FA-ключ из хвоста строки (токены после пароля): либо ХВОСТ из групп base32 по 4 символа
 // (OJDU 3SXQ HPJG …), либо один длинный base32-токен. Почта/почта-пароль (с @/#/точками)
@@ -71,6 +84,8 @@ export async function POST(req: NextRequest) {
     const settings = await prisma.userSettings.findUnique({ where: { userId: user.id } })
     const allowNoProxy = settings?.allowNoProxy ?? false
     const cap = settings?.accountsPerProxy ?? 3
+    // Движок: браузер (эмуль), если воркер задеплоен и не выбран legacy; иначе legacy instagrapi.
+    const engine = await resolveEngine(user.id)
 
     let validSection: string | null = null
     if (typeof sectionId === 'string' && sectionId) {
@@ -103,13 +118,16 @@ export async function POST(req: NextRequest) {
         if (px.id) triedProxyIds.push(px.id)
 
         try {
-          let sessionData: object
+          let sessionData: object | null = null
+          let browserState: object | null = null
+          let loginMethod: 'browser' | 'cookies' | 'legacy' = 'legacy'
           let clean = ''
+          let emLogin: string | null = null
+          let emPass: string | null = null
 
           if (importMode === 'password') {
             // Защита от перепутанного режима: куки-строку (мобильная сессия с Bearer/UA)
-            // нельзя парсить как «логин пароль» — иначе «логин:пароль:2fa» уходит в username,
-            // а UA — в password, и Instagram отвечает «can't find account» (видно в логах).
+            // нельзя парсить как «логин пароль» — иначе «логин:пароль:2fa» уходит в username.
             if (/Authorization=Bearer/i.test(line) || /\|\s*Instagram\s[\d.]+\s+Android/i.test(line)) {
               results.push({ line: i + 1, ok: false, reason: 'Это строка КУКИ (мобильная сессия), а не логин/пароль — переключите режим на «🍪 Куки».' })
               break
@@ -121,17 +139,58 @@ export async function POST(req: NextRequest) {
             if (!login || !password) { results.push({ line: i + 1, ok: false, reason: 'нет логина или пароля' }); break }
             // 2FA-ключ (в т.ч. разбитый на группы «OJDU 3SXQ …») — из токенов после пароля.
             const totp = extractTotpKey(parts.slice(2))
-            const r = await loginByCredentials(login, password, px.url || undefined, totp)
-            if (r.needsChallenge || !r.sessionData) {
-              results.push({ line: i + 1, ok: false, reason: 'Instagram требует подтверждение (challenge) — добавьте вручную' })
-              break
+            // Почта аккаунта — для авточтения кода checkpoint по IMAP (plan §4.5): «…почта почта-пароль…».
+            if (parts[2] && parts[2].includes('@')) {
+              emLogin = parts[2]
+              if (parts[3] && !/^[A-Za-z2-7]{16,}$/.test(parts[3])) emPass = parts[3]
             }
-            sessionData = r.sessionData
             clean = login.replace(/^@/, '').trim().toLowerCase()
+
+            if (engine === 'browser') {
+              const r = await browserLogin(login, password, px.url || undefined, totp)
+              // Код (checkpoint «новое устройство» или 2FA без ключа) — строку дожмёт модалка (роут /auth/challenge).
+              if (r.needsCheckpoint || r.needs2fa) {
+                results.push({
+                  line: i + 1, ok: false, needsCode: true, username: clean,
+                  codeMode: r.needs2fa ? '2fa' : 'challenge',
+                  proxyId: px.id, role: accountRole,
+                  sentTo: r.channel ?? null, method: null,
+                  reason: r.needs2fa
+                    ? 'Instagram запросил код 2FA — введите код ниже'
+                    : `Instagram отправил код подтверждения ${r.channel === 'sms' ? 'по SMS' : 'на почту'} — введите код ниже`,
+                })
+                break
+              }
+              if (!r.browserState) {
+                results.push({ line: i + 1, ok: false, reason: 'Вход не завершён (браузер не вернул сессию) — попробуйте добавить вручную' })
+                break
+              }
+              browserState = r.browserState
+              loginMethod = 'browser'
+            } else {
+              const r = await loginByCredentials(login, password, px.url || undefined, totp)
+              // Пароль/гео/прокси прошли — аккаунт валиден, воркер уже отправил код. Строку дожмёт модалка.
+              if (r.needs2fa || r.needsChallenge) {
+                results.push({
+                  line: i + 1, ok: false, needsCode: true, username: clean,
+                  codeMode: r.needs2fa ? '2fa' : 'challenge',
+                  proxyId: px.id, role: accountRole,
+                  sentTo: r.sentTo ?? null, method: r.method ?? null,
+                  reason: r.needs2fa
+                    ? `Instagram запросил код 2FA (${r.method === 'app' ? 'приложение-аутентификатор' : 'SMS'}) — введите код ниже`
+                    : `Instagram отправил код подтверждения ${r.sentTo === 'sms' ? 'по SMS' : 'на почту'} — введите код ниже`,
+                })
+                break
+              }
+              if (!r.sessionData) {
+                results.push({ line: i + 1, ok: false, reason: 'Вход не завершён (Instagram не вернул сессию) — попробуйте добавить вручную' })
+                break
+              }
+              sessionData = r.sessionData
+            }
           } else {
-            // Полная мобильная сессия (login:pass:2fa|UA|device-ids|заголовки с Bearer) —
-            // передаём ВСЮ строку как есть: воркеру нужны и UA, и device-ids, и заголовки.
-            // Иначе формат «логин|пароль|UA|куки»: куки — всё с 4-й части. Иначе вся строка = куки.
+            // Куки/сессия. Формат «логин|пароль|UA|куки»: куки — с 4-й части; иначе вся строка = куки.
+            // Полная мобильная сессия с Bearer — передаём ВСЮ строку как есть.
             let cookiesRaw: string
             if (line.includes('Authorization=Bearer')) {
               cookiesRaw = line
@@ -139,27 +198,27 @@ export async function POST(req: NextRequest) {
               const parts = line.split('|')
               cookiesRaw = parts.length >= 4 ? parts.slice(3).join('|') : line
             }
-            const norm = normalizeCookies(cookiesRaw)
-            if (norm.error) { results.push({ line: i + 1, ok: false, reason: norm.error }); break }
-            const res = await loginByCookies(norm.cookies, px.url || undefined)
-            sessionData = res.sessionData
-            clean = res.username.replace(/^@/, '').trim().toLowerCase()
+            if (engine === 'browser') {
+              // Браузер: отдаём строку как есть — воркер соберёт storageState/куки и проверит сессию.
+              const res = await browserLoginByCookies(cookiesRaw, px.url || undefined)
+              browserState = res.browserState
+              clean = res.username.replace(/^@/, '').trim().toLowerCase()
+              loginMethod = 'cookies'
+            } else {
+              const norm = normalizeCookies(cookiesRaw)
+              if (norm.error) { results.push({ line: i + 1, ok: false, reason: norm.error }); break }
+              const res = await loginByCookies(norm.cookies, px.url || undefined)
+              sessionData = res.sessionData
+              clean = res.username.replace(/^@/, '').trim().toLowerCase()
+            }
           }
 
-          const existing = await prisma.instagramAccount.findFirst({ where: { username: clean, userId: user.id } })
-          if (existing) {
-            await prisma.instagramAccount.update({
-              where: { id: existing.id },
-              data: { sessionData, status: 'ACTIVE', lastChecked: new Date(), proxy: px.url, proxyId: px.id, role: accountRole, sectionId: validSection },
-            })
-          } else {
-            await prisma.instagramAccount.create({
-              data: {
-                userId: user.id, username: clean, role: accountRole,
-                sessionData, proxy: px.url, proxyId: px.id, status: 'ACTIVE', sectionId: validSection,
-              },
-            })
-          }
+          await persistInstagramAccount({
+            userId: user.id, username: clean,
+            sessionData, browserState, loginMethod,
+            proxyUrl: px.url, proxyId: px.id, role: accountRole, sectionId: validSection,
+            emailLogin: emLogin, emailPassword: emPass,
+          })
           imported++
           results.push({ line: i + 1, ok: true, username: clean })
           rowDone = true

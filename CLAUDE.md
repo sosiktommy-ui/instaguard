@@ -116,6 +116,21 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-09
+
+#### feat(АРХИТЕКТУРА): переход на браузерный движок (Playwright «эмуль») — вход и действия через реальный Chromium (Фазы 1–2). Авторитетный план — `plan.md`
+
+⚠️ **Нужен НОВЫЙ Railway-сервис** (браузерный воркер) + переменные `BROWSER_WORKER_URL`/`BROWSER_WORKER_SECRET`. Пока URL не задан — `resolveEngine`='legacy', всё работает по-старому (instagrapi). Проверка воркера: `<url>/health` → `build:2026-07-09-browser-1`.
+
+**Зачем:** вход по логину/паролю через приватный API instagrapi Meta отбивает (`UserInvalidCredentials`/«change your IP…blacklist») даже с 20+ чистых резидентных прокси — виноват метод, а не прокси. Живой браузер Meta пускает. Парсинг остаётся на HikerAPI.
+
+- **`workers/browser/` (новый Railway-сервис, Node+Playwright+stealth, Docker):** `server.js` + `lib/{browser,login,actions,human,fingerprint,proxy,selectors,state}.js`. Эндпоинты: `/health`, `/login`, `/login/checkpoint`, `/login/resend`, `/login/cookies`, `/session/test`, `/dm`, `/follow`, `/like`, `/stories`, `/comment`, `/reply-comment`. Прокси на контекст, ограничение конкуренции (`BROWSER_CONCURRENCY`), человекоподобный ввод, stealth, стабильный отпечаток, storageState-сессии.
+- **Схема (миграция `20260709000000_browser_engine`, идемпотентная):** `InstagramAccount.browserState/loginMethod/emailLogin/emailPassword`; `UserSettings.parsingSource/actionEngine/browserHeadful`.
+- **Next.js:** `lib/browser/{client,engine,actions}.ts` (обёртка воркера, выбор движка `resolveEngine`, исполнитель действий). Engine-aware: `accounts/auth`, `accounts/auth/challenge`, `accounts/auth/resend`, `accounts/import` (вход браузером, `browserState`, почта для IMAP), `poll/route.ts` + `instrumentation.ts` (поток «подписчики → директ/подписка/лайк/сторис» через браузер, сохранение `browserState`). Всё под guard `engine==='browser' && browserState` — legacy не тронут. `app/api/browser-health` (прокси на `/health`). `AddAccountModal` — поля почты + подсказка.
+- **ОТЛОЖЕНО (Фаза 3/4):** комменты через браузер (reply требует `postUrl` из `media_id`), чтение стори-инбокса и фото-в-директ через браузер, UI режимов парсинга/движка в Настройках. Для browser-only аккаунтов эти потоки пропускаются, не роняя цикл.
+
+Проверено: `tsc --noEmit` + `next build` + `node --check` (воркер) чисто. Реальный прогон — после деплоя воркера. Auth-работа (Google/email-верификация) в дерево НЕ коммитится (ждёт ключей).
+
 ### 2026-07-08 (3)
 
 #### feat(АРХИТЕКТУРА): парсинг переведён с черновых аккаунтов на скрейпер-API (HikerAPI) — черновые больше не нужны

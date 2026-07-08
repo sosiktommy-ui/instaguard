@@ -1,4 +1,5 @@
 import { mergeStatsMap } from './lib/stats'
+import { runFollowerActionsBrowser } from './lib/browser/actions'
 
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return
@@ -28,13 +29,49 @@ export async function register() {
     new Worker(
       'dm-send',
       async (job) => {
+        // ── Браузерный движок (эмуль): действия по username через Chromium (plan §4.6). ──
+        // Изолировано от legacy: включается только при engine==='browser' и наличии browserState.
+        {
+          const d = job.data as any
+          if (d.engine === 'browser' && d.browserState) {
+            const r = await runFollowerActionsBrowser({
+              browserState: d.browserState, ownerUsername: d.ownerUsername, proxy: d.proxy,
+              followerUsername: d.followerUsername, text: d.text || undefined,
+              doFollow: d.doFollow, doLike: d.doLike, viewStories: d.viewStories, storyLike: d.storyLike,
+              fallbackFollow: d.fallbackFollow, fallbackLike: d.fallbackLike,
+            })
+            if (r.browserState) await prisma.instagramAccount.update({ where: { id: d.accountId }, data: { browserState: r.browserState as any } }).catch(() => null)
+            const attempted = Object.keys(r.incFired).length > 0
+            const success = Object.keys(r.incDone).length > 0
+            if (attempted) {
+              const cur = await prisma.triggerRule.findUnique({ where: { id: d.triggerId }, select: { stats: true } }).catch(() => null)
+              const level = success ? (r.errors.length ? 'WARN' : 'SUCCESS') : 'ERROR'
+              const message = success
+                ? `Сработал триггер «${d.triggerName}» → @${d.followerUsername}${r.errors.length ? ` (частично: ${r.errors.join('; ')})` : ''}`
+                : `Триггер «${d.triggerName}» → @${d.followerUsername}: действия не выполнены${r.errors.length ? ` (${r.errors.join('; ')})` : ''}`
+              await Promise.all([
+                prisma.log.create({ data: { accountId: d.accountId, level, message } }),
+                prisma.triggerRule.update({ where: { id: d.triggerId }, data: { fireCount: { increment: 1 }, stats: mergeStatsMap(cur?.stats ?? {}, r.incFired, r.incDone) as any } }),
+              ])
+            }
+            if (r.brk) await prisma.instagramAccount.update({ where: { id: d.accountId }, data: { status: r.brk as any } }).catch(() => null)
+            console.log(`[dm-worker/browser] ${success ? '✓ выполнено' : '⚠ без выполнения'} → @${d.followerUsername}`)
+            return
+          }
+        }
         const {
           sessionData, accountId, triggerId, triggerName,
           followerPk, followerUsername, text, image, doFollow, doLike,
           viewStories, storyLike, proxy,
           fallbackFollow, fallbackLike,
+          likeSession, likeProxy, storySession, storyProxy,
         } = job.data
-        // Все действия (DM/фото/подписка/лайк/сторис) выполняет основной аккаунт — сессия sessionData
+        // DM/фото/подписка/fallback — основной (sessionData). Лайк/сторис могут выполняться
+        // черновым (Настройки): если для них передана отдельная сессия — используем её, иначе основного.
+        const likeSess  = likeSession ?? sessionData
+        const likePx    = likeProxy ?? proxy
+        const storySess = storySession ?? sessionData
+        const storyPx   = storyProxy ?? proxy
 
         const workerUrl = process.env.PYTHON_WORKER_URL ?? 'http://localhost:8001'
         const workerSecret = process.env.PYTHON_WORKER_SECRET ?? ''
@@ -87,8 +124,8 @@ export async function register() {
         if (image) { dmFired = true; await rd(2, 5); try { await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy }); dmSucceeded = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
         if (dmFired) { incFired.dm = (incFired.dm || 0) + 1; if (dmSucceeded) incDone.dm = (incDone.dm || 0) + 1 }
         if (doFollow) { incFired.follow = (incFired.follow || 0) + 1; await rd(3, 8); try { await call('/follow-user', { sessionData, userId: followerPk, proxy }); incDone.follow = (incDone.follow || 0) + 1 } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
-        if (doLike)   { incFired.like = (incFired.like || 0) + 1; await rd(4, 10); try { await call('/like-latest-media', { sessionData, userId: followerPk, proxy }); incDone.like = (incDone.like || 0) + 1 } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
-        if (viewStories) { incFired.story = (incFired.story || 0) + 1; await rd(5, 12); try { await call('/user-stories', { sessionData, userId: followerPk, like: storyLike, proxy }); incDone.story = (incDone.story || 0) + 1 } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
+        if (doLike)   { incFired.like = (incFired.like || 0) + 1; await rd(4, 10); try { await call('/like-latest-media', { sessionData: likeSess, userId: followerPk, proxy: likePx }); incDone.like = (incDone.like || 0) + 1 } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
+        if (viewStories) { incFired.story = (incFired.story || 0) + 1; await rd(5, 12); try { await call('/user-stories', { sessionData: storySess, userId: followerPk, like: storyLike, proxy: storyPx }); incDone.story = (incDone.story || 0) + 1 } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
 
         const attempted = Object.keys(incFired).length > 0
         const success = Object.keys(incDone).length > 0

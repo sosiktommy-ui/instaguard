@@ -1,0 +1,233 @@
+// Флоу входа Instagram через реальный браузер. См. plan.md §4.5.
+// Разделение ответственности: этот модуль работает с ПЕРЕДАННЫМ контекстом; управление
+// жизнью контекста (хранение между /login и /login/checkpoint) — на server.js.
+import crypto from 'crypto'
+import { SEL, URLS } from './selectors.js'
+import { firstVisible, clickByText, pageHasText, hasSessionCookie } from './browser.js'
+import { humanType, jitter, idleMouse } from './human.js'
+
+const LOGIN_URL = 'https://www.instagram.com/accounts/login/'
+
+// ── TOTP (2FA-ключ base32 → 6-значный код), без внешних зависимостей ──
+function base32Decode(s) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+  let bits = ''
+  for (const c of s.replace(/=+$/, '').replace(/\s+/g, '').toUpperCase()) {
+    const i = alphabet.indexOf(c)
+    if (i >= 0) bits += i.toString(2).padStart(5, '0')
+  }
+  const bytes = []
+  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2))
+  return Buffer.from(bytes)
+}
+function totpCode(secret) {
+  const key = base32Decode(secret)
+  const epoch = Math.floor(Date.now() / 1000 / 30)
+  const buf = Buffer.alloc(8)
+  buf.writeUInt32BE(Math.floor(epoch / 2 ** 32), 0)
+  buf.writeUInt32BE(epoch >>> 0, 4)
+  const hmac = crypto.createHmac('sha1', key).update(buf).digest()
+  const off = hmac[hmac.length - 1] & 0xf
+  const code = ((hmac[off] & 0x7f) << 24) | ((hmac[off + 1] & 0xff) << 16) | ((hmac[off + 2] & 0xff) << 8) | (hmac[off + 3] & 0xff)
+  return (code % 1000000).toString().padStart(6, '0')
+}
+
+const urlHas = (url, list) => list.some((x) => url.includes(x))
+
+async function dismissCookieBanner(page) {
+  await clickByText(page, ['Allow all cookies', 'Accept All', 'Accept', 'Разрешить все файлы cookie', 'Принять все'], { timeout: 3500 })
+}
+
+// Закрыть пост-логин диалоги «Save login info?», «Turn on notifications».
+export async function dismissInterstitials(page) {
+  for (let i = 0; i < 3; i++) {
+    const clicked = await clickByText(page, SEL.notNowButtons, { timeout: 2500 })
+    if (!clicked) break
+    await jitter(600, 1200)
+  }
+}
+
+// Извлечь username залогиненного аккаунта (для сохранения записи).
+export async function extractUsername(page) {
+  // 1) страница редактирования профиля стабильно содержит поле username
+  try {
+    await page.goto('https://www.instagram.com/accounts/edit/', { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await jitter(800, 1600)
+    const inp = page.locator('input[name="username"], input#pepUsername, input[maxlength="30"]').first()
+    if (await inp.isVisible().catch(() => false)) {
+      const v = (await inp.inputValue().catch(() => '')).trim()
+      if (v) return v.replace(/^@/, '').toLowerCase()
+    }
+  } catch {}
+  // 2) фолбэк: ссылка на свой профиль в навигации
+  try {
+    const u = await page.evaluate(() => {
+      const skip = ['/explore/', '/reels/', '/direct/', '/accounts/', '/p/']
+      const links = [...document.querySelectorAll('a[role="link"], nav a')]
+        .map((a) => a.getAttribute('href'))
+        .filter((h) => h && /^\/[^/]+\/$/.test(h) && !skip.some((s) => h.startsWith(s)))
+      return links[0] ? links[0].replace(/\//g, '') : null
+    })
+    if (u) return u.replace(/^@/, '').toLowerCase()
+  } catch {}
+  return null
+}
+
+/**
+ * Одна попытка входа по логину/паролю на переданном контексте.
+ * @returns один из:
+ *  { ok:true, username, storageState }
+ *  { needsCheckpoint:true, channel:'email'|'sms'|null }
+ *  { needs2fa:true }
+ * @throws Error('bad_password'|'suspended'|'network'|'unknown: ...') на жёстких исходах
+ */
+export async function attemptLogin(context, { username, password, totpSecret }) {
+  const page = await context.newPage()
+  await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 60000 })
+  await dismissCookieBanner(page)
+  await idleMouse(page)
+
+  const userInput = await firstVisible(page, SEL.loginUsername, 15000)
+  const passInput = await firstVisible(page, SEL.loginPassword, 8000)
+  if (!userInput || !passInput) {
+    // Часто = прокси не доходит до Instagram / страница не та.
+    throw new Error('network: страница входа Instagram не загрузилась (прокси не доходит?)')
+  }
+  await humanType(userInput, username)
+  await jitter(400, 900)
+  await humanType(passInput, password)
+  await jitter(500, 1100)
+
+  const submit = await firstVisible(page, SEL.loginSubmit, 5000)
+  if (submit) await submit.click({ delay: 80 })
+  else await passInput.press('Enter')
+
+  // Ждём исход до ~28с.
+  const deadline = Date.now() + 28000
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(700)
+
+    if (await hasSessionCookie(context)) {
+      await dismissInterstitials(page)
+      const uname = (await extractUsername(page)) || username
+      const storageState = await context.storageState()
+      return { ok: true, username: uname, storageState }
+    }
+
+    const url = page.url()
+
+    if (urlHas(url, URLS.suspended) || (await pageHasText(page, ['suspended your account', 'приостановили ваш аккаунт', 'We suspended']))) {
+      throw new Error('suspended: аккаунт приостановлен Instagram — войти нельзя')
+    }
+
+    if (urlHas(url, URLS.twoFactor) || (await pageHasText(page, ['two-factor', 'двухфактор', 'Enter the code we', 'security code']))) {
+      if (totpSecret) {
+        const codeInput = await firstVisible(page, SEL.codeInput, 6000)
+        if (codeInput) {
+          await humanType(codeInput, totpCode(totpSecret))
+          await clickByText(page, SEL.codeSubmit, { timeout: 4000 })
+          await page.waitForTimeout(2500)
+          if (await hasSessionCookie(context)) {
+            await dismissInterstitials(page)
+            const uname = (await extractUsername(page)) || username
+            return { ok: true, username: uname, storageState: await context.storageState() }
+          }
+        }
+      }
+      return { needs2fa: true }
+    }
+
+    if (urlHas(url, URLS.challenge) || (await firstVisible(page, SEL.codeInput, 500))) {
+      let channel = null
+      if (await pageHasText(page, ['email', 'e-mail', 'почт'])) channel = 'email'
+      else if (await pageHasText(page, ['phone', 'SMS', 'телефон'])) channel = 'sms'
+      return { needsCheckpoint: true, channel }
+    }
+
+    const err = await firstVisible(page, SEL.loginError, 500)
+    if (err) {
+      const txt = (await err.textContent().catch(() => '')) || ''
+      if (/incorrect|неверн|wasn't right|couldn't find/i.test(txt)) throw new Error('bad_password: ' + txt.trim())
+      // иная ошибка формы — вернём текст
+      throw new Error('unknown: ' + txt.trim())
+    }
+  }
+
+  // Ничего явного за отведённое время.
+  if (await firstVisible(page, SEL.codeInput, 500)) return { needsCheckpoint: true, channel: null }
+  throw new Error('network: Instagram не ответил понятным исходом за отведённое время')
+}
+
+/**
+ * Довод входа кодом (challenge ИЛИ 2FA) на СОХРАНЁННОМ контексте (страница мид-флоу).
+ * @returns { ok:true, username, storageState }  @throws Error('bad_code'|...) иначе
+ */
+export async function resumeCode(context, { code }) {
+  const pages = context.pages()
+  const page = pages[pages.length - 1] || (await context.newPage())
+
+  const codeInput = await firstVisible(page, SEL.codeInput, 8000)
+  if (!codeInput) {
+    // Возможно, страница уже уехала — проверим, вдруг уже вошли.
+    if (await hasSessionCookie(context)) {
+      const uname = (await extractUsername(page)) || 'unknown'
+      return { ok: true, username: uname, storageState: await context.storageState() }
+    }
+    throw new Error('expired: поле кода не найдено — сессия ввода истекла, начните вход заново')
+  }
+  await codeInput.fill('')
+  await humanType(codeInput, String(code).replace(/\D/g, ''))
+  await clickByText(page, SEL.codeSubmit, { timeout: 4000 })
+
+  const deadline = Date.now() + 15000
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(700)
+    if (await hasSessionCookie(context)) {
+      await dismissInterstitials(page)
+      const uname = (await extractUsername(page)) || 'unknown'
+      return { ok: true, username: uname, storageState: await context.storageState() }
+    }
+    const err = await firstVisible(page, SEL.loginError, 400)
+    if (err) {
+      const txt = (await err.textContent().catch(() => '')) || ''
+      if (/incorrect|неверн|wrong|didn't match|check the code/i.test(txt)) throw new Error('bad_code: ' + txt.trim())
+    }
+  }
+  throw new Error('bad_code: код не принят (возможно, истёк) — запросите новый и попробуйте снова')
+}
+
+// Попытаться повторно отправить код (клик по «Resend»).
+export async function resendCode(context) {
+  const pages = context.pages()
+  const page = pages[pages.length - 1]
+  if (!page) return { ok: false }
+  const clicked = await clickByText(page, SEL.resendLink, { timeout: 5000 })
+  return { ok: clicked }
+}
+
+/**
+ * Вход по готовой сессии (storageState): проверить, что жива, и вернуть username.
+ * @returns { ok:true, username, storageState }  @throws иначе
+ */
+export async function loginByState(context) {
+  const page = await context.newPage()
+  await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 60000 })
+  await page.waitForTimeout(2000)
+  if (!(await hasSessionCookie(context))) {
+    throw new Error('login_required: сессия недействительна (нет sessionid) — куки устарели или другой аккаунт')
+  }
+  await dismissInterstitials(page)
+  const uname = (await extractUsername(page)) || 'unknown'
+  return { ok: true, username: uname, storageState: await context.storageState() }
+}
+
+export async function testSession(context) {
+  try {
+    const page = await context.newPage()
+    await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 45000 })
+    await page.waitForTimeout(1500)
+    return await hasSessionCookie(context)
+  } catch {
+    return false
+  }
+}
