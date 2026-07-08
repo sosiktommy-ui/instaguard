@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { ShieldAlert, Globe, ChevronDown, List, Users, BarChart3, Settings as SettingsIcon, HelpCircle, Radar, Cpu } from 'lucide-react'
+import { ShieldAlert, Globe, ChevronDown, List, Users, BarChart3, Settings as SettingsIcon, HelpCircle, Radar } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import ClientOnly from '@/components/common/ClientOnly'
 import { PageHeader } from '@/components/common/PageHeader'
@@ -156,25 +156,6 @@ function SettingsScreen() {
           </div>
         </div>
         <Toggle on={s.allowNoProxy} onChange={(v) => patch({ allowNoProxy: v })} />
-      </div>
-
-      {/* Движок действий: браузер (эмуль) или legacy (instagrapi) — plan.md §7.6 */}
-      <div className="card card-3d gloss p-5">
-        <div className="flex items-start gap-4">
-          <IconTile icon={Cpu} color={TONE.brand} size={40} />
-          <div className="flex-1 min-w-0">
-            <div className="font-semibold text-[15px]">Движок входа и действий</div>
-            <div className="text-[13px] text-subt mt-1 leading-relaxed">
-              Чем логиниться и выполнять действия (директ/лайк/подписка/сторис).
-            </div>
-          </div>
-        </div>
-        <div className="mt-3">
-          <Radio value={s.actionEngine} onChange={(v) => patch({ actionEngine: v })} options={[
-            { v: 'browser', label: '🌐 Браузер (эмуль) — рекомендуется', desc: 'Вход и действия через реальный Chromium (Playwright). Instagram пускает даже там, где приватный API отбивает. Требует задеплоенного браузерного воркера (BROWSER_WORKER_URL); без него автоматически используется legacy.' },
-            { v: 'legacy', label: '⚙️ Legacy (instagrapi)', desc: 'Старый путь через приватный API. Легче по ресурсам, но Instagram часто отбивает вход (UserInvalidCredentials/checkpoint). Аварийный откат.' },
-          ]} />
-        </div>
       </div>
 
       {/* Источник парсинга: API / черновые / микс — plan.md §7.6 */}
