@@ -3,29 +3,49 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LogOut, Menu, X, List, Users, Radar, BarChart3, Globe, Settings } from 'lucide-react'
+import { LogOut, Menu, X, List, Users, Radar, UsersRound, BarChart3, Globe, Settings } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AppLogo } from '@/components/common/AppLogo'
 import { ReactiveMascot } from '@/components/common/ReactiveMascot'
 import { useBreadcrumbs } from '@/lib/breadcrumbs'
 
 // Единственный уровень навигации — разделы приложения (супертаб-переключатель «режимов» убран)
-const SUBTABS = [
+// Пункт «Парсинг/Черновые» (href /drafts) динамический — зависит от Настроек→«Источник
+// парсинга» (parsingSource), см. buildSubtabs() и plan.md §7.3.
+const BASE_SUBTABS = [
   { href: '/triggers', label: 'Рекламные кампании', icon: List },
   { href: '/accounts', label: 'Аккаунты', icon: Users },
-  { href: '/drafts', label: 'Парсинг (API)', icon: Radar },
   { href: '/proxy', label: 'Прокси', icon: Globe },
   { href: '/stats', label: 'Статистика', icon: BarChart3 },
   { href: '/settings', label: 'Настройки', icon: Settings },
 ]
 
+function draftsTab(parsingSource: string) {
+  return parsingSource === 'api' || !parsingSource
+    ? { href: '/drafts', label: 'Парсинг (API)', icon: Radar }
+    : { href: '/drafts', label: 'Черновые аккаунты', icon: UsersRound }
+}
+
+function buildSubtabs(parsingSource: string) {
+  const tabs = [...BASE_SUBTABS]
+  tabs.splice(2, 0, draftsTab(parsingSource))
+  return tabs
+}
+
 export default function TopNav() {
   const pathname = usePathname()
   const router = useRouter()
   const [open, setOpen] = useState(false)
+  const [parsingSource, setParsingSource] = useState('api')
 
   // Close drawer on route change
   useEffect(() => { setOpen(false) }, [pathname])
+
+  useEffect(() => {
+    fetch('/api/settings').then((r) => r.json()).then((d) => { if (d?.parsingSource) setParsingSource(d.parsingSource) }).catch(() => {})
+  }, [])
+
+  const SUBTABS = buildSubtabs(parsingSource)
 
   // Пройти обучение заново: сбрасываем флаг и открываем главную (тур покажется снова)
   const replayTour = () => {

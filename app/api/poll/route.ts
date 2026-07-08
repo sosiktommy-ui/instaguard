@@ -10,6 +10,8 @@ import {
 import { scrapeFollowers, scrapeFollowing, scrapeComments, scrapeLikers, scraperConfigured } from '@/lib/scraper/hiker'
 import { resolveEngine } from '@/lib/browser/engine'
 import { runFollowerActionsBrowser } from '@/lib/browser/actions'
+import { browserComment, browserReply, browserFollow, browserLike, browserDM, browserStories } from '@/lib/browser/client'
+import { mediaPostUrl } from '@/lib/instagram/shortcode'
 import { Queue } from 'bullmq'
 import { loadCounters, consume, warmupFactor, scaleCaps, MAX_NEW_PER_POLL, type Counters, type ActionKind } from '@/lib/limits'
 import { getCurrentUser } from '@/lib/auth'
@@ -636,9 +638,12 @@ export async function POST(req: NextRequest) {
       const commentElapsed = snapCommentsMeta
         ? Date.now() - new Date(snapCommentsMeta.createdAt).getTime()
         : Infinity
-      // Ответы/лайки/директ по комментам пока исполняет legacy-сессия (реплай требует postUrl
-      // из media_id — Фаза 4). Для браузерных аккаунтов без sessionData поток комментов пропускается.
-      if (commentTriggers.length && account.sessionData && (isManual || commentElapsed >= COMMENT_COOLDOWN_MS)) {
+      // Браузерные аккаунты (нет sessionData) закрывают поток через постовой /comment|/reply-comment
+      // воркера — postUrl строится из media_id (shortcode, lib/instagram/shortcode.ts). Реплай
+      // браузером сейчас = обычный коммент к посту, НЕ тред-ответ конкретному комменту (см.
+      // workers/browser/lib/actions.js replyComment — тред отложен на Фазу 4).
+      const useBrowserForComments = engine === 'browser' && Boolean(account.browserState)
+      if (commentTriggers.length && (useBrowserForComments || account.sessionData) && (isManual || commentElapsed >= COMMENT_COOLDOWN_MS)) {
         const scraped = await scrape(() => scrapeComments(account.username, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA))
         if (scraped) {
         const { comments } = scraped
@@ -655,6 +660,11 @@ export async function POST(req: NextRequest) {
 
         s.totalComments = comments.length
         s.newComments = fresh.length
+
+        // Браузерная сессия «дозревает» между действиями — трекаем локально, пишем в БД
+        // после каждой обработанной пары (коммент × триггер), как в runFollowerActionsInline.
+        let cState: object | undefined = account.browserState as object | undefined
+        const bctx = () => ({ storageState: cState as object, proxy: account.proxy ?? undefined, username: account.username })
 
         for (const c of toProcess) {
           for (const trigger of commentTriggers) {
@@ -683,6 +693,7 @@ export async function POST(req: NextRequest) {
             const errors: string[] = []
             const incFired: Record<string, number> = {}   // «сработало» (попытки)
             const incDone: Record<string, number> = {}    // «выполнено» (успехи)
+            const postUrl = mediaPostUrl(c.media_id)
 
             // Проверка подписки: если автор НЕ проходит гейт — только коммент-приглашение, стоп
             if (gateCfg) {
@@ -692,7 +703,11 @@ export async function POST(req: NextRequest) {
                 const gateText = gateCfg.inviteText.replace(/\{\{username\}\}/gi, c.username)
                 if (gateText && use('comment')) {
                   incFired.comment = (incFired.comment || 0) + 1
-                  try { await replyComment(session, c.media_id, gateText, c.pk, proxy); fired = true; incDone.comment = (incDone.comment || 0) + 1 }
+                  try {
+                    if (useBrowserForComments) { const r = await browserReply(bctx(), postUrl, gateText); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не отправлен') }
+                    else await replyComment(session, c.media_id, gateText, c.pk, proxy)
+                    fired = true; incDone.comment = (incDone.comment || 0) + 1
+                  }
                   catch (e: any) { errors.push(`коммент-приглашение: ${e.message}`) }
                 } else if (gateText) { s.limited = (s.limited ?? 0) + 1 }
                 gatedStop = true
@@ -706,26 +721,43 @@ export async function POST(req: NextRequest) {
                 if (variants.length && use('comment')) {
                   incFired.comment = (incFired.comment || 0) + 1
                   const pick = variants[Math.floor(Math.random() * variants.length)].replace(/\{\{username\}\}/gi, c.username)
-                  try { await replyComment(session, c.media_id, pick, c.pk, proxy); fired = true; incDone.comment = (incDone.comment || 0) + 1 }
+                  try {
+                    if (useBrowserForComments) { const r = await browserReply(bctx(), postUrl, pick); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не отправлен') }
+                    else await replyComment(session, c.media_id, pick, c.pk, proxy)
+                    fired = true; incDone.comment = (incDone.comment || 0) + 1
+                  }
                   catch (e: any) { errors.push(`ответ: ${e.message}`) }
                 }
               }
               if (doLikePosts && use('like', COMMENT_LIKE_POSTS)) {
                 incFired.like = (incFired.like || 0) + 1
                 await randDelay(2, 5)
-                try { await likeUserMedias(likeSess, c.user_pk, COMMENT_LIKE_POSTS, likePx); fired = true; incDone.like = (incDone.like || 0) + 1 }
+                try {
+                  if (useBrowserForComments) { const r = await browserLike(bctx(), c.username, COMMENT_LIKE_POSTS); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не лайкнуто') }
+                  else await likeUserMedias(likeSess, c.user_pk, COMMENT_LIKE_POSTS, likePx)
+                  fired = true; incDone.like = (incDone.like || 0) + 1
+                }
                 catch (e: any) { errors.push(`лайк постов: ${e.message}`) }
               }
               if (likeCmt && use('like')) {
                 incFired.like = (incFired.like || 0) + 1
                 await randDelay(1, 3)
-                try { await likeComment(likeSess, c.pk, likePx); fired = true; incDone.like = (incDone.like || 0) + 1 }
-                catch (e: any) { errors.push(`лайк коммента: ${e.message}`) }
+                if (useBrowserForComments) {
+                  // Лайк конкретного коммента браузером не реализован (нужен клик по коммент-нити — Фаза 4)
+                  errors.push('лайк коммента: не поддерживается браузерным движком')
+                } else {
+                  try { await likeComment(likeSess, c.pk, likePx); fired = true; incDone.like = (incDone.like || 0) + 1 }
+                  catch (e: any) { errors.push(`лайк коммента: ${e.message}`) }
+                }
               }
               if (doFollow && use('follow')) {
                 incFired.follow = (incFired.follow || 0) + 1
                 await randDelay(2, 5)
-                try { await followUser(session, c.user_pk, proxy); fired = true; incDone.follow = (incDone.follow || 0) + 1 }
+                try {
+                  if (useBrowserForComments) { const r = await browserFollow(bctx(), c.username); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не подписан') }
+                  else await followUser(session, c.user_pk, proxy)
+                  fired = true; incDone.follow = (incDone.follow || 0) + 1
+                }
                 catch (e: any) { errors.push(`подписка: ${e.message}`) }
               }
               if (dm?.templates?.[0] && use('dm')) {
@@ -736,24 +768,46 @@ export async function POST(req: NextRequest) {
                   const lt = String(dm.link.text ?? '').replace(/\{\{username\}\}/gi, c.username)
                   text += `\n\n${lt ? lt + ': ' : ''}${dm.link.url}`
                 }
-                try {
-                  await sendDM(session, c.user_pk, text.trim(), proxy); fired = true; incDone.dm = (incDone.dm || 0) + 1
-                  if (dm.image?.enabled && dm.image.url) {
-                    await randDelay(2, 4)
-                    await sendDMPhoto(session, c.user_pk, dm.image.url, proxy)
+                if (useBrowserForComments) {
+                  try {
+                    const r = await browserDM(bctx(), c.username, text.trim())
+                    if (r.browserState) cState = r.browserState
+                    if (r.ok) { fired = true; incDone.dm = (incDone.dm || 0) + 1 }
+                    else if (r.closed) {
+                      errors.push(`директ закрыт: ${r.error ?? 'closed'}`)
+                      if (use('follow')) { incFired.follow = (incFired.follow || 0) + 1; try { const fr = await browserFollow(bctx(), c.username); if (fr.browserState) cState = fr.browserState; if (fr.ok) { fired = true; incDone.follow = (incDone.follow || 0) + 1 } } catch {} }
+                      if (use('like'))   { incFired.like = (incFired.like || 0) + 1; await randDelay(2, 5); try { const lr = await browserLike(bctx(), c.username, 1); if (lr.browserState) cState = lr.browserState; if (lr.ok) { fired = true; incDone.like = (incDone.like || 0) + 1 } } catch {} }
+                    } else {
+                      throw new Error(r.error ?? 'не отправлен')
+                    }
+                  } catch (e: any) {
+                    if (statusFromError(e.message)) throw e
+                    errors.push(`директ: ${e.message}`)
                   }
-                } catch (e: any) {
-                  if (statusFromError(e.message)) throw e  // бан/челлендж/лимит → основной на паузу
-                  // Личка закрыта / не доставлено → мягкий контакт основным (follow + лайк)
-                  errors.push(`директ закрыт: ${e.message}`)
-                  if (use('follow')) { incFired.follow = (incFired.follow || 0) + 1; try { await followUser(session, c.user_pk, proxy); fired = true; incDone.follow = (incDone.follow || 0) + 1 } catch {} }
-                  if (use('like'))   { incFired.like = (incFired.like || 0) + 1; await randDelay(2, 5); try { await likeLatestMedia(session, c.user_pk, proxy); fired = true; incDone.like = (incDone.like || 0) + 1 } catch {} }
+                } else {
+                  try {
+                    await sendDM(session, c.user_pk, text.trim(), proxy); fired = true; incDone.dm = (incDone.dm || 0) + 1
+                    if (dm.image?.enabled && dm.image.url) {
+                      await randDelay(2, 4)
+                      await sendDMPhoto(session, c.user_pk, dm.image.url, proxy)
+                    }
+                  } catch (e: any) {
+                    if (statusFromError(e.message)) throw e  // бан/челлендж/лимит → основной на паузу
+                    // Личка закрыта / не доставлено → мягкий контакт основным (follow + лайк)
+                    errors.push(`директ закрыт: ${e.message}`)
+                    if (use('follow')) { incFired.follow = (incFired.follow || 0) + 1; try { await followUser(session, c.user_pk, proxy); fired = true; incDone.follow = (incDone.follow || 0) + 1 } catch {} }
+                    if (use('like'))   { incFired.like = (incFired.like || 0) + 1; await randDelay(2, 5); try { await likeLatestMedia(session, c.user_pk, proxy); fired = true; incDone.like = (incDone.like || 0) + 1 } catch {} }
+                  }
                 }
               }
               if (storiesAct && use('story')) {
                 incFired.story = (incFired.story || 0) + 1
                 await randDelay(3, 7)
-                try { await viewStories(storySess, c.user_pk, Boolean(storiesAct.like), storyPx); fired = true; incDone.story = (incDone.story || 0) + 1 }
+                try {
+                  if (useBrowserForComments) { const r = await browserStories(bctx(), c.username, Boolean(storiesAct.like)); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не просмотрено') }
+                  else await viewStories(storySess, c.user_pk, Boolean(storiesAct.like), storyPx)
+                  fired = true; incDone.story = (incDone.story || 0) + 1
+                }
                 catch (e: any) { errors.push(`сторис: ${e.message}`) }
               }
             }
@@ -767,6 +821,7 @@ export async function POST(req: NextRequest) {
               await Promise.all([
                 prisma.log.create({ data: { accountId: account.id, level, message } }),
                 prisma.triggerRule.update({ where: { id: trigger.id }, data: { fireCount: { increment: 1 }, stats: await mergeStats(trigger.id, incFired, incDone) } }),
+                ...(useBrowserForComments && cState ? [prisma.instagramAccount.update({ where: { id: account.id }, data: { browserState: cState as any } })] : []),
               ])
               if (fired) s.commentActions++
             }
