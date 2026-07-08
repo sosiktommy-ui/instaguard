@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import {
-  getFollowers, getFollowing, getComments, sendDM, sendDMPhoto, replyComment, likeComment,
+  sendDM, sendDMPhoto, replyComment, likeComment,
   viewStories, followUser, likeLatestMedia, likeUserMedias,
-  getLikers, getStoryEvents, getAccountInfo,
+  getStoryEvents, getAccountInfo,
 } from '@/lib/instagram/client'
+// Парсинг подписчиков/комментариев/лайкнувших/подписок — через скрейпер-API (замена черновых).
+// Формы ответов 1:1 совпадают со старыми getFollowers/getComments/getLikers/getFollowing.
+import { scrapeFollowers, scrapeFollowing, scrapeComments, scrapeLikers, scraperConfigured } from '@/lib/scraper/hiker'
 import { Queue } from 'bullmq'
 import { loadCounters, consume, warmupFactor, scaleCaps, MAX_NEW_PER_POLL, type Counters, type ActionKind } from '@/lib/limits'
 import { getCurrentUser } from '@/lib/auth'
@@ -178,8 +181,13 @@ async function mergeStats(triggerId: string, incFired: Record<string, number>, i
 // Выполняет действия триггера-подписки для одной цели синхронно.
 // Считаем отдельно «сработало» (попытались) и «выполнено» (получилось).
 async function runFollowerActionsInline(job: any) {
-  const session = job.sessionData as object          // основной делает ВСЕ действия
+  const session = job.sessionData as object          // основной: DM/фото/подписка/fallback
   const proxy = job.proxy ?? undefined
+  // Лайк/сторис могут выполняться черновым (Настройки) — если сессия не передана, берём основного.
+  const likeSession = (job.likeSession as object) ?? session
+  const likeProxy   = job.likeProxy ?? proxy
+  const storySession = (job.storySession as object) ?? session
+  const storyProxy   = job.storyProxy ?? proxy
   const errors: string[] = []
   const incFired: Record<string, number> = {}
   const incDone: Record<string, number> = {}
@@ -199,8 +207,8 @@ async function runFollowerActionsInline(job: any) {
   if (job.image) { dmFired = true; await randDelay(2, 5); try { await sendDMPhoto(session, job.followerPk, job.image, proxy); dmSucceeded = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
   if (dmFired) { incFired.dm = (incFired.dm || 0) + 1; if (dmSucceeded) incDone.dm = (incDone.dm || 0) + 1 }
   if (job.doFollow) { incFired.follow = (incFired.follow || 0) + 1; await randDelay(3, 7); try { await followUser(session, job.followerPk, proxy); incDone.follow = (incDone.follow || 0) + 1 } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
-  if (job.doLike)   { incFired.like = (incFired.like || 0) + 1; await randDelay(3, 8); try { await likeLatestMedia(session, job.followerPk, proxy); incDone.like = (incDone.like || 0) + 1 } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
-  if (job.viewStories) { incFired.story = (incFired.story || 0) + 1; await randDelay(4, 10); try { await viewStories(session, job.followerPk, job.storyLike, proxy); incDone.story = (incDone.story || 0) + 1 } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
+  if (job.doLike)   { incFired.like = (incFired.like || 0) + 1; await randDelay(3, 8); try { await likeLatestMedia(likeSession, job.followerPk, likeProxy); incDone.like = (incDone.like || 0) + 1 } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
+  if (job.viewStories) { incFired.story = (incFired.story || 0) + 1; await randDelay(4, 10); try { await viewStories(storySession, job.followerPk, job.storyLike, storyProxy); incDone.story = (incDone.story || 0) + 1 } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
 
   const attempted = Object.keys(incFired).length > 0
   const success = Object.keys(incDone).length > 0
@@ -248,15 +256,17 @@ export async function POST(req: NextRequest) {
   }
   const scope = userId ? { userId } : {}
 
-  // ── Лок от параллельного запуска ПОЛНОГО поллинга ────────────────────────────
-  // Если авто-цикл затянулся или кто-то нажал «Проверить» поверх — два прохода по
-  // тем же аккаунтам задваивали бы счётчики (а без Redis — и сами DM). Полный поллинг
-  // (без accountId) берёт аренду; целевой поллинг одного аккаунта лок не трогает.
-  const isFullPoll = !accountId
+  // ── Глобальный лок от параллельного поллинга ─────────────────────────────────
+  // Любой поллинг (полный авто-цикл ИЛИ ручная проверка одного аккаунта) берёт ОДНУ
+  // общую аренду. Раньше лок брал только полный цикл, а ручная проверка одного
+  // аккаунта шла мимо него → могла обработать тот же аккаунт ОДНОВРЕМЕННО с авто-циклом
+  // → задвоение DM и гонка дневных счётчиков. Теперь любые два прохода сериализуются
+  // (поллинг редкий — раз в 30 мин + по кнопке, поэтому глобальная сериализация дешева
+  // и безопаснее задвоения действий на основном аккаунте).
   const LOCK_KEY = 'poll:all'
   const LOCK_LEASE_MS = 25 * 60 * 1000
   let lockedByUs = false
-  if (isFullPoll) {
+  {
     await prisma.appLock.upsert({ where: { key: LOCK_KEY }, create: { key: LOCK_KEY, lockedUntil: new Date(0) }, update: {} }).catch(() => {})
     const now = new Date()
     const r = await prisma.appLock.updateMany({
@@ -284,48 +294,38 @@ export async function POST(req: NextRequest) {
     },
   })
 
-  // Настройки владельцев: парсинг без черновых (этап 9) и работа без прокси (защита от бана).
+  // Настройки владельцев: работа без прокси (защита от бана). «Черновые» больше не используются —
+  // парсинг вынесен в скрейпер-API (см. lib/scraper/hiker), поэтому likeByDraft/storyByDraft/
+  // allowNoDrafts больше не читаем (все действия делает основной, всё чтение — API).
   const ownerIds = [...new Set(accounts.map((a) => a.userId))]
   const settingsRows = ownerIds.length
-    ? await prisma.userSettings.findMany({ where: { userId: { in: ownerIds } }, select: { userId: true, allowNoDrafts: true, allowNoProxy: true } })
+    ? await prisma.userSettings.findMany({ where: { userId: { in: ownerIds } }, select: { userId: true, allowNoProxy: true } })
     : []
-  const allowNoDrafts = new Map(settingsRows.map((r) => [r.userId, r.allowNoDrafts]))
   const allowNoProxy = new Map(settingsRows.map((r) => [r.userId, r.allowNoProxy]))
   // Прокси обязателен, если владелец НЕ включил «Работать без прокси» (по умолчанию — обязателен).
   const proxyRequired = (userId: string) => !allowNoProxy.get(userId)
 
-  // Пул черновых (HELPER) аккаунтов-парсеров: активные, с живой сессией. LRU — кто дольше не работал.
-  // Если прокси обязателен — черновые без прокси в пул не берём (иначе парсинг пойдёт с IP сервера → бан).
-  const draftPool = (await prisma.instagramAccount.findMany({
-    where: { role: 'HELPER', status: 'ACTIVE', ...scope },
-    orderBy: { lastChecked: 'asc' },
-  })).filter((d) => d.sessionData && (!proxyRequired(d.userId) || Boolean(d.proxy)))
-
   // Основные, которым реально есть что делать (есть активные триггеры)
   const workingMains = accounts.filter((a) => a.sessionData && a.triggersAsResponder.length)
 
-  // ФОЛБЭК: черновых нет И никому не разрешено «без черновых» → НЕ парсим основными + тревога.
-  const anyCanProceed = draftPool.length > 0 || workingMains.some((a) => allowNoDrafts.get(a.userId))
-  if (workingMains.length && !anyCanProceed) {
+  // Парсинг идёт через скрейпер-API (HikerAPI). Если ключ не задан — парсить нечем: тревога + стоп.
+  // (Стори-события читаются сессией основного и работали бы и без ключа, но без парсинга
+  // подписчиков/комментов/лайков продукт по сути не функционирует — честнее остановить и сказать.)
+  if (workingMains.length && !scraperConfigured()) {
     await notifyOwner(
       workingMains.map((a) => a.id),
-      '🚨 Нет доступных черновых аккаунтов (все забанены/на паузе). Парсинг основными остановлен — добавьте черновой аккаунт или включите «Работать без черновых» в Настройках.'
+      '🚨 Не задан ключ скрейпер-API (HIKER_API_KEY) — парсинг подписчиков/комментариев/лайков невозможен. Добавьте ключ в переменные окружения Next.js-сервиса (оформить: hikerapi.com).'
     )
     return NextResponse.json({
-      ok: true, alert: 'no-drafts',
-      message: 'Нет черновых аккаунтов — парсинг остановлен для защиты основных.',
+      ok: true, alert: 'no-scraper',
+      message: 'Не задан ключ скрейпер-API — парсинг остановлен.',
       summary: workingMains.map((a) => ({
         accountId: a.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0,
         triggersFound: a.triggersAsResponder.length, totalComments: 0, newComments: 0,
-        commentActions: 0, skipped: 'no-draft',
+        commentActions: 0, skipped: 'no-scraper',
       })),
     })
   }
-
-  // Round-robin по пулу черновых (LRU по lastChecked). Черновые только парсят — счётчиков действий у них нет.
-  let draftCursor = 0
-  const nextDraft = () => (draftPool.length ? draftPool[draftCursor++ % draftPool.length] : null)
-  const usedDraftIds = new Set<string>()
 
   const summary: PollSummary[] = []
   const dmQueue = getDmQueue()
@@ -367,40 +367,29 @@ export async function POST(req: NextRequest) {
     // Разнесённые задержки: первое действие скоро, дальше с интервалом ~45–115с
     let cursor = (isManual ? 8 + Math.random() * 14 : 45 + Math.random() * 75) * 1000
     const nextGap = () => (45 + Math.random() * 70) * 1000
-    // Черновой-парсер для этого основного (round-robin). Если черновых нет, но владелец
-    // разрешил «Работать без черновых» — основной парсит сам своей сессией.
-    const draft = nextDraft()
-    let parseSession: object
-    let parseProxy: string | undefined
-    if (draft) {
-      usedDraftIds.add(draft.id)
-      parseSession = draft.sessionData as object   // сессия чернового: только парсинг/добор инфы
-      parseProxy = draft.proxy ?? undefined
-    } else if (allowNoDrafts.get(account.userId)) {
-      parseSession = session   // основной делает «грязную» работу сам (разрешено в Настройках)
-      parseProxy = proxy
-    } else {
-      s.skipped = 'no-draft'; summary.push(s); continue
-    }
+    // Черновых больше нет: парсинг идёт через скрейпер-API (по username основного), а ВСЕ
+    // действия (директ/лайк/подписка/сторис/коммент) выполняет сам ОСНОВНОЙ своей сессией.
+    const likeSess:  object = session
+    const likePx:    string | undefined = proxy
+    const storySess: object = session
+    const storyPx:   string | undefined = proxy
 
-    // Прогрев: дневные лимиты ужимаются по возрасту аккаунта (свежий не срывается на полную).
-    // Для черновых берём более строгий из двух возрастов (основной/черновой) — молодой
-    // черновой прогревается тоже. use() — списание бюджета с учётом ужатых лимитов.
-    const warm = Math.min(warmupFactor(account.createdAt), draft ? warmupFactor(draft.createdAt) : 1)
+    // Прогрев: дневные лимиты ужимаются по возрасту основного аккаунта (свежий не срывается на полную).
+    const warm = warmupFactor(account.createdAt)
     const caps = scaleCaps(warm)
     const use = (k: ActionKind, n = 1) => consume(counters, k, n, caps)
 
     // ── Проверка подписки БЕЗ обращения к основному ──────────────────────────
-    // Черновой скрейпит подписчиков основного (публично) → гейт = принадлежность множеству.
-    // Так проверка «подписан ли на нас» не грузит основной аккаунт вообще.
+    // Подписчиков/подписки основного тянет скрейпер-API (публичные данные) → гейт = принадлежность
+    // множеству. Так проверка «подписан ли на нас» не грузит основной аккаунт вообще.
     let gateFollowers: Set<string> | null = null   // кто подписан на основной (followed_by)
     let gateFollowing: Set<string> | null = null   // на кого подписан основной (для mutual)
     const ensureGateFollowers = async (): Promise<Set<string>> => {
       if (gateFollowers) return gateFollowers
-      // Стартуем с накопленного снапшота подписчиков + добираем свежих черновым
+      // Стартуем с накопленного снапшота подписчиков + добираем свежих через API
       const set = extractKnownPks(account.snapshots.find((sn) => sn.type === 'FOLLOWERS')?.data)
       try {
-        const { followers } = await getFollowers(parseSession, account.username, parseProxy, GATE_FOLLOWERS_SCAN)
+        const { followers } = await scrapeFollowers(account.username, GATE_FOLLOWERS_SCAN)
         followers.forEach((f) => set.add(String(f.pk)))
       } catch { /* не смогли добрать — используем что есть (гейт ошибётся в безопасную сторону) */ }
       gateFollowers = set
@@ -410,7 +399,7 @@ export async function POST(req: NextRequest) {
       if (gateFollowing) return gateFollowing
       const set = new Set<string>()
       try {
-        const { following } = await getFollowing(parseSession, account.username, parseProxy, GATE_FOLLOWING_SCAN)
+        const { following } = await scrapeFollowing(account.username, GATE_FOLLOWING_SCAN)
         following.forEach((u) => set.add(String(u.pk)))
       } catch { /* degrade */ }
       gateFollowing = set
@@ -457,10 +446,13 @@ export async function POST(req: NextRequest) {
           const willFollow = doFollowT && use('follow')
           const willLike = doLikeT && use('like')
           const willStory = Boolean(storiesAct) && use('story')
-          // Флаги fallback (follow+like основным при закрытой личке). Бюджет заранее НЕ
-          // списываем: иначе на каждом успешном DM утекал бы дневной лимит вхолостую.
-          const fallbackFollow = willDM && !willFollow
-          const fallbackLike   = willDM && !willLike
+          // Флаги fallback (follow+like основным при закрытой личке). РЕЗЕРВИРУЕМ бюджет
+          // заранее (use), иначе fallback выполняется в воркере/inline БЕЗ доступа к дневным
+          // счётчикам → пробивает потолок follow/like (при холодном трафике закрытых личек
+          // много). Приоритет «основной не банится» важнее лёгкого перерасхода бюджета при
+          // успешном DM (тогда зарезервированное действие просто не выполнится).
+          const fallbackFollow = willDM && !willFollow && use('follow')
+          const fallbackLike   = willDM && !willLike && use('like')
           if (!willDM && !willFollow && !willLike && !willStory) { s.limited = (s.limited ?? 0) + 1; continue }
 
           let text = willDM ? template.replace(/\{\{username\}\}/gi, target.username) : ''
@@ -477,6 +469,8 @@ export async function POST(req: NextRequest) {
             doFollow: willFollow, doLike: willLike,
             viewStories: willStory, storyLike: Boolean(storiesAct?.like), proxy: account.proxy,
             fallbackFollow, fallbackLike,
+            // Все действия выполняет основной своей сессией (sessionData) — воркер/inline это и берут
+            // по умолчанию. Отдельные likeSession/storySession больше не нужны (черновых нет).
           }
 
           if (dmQueue) {
@@ -516,19 +510,14 @@ export async function POST(req: NextRequest) {
       followersHistory = hist.slice(-30)
     }
 
-    // Парсинг черновым не должен ронять ОСНОВНОЙ. Если скрейп упал у чернового —
-    // помечаем ЕГО (и, если бан/челлендж, останавливаем + он выпадет из пула в
-    // следующем цикле), а поток тихо пропускаем. Если основной парсил сам (нет
-    // черновых, allowNoDrafts) — пробрасываем в общий catch (это его проблема).
+    // Парсинг идёт через внешний скрейпер-API (не через сессию аккаунта), поэтому сбой парсинга —
+    // это проблема API/сети, а НЕ бан основного: логируем предупреждение на аккаунт и тихо
+    // пропускаем поток, НЕ трогая статус/счётчик ошибок основного (иначе временный сбой API
+    // ставил бы здоровые аккаунты на паузу).
     const scrape = async <T>(fn: () => Promise<T>): Promise<T | null> => {
       try { return await fn() }
       catch (e: any) {
-        if (!draft) throw e
-        const brk = statusFromError(e?.message ?? '')
-        await Promise.all([
-          prisma.instagramAccount.update({ where: { id: draft.id }, data: { errorCount: { increment: 1 }, ...(brk ? { status: brk } : {}) } }).catch(() => null),
-          prisma.log.create({ data: { accountId: draft.id, level: 'ERROR', message: `Парсинг для @${account.username} не удался: ${e?.message}${brk ? ` → черновой остановлен (${brk})` : ''}` } }).catch(() => null),
-        ])
+        await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Парсинг через API для @${account.username} не удался: ${e?.message}` } }).catch(() => null)
         return null
       }
     }
@@ -536,7 +525,7 @@ export async function POST(req: NextRequest) {
     try {
       // ── Поток подписчиков ────────────────────────────────────────────────
       if (followerTriggers.length) {
-        const scraped = await scrape(() => getFollowers(parseSession, account.username, parseProxy, FOLLOWERS_FETCH_LIMIT))
+        const scraped = await scrape(() => scrapeFollowers(account.username, FOLLOWERS_FETCH_LIMIT))
         if (scraped) {
           const { followers } = scraped
           const snapFollowers = account.snapshots.find((sn) => sn.type === 'FOLLOWERS')
@@ -566,7 +555,7 @@ export async function POST(req: NextRequest) {
       const snapLikesMeta = account.snapshots.find((sn) => sn.type === 'LIKES')
       const likeElapsed = snapLikesMeta ? Date.now() - new Date(snapLikesMeta.createdAt).getTime() : Infinity
       if (likeTriggers.length && (isManual || likeElapsed >= LIKE_COOLDOWN_MS)) {
-        const scraped = await scrape(() => getLikers(parseSession, account.username, parseProxy, LIKERS_MEDIA_COUNT, LIKERS_PER_MEDIA))
+        const scraped = await scrape(() => scrapeLikers(account.username, LIKERS_MEDIA_COUNT, LIKERS_PER_MEDIA))
         if (scraped) {
           const { likers } = scraped
           const hadBaseline = Boolean(snapLikesMeta)
@@ -615,7 +604,7 @@ export async function POST(req: NextRequest) {
         ? Date.now() - new Date(snapCommentsMeta.createdAt).getTime()
         : Infinity
       if (commentTriggers.length && (isManual || commentElapsed >= COMMENT_COOLDOWN_MS)) {
-        const scraped = await scrape(() => getComments(parseSession, account.username, parseProxy, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA))
+        const scraped = await scrape(() => scrapeComments(account.username, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA))
         if (scraped) {
         const { comments } = scraped
         const hadBaseline = Boolean(snapCommentsMeta)
@@ -689,13 +678,13 @@ export async function POST(req: NextRequest) {
               if (doLikePosts && use('like', COMMENT_LIKE_POSTS)) {
                 incFired.like = (incFired.like || 0) + 1
                 await randDelay(2, 5)
-                try { await likeUserMedias(session, c.user_pk, COMMENT_LIKE_POSTS, proxy); fired = true; incDone.like = (incDone.like || 0) + 1 }
+                try { await likeUserMedias(likeSess, c.user_pk, COMMENT_LIKE_POSTS, likePx); fired = true; incDone.like = (incDone.like || 0) + 1 }
                 catch (e: any) { errors.push(`лайк постов: ${e.message}`) }
               }
               if (likeCmt && use('like')) {
                 incFired.like = (incFired.like || 0) + 1
                 await randDelay(1, 3)
-                try { await likeComment(session, c.pk, proxy); fired = true; incDone.like = (incDone.like || 0) + 1 }
+                try { await likeComment(likeSess, c.pk, likePx); fired = true; incDone.like = (incDone.like || 0) + 1 }
                 catch (e: any) { errors.push(`лайк коммента: ${e.message}`) }
               }
               if (doFollow && use('follow')) {
@@ -729,7 +718,7 @@ export async function POST(req: NextRequest) {
               if (storiesAct && use('story')) {
                 incFired.story = (incFired.story || 0) + 1
                 await randDelay(3, 7)
-                try { await viewStories(session, c.user_pk, Boolean(storiesAct.like), proxy); fired = true; incDone.story = (incDone.story || 0) + 1 }
+                try { await viewStories(storySess, c.user_pk, Boolean(storiesAct.like), storyPx); fired = true; incDone.story = (incDone.story || 0) + 1 }
                 catch (e: any) { errors.push(`сторис: ${e.message}`) }
               }
             }
@@ -770,14 +759,6 @@ export async function POST(req: NextRequest) {
       summary.push(s)
     }
   }
-
-  // Метка использования черновых (для LRU-ротации между запусками)
-  await Promise.all([...usedDraftIds].map((id) =>
-    prisma.instagramAccount.update({
-      where: { id },
-      data: { lastChecked: new Date() },
-    }).catch(() => null)
-  ))
 
   if (dmQueue) await dmQueue.close()
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { ShieldAlert, Layers, Globe, ChevronDown, List, Users, BarChart3, Settings as SettingsIcon, HelpCircle } from 'lucide-react'
+import { ShieldAlert, Globe, ChevronDown, List, Users, BarChart3, Settings as SettingsIcon, HelpCircle, Radar } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import ClientOnly from '@/components/common/ClientOnly'
 import { PageHeader } from '@/components/common/PageHeader'
@@ -36,14 +36,14 @@ const HELP: { icon: any; color: string; title: string; text: string; features: s
     ],
   },
   {
-    icon: Layers, color: TONE.pink, title: 'Черновые аккаунты',
-    text: 'Аккаунты-«разведчики»: парсят данные, чтобы основные не рисковали баном.',
+    icon: Radar, color: TONE.pink, title: 'Парсинг (API)',
+    text: 'Подписчиков, комментарии и лайки собирает скрейпер-API — черновые аккаунты больше не нужны.',
     features: [
-      'Добавить черновой аккаунт (куки или логин/пароль).',
-      'Они парсят подписчиков, комментарии и лайки; лайк/подписку/сторис тоже делают своей сессией.',
-      'Свой прокси и свои дневные лимиты у каждого чернового.',
-      'Сбросить снапшот — снова считать все события новыми.',
-      'Важно: без хотя бы одного живого чернового автоматизация не запускается (если не включён режим «без черновых» в Настройках).',
+      'Статус подключения API и кнопка «Проверить связь».',
+      'Триггеры «Подписка», «Комментарий», «Лайк» получают данные через API (без ваших аккаунтов и прокси).',
+      'Ответы на сторис читает сам основной аккаунт (это его личка).',
+      'Ключ задаётся переменной окружения HIKER_API_KEY (оформить: hikerapi.com).',
+      'Прокси нужны только основным аккаунтам — они шлют директ/лайк/подписку.',
     ],
   },
   {
@@ -71,14 +71,14 @@ const HELP: { icon: any; color: string; title: string; text: string; features: s
     text: 'Правила безопасности и автоматизации.',
     features: [
       '«Работать без прокси» — разрешить аккаунты без прокси (повышает риск бана).',
-      '«Работать без черновых» — разрешить основным парсить самим, когда черновых нет.',
+      '«Парсинг через API» — подписчиков/комментарии/лайки собирает скрейпер-API (черновые не нужны).',
       '«Аккаунтов на один прокси» — лимит авто-привязки к пуловому прокси.',
       'Эта справка «Что где находится».',
     ],
   },
 ]
 
-interface Settings { accountsPerProxy: number; allowNoProxy: boolean; allowNoDrafts: boolean }
+interface Settings { accountsPerProxy: number; allowNoProxy: boolean; allowNoDrafts: boolean; likeByDraft: boolean; storyByDraft: boolean }
 
 // Переключатель (тумблер)
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
@@ -94,7 +94,7 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void 
 }
 
 function SettingsScreen() {
-  const [s, setS] = useState<Settings>({ accountsPerProxy: 3, allowNoProxy: false, allowNoDrafts: false })
+  const [s, setS] = useState<Settings>({ accountsPerProxy: 3, allowNoProxy: false, allowNoDrafts: false, likeByDraft: false, storyByDraft: false })
   const [capInput, setCapInput] = useState('3')
   const [msg, setMsg] = useState('')
   const [openHelp, setOpenHelp] = useState<number | null>(null)
@@ -134,16 +134,17 @@ function SettingsScreen() {
         <Toggle on={s.allowNoProxy} onChange={(v) => patch({ allowNoProxy: v })} />
       </div>
 
+      {/* Парсинг вынесен в скрейпер-API — черновые аккаунты и их настройки больше не нужны */}
       <div className={rowCls}>
-        <IconTile icon={Layers} color={TONE.brand} size={40} />
+        <IconTile icon={Radar} color={TONE.brand} size={40} />
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-[15px]">Работать без черновых аккаунтов</div>
+          <div className="font-semibold text-[15px]">Парсинг через API</div>
           <div className="text-[13px] text-subt mt-1 leading-relaxed">
-            Когда черновых аккаунтов нет, разрешить основным делать «грязную» работу самим (парсинг подписчиков,
-            комментариев и т.п.). По умолчанию выключено — чтобы беречь основные аккаунты от бана.
+            Подписчиков, комментарии и лайки теперь собирает скрейпер-API — черновые аккаунты больше не нужны,
+            а все действия (директ, лайк, подписка, сторис) выполняет основной аккаунт. Статус и проверка связи —
+            на вкладке <b>«Парсинг (API)»</b>.
           </div>
         </div>
-        <Toggle on={s.allowNoDrafts} onChange={(v) => patch({ allowNoDrafts: v })} />
       </div>
 
       <div className={rowCls}>

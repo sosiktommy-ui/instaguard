@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LogOut, Menu, X, List, Users, Layers, BarChart3, Globe, Settings } from 'lucide-react'
+import { LogOut, Menu, X, List, Users, Radar, BarChart3, Globe, Settings } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AppLogo } from '@/components/common/AppLogo'
 import { ReactiveMascot } from '@/components/common/ReactiveMascot'
@@ -13,7 +13,7 @@ import { useBreadcrumbs } from '@/lib/breadcrumbs'
 const SUBTABS = [
   { href: '/triggers', label: 'Рекламные кампании', icon: List },
   { href: '/accounts', label: 'Аккаунты', icon: Users },
-  { href: '/drafts', label: 'Черновые аккаунты', icon: Layers },
+  { href: '/drafts', label: 'Парсинг (API)', icon: Radar },
   { href: '/proxy', label: 'Прокси', icon: Globe },
   { href: '/stats', label: 'Статистика', icon: BarChart3 },
   { href: '/settings', label: 'Настройки', icon: Settings },
