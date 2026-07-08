@@ -116,6 +116,16 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-09 (2)
+
+#### fix(эмуль): `BROWSER_URL` вместо `BROWSER_WORKER_URL` в Railway держал движок на legacy
+
+Воркер задеплоен и подтверждён живым (`/health` → `build:2026-07-09-browser-1`, Chromium 130), но переменная на Next.js-сервисе была задана как `BROWSER_URL` — `browserConfigured()` читал только `BROWSER_WORKER_URL`, возвращал `false`, `resolveEngine` молча оставался `'legacy'` (вход снова шёл через instagrapi и падал).
+
+- **`lib/browser/client.ts`:** `BROWSER_WORKER_URL` теперь берётся как `process.env.BROWSER_WORKER_URL ?? process.env.BROWSER_URL ?? ''` — опечатка/иное имя переменной больше не блокирует браузерный вход. `BROWSER_WORKER_SECRET` такой же опечатки не имел, не трогали.
+
+Проверено: `tsc --noEmit` + `next build` чисто. Закоммичено и запушено ТОЧЕЧНО (только этот файл) — паузная auth-работа (Google/email-верификация, см. запись ниже и `plan.md` §7.7) в рабочем дереве не тронута и не закоммичена. ⚠️ После редеплоя Next.js проверить `/api/browser-health` — должен показать воркер настроенным.
+
 ### 2026-07-09
 
 #### feat(АРХИТЕКТУРА): переход на браузерный движок (Playwright «эмуль») — вход и действия через реальный Chromium (Фазы 1–2). Авторитетный план — `plan.md`
