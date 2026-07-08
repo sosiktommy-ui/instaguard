@@ -1,13 +1,14 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Users, Zap, Send, AlertCircle, Eye, CheckCircle2, Info, RefreshCw, BarChart3 } from 'lucide-react'
+import { Users, Zap, Send, AlertCircle, Eye, CheckCircle2, Info, RefreshCw, BarChart3, Cpu, Radar } from 'lucide-react'
 import { formatFollowers } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { cn } from '@/lib/utils'
 import { readStat, ACTION_KEYS } from '@/lib/stats'
 import { PageHeader } from '@/components/common/PageHeader'
 import { StatCard } from '@/components/common/StatCard'
+import { IconTile } from '@/components/common/IconTile'
 import { CampaignMatrix } from '@/components/stats/CampaignMatrix'
 import { TONE } from '@/lib/colors'
 
@@ -34,6 +35,8 @@ function Stats() {
   const [triggers, setTriggers] = useState<DbTrigger[]>([])
   const [logs, setLogs] = useState<DbLog[]>([])
   const [loading, setLoading] = useState(true)
+  const [bh, setBh] = useState<any>(null)   // здоровье браузерного воркера
+  const [sh, setSh] = useState<any>(null)   // здоровье скрейпер-API
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -44,6 +47,9 @@ function Stats() {
       if (l.ok) setLogs(await l.json())
     } catch {}
     setLoading(false)
+    // Здоровье автоматизации — не блокирует страницу (браузер-тест поднимает Chromium).
+    fetch('/api/browser-health?test=1').then((r) => (r.ok ? r.json() : null)).then(setBh).catch(() => setBh({ configured: false }))
+    fetch('/api/scraper-health?test=1').then((r) => (r.ok ? r.json() : null)).then(setSh).catch(() => setSh(null))
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -85,6 +91,42 @@ function Stats() {
         {cards.map(({ icon, label, value, color, tip }, i) => (
           <StatCard key={label} icon={icon} color={color} value={value} label={label} tip={tip} delay={i * 60} />
         ))}
+      </div>
+
+      {/* Здоровье автоматизации: браузерный воркер (эмуль) + скрейпер-API */}
+      <div className="card card-3d gloss p-6">
+        <div className="font-semibold text-[15px] mb-4">Здоровье автоматизации</div>
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div className="rounded-2xl border border-line/50 p-4 flex items-start gap-3">
+            <IconTile icon={Cpu} color={TONE.brand} size={36} />
+            <div className="min-w-0">
+              <div className="text-[13.5px] font-medium">Браузерный воркер (эмуль)</div>
+              {(() => {
+                if (!bh) return <div className="text-[12px] text-subt mt-0.5">проверяю…</div>
+                if (bh.configured === false) return <div className="text-[12px] text-subt mt-0.5 leading-snug">⚪ не подключён — вход через legacy (задайте <code className="font-mono">BROWSER_WORKER_URL</code>)</div>
+                if (bh.ok) return (
+                  <div className="text-[12px] text-ok mt-0.5 leading-snug">
+                    ✅ работает<span className="text-subt"> · Chromium {String(bh.chromium ?? '').split('.')[0] || '?'} · занято {bh.active ?? 0}/{bh.concurrency ?? '?'} · build {bh.build}</span>
+                  </div>
+                )
+                return <div className="text-[12px] text-bad mt-0.5 leading-snug">🔴 не отвечает{bh.error ? `: ${bh.error}` : ''}</div>
+              })()}
+            </div>
+          </div>
+          <div className="rounded-2xl border border-line/50 p-4 flex items-start gap-3">
+            <IconTile icon={Radar} color={TONE.pink} size={36} />
+            <div className="min-w-0">
+              <div className="text-[13.5px] font-medium">Парсинг (API)</div>
+              {(() => {
+                if (!sh) return <div className="text-[12px] text-subt mt-0.5">проверяю…</div>
+                if (sh.configured === false) return <div className="text-[12px] text-subt mt-0.5 leading-snug">⚪ ключ не задан (<code className="font-mono">HIKER_API_KEY</code>)</div>
+                if (sh.ok || sh.alive) return <div className="text-[12px] text-ok mt-0.5">✅ работает</div>
+                if (sh.configured) return <div className="text-[12px] text-bad mt-0.5 leading-snug">🔴 ошибка связи{sh.error ? `: ${sh.error}` : ''}</div>
+                return <div className="text-[12px] text-subt mt-0.5">статус неизвестен</div>
+              })()}
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="grid lg:grid-cols-2 gap-5">
