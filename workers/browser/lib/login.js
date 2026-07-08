@@ -3,7 +3,7 @@
 // жизнью контекста (хранение между /login и /login/checkpoint) — на server.js.
 import crypto from 'crypto'
 import { SEL, URLS } from './selectors.js'
-import { firstVisible, clickByText, pageHasText, hasSessionCookie } from './browser.js'
+import { firstVisible, clickByText, pageHasText, hasSessionCookie, gotoResilient } from './browser.js'
 import { humanType, jitter, idleMouse } from './human.js'
 
 const LOGIN_URL = 'https://www.instagram.com/accounts/login/'
@@ -83,15 +83,17 @@ export async function extractUsername(page) {
  */
 export async function attemptLogin(context, { username, password, totpSecret }) {
   const page = await context.newPage()
-  await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 60000 })
+  // Таймауты урезаны относительно дефолта gotoResilient — вход и так многофазный
+  // (набор текста + ожидание исхода до 28с), нужен запас в общем бюджете Next.js-клиента (120с).
+  await gotoResilient(page, LOGIN_URL, { timeout: 20000, retries: 1, backoffMs: [2000] })
   await dismissCookieBanner(page)
   await idleMouse(page)
 
   const userInput = await firstVisible(page, SEL.loginUsername, 15000)
   const passInput = await firstVisible(page, SEL.loginPassword, 8000)
   if (!userInput || !passInput) {
-    // Часто = прокси не доходит до Instagram / страница не та.
-    throw new Error('network: страница входа Instagram не загрузилась (прокси не доходит?)')
+    // Страница открылась (гото не упал), но формы входа нет — не прокси, а вёрстка/блок.
+    throw new Error('unknown: страница входа открылась, но поля логина/пароля не найдены (изменилась вёрстка Instagram или показан промежуточный экран)')
   }
   await humanType(userInput, username)
   await jitter(400, 900)
@@ -211,7 +213,7 @@ export async function resendCode(context) {
  */
 export async function loginByState(context) {
   const page = await context.newPage()
-  await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 60000 })
+  await gotoResilient(page, 'https://www.instagram.com/', { timeout: 25000, retries: 1, backoffMs: [2000] })
   await page.waitForTimeout(2000)
   if (!(await hasSessionCookie(context))) {
     throw new Error('login_required: сессия недействительна (нет sessionid) — куки устарели или другой аккаунт')
@@ -224,7 +226,7 @@ export async function loginByState(context) {
 export async function testSession(context) {
   try {
     const page = await context.newPage()
-    await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 45000 })
+    await gotoResilient(page, 'https://www.instagram.com/', { timeout: 20000, retries: 1, backoffMs: [1500] })
     await page.waitForTimeout(1500)
     return await hasSessionCookie(context)
   } catch {

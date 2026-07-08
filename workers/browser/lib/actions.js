@@ -1,12 +1,12 @@
 // Действия аккаунта через браузер. См. plan.md §4.6. Каждое возвращает обновлённый
 // storageState (сессия «дозревает»). Работают по username (навигация /{username}/).
 import { SEL } from './selectors.js'
-import { firstVisible, clickByText, pageHasText, hasSessionCookie } from './browser.js'
+import { firstVisible, clickByText, pageHasText, hasSessionCookie, gotoResilient } from './browser.js'
 import { humanType, jitter, idleMouse } from './human.js'
 
 async function openProfile(context, username) {
   const page = await context.newPage()
-  await page.goto(`https://www.instagram.com/${username}/`, { waitUntil: 'domcontentloaded', timeout: 60000 })
+  await gotoResilient(page, `https://www.instagram.com/${username}/`, { timeout: 30000, retries: 1, backoffMs: [2000] })
   await jitter(1200, 2500)
   await idleMouse(page)
   return page
@@ -85,7 +85,7 @@ export async function likeUser(context, { targetUsername, count = 1 }) {
 export async function viewStories(context, { targetUsername, like = false }) {
   await requireSession(context)
   const page = await context.newPage()
-  await page.goto(`https://www.instagram.com/stories/${targetUsername}/`, { waitUntil: 'domcontentloaded', timeout: 60000 })
+  await gotoResilient(page, `https://www.instagram.com/stories/${targetUsername}/`, { timeout: 30000, retries: 1, backoffMs: [2000] })
   await jitter(1500, 2800)
 
   // Если сторис нет — редирект на профиль/пусто.
@@ -113,7 +113,7 @@ export async function viewStories(context, { targetUsername, like = false }) {
 export async function commentPost(context, { postUrl, text }) {
   await requireSession(context)
   const page = await context.newPage()
-  await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
+  await gotoResilient(page, postUrl, { timeout: 30000, retries: 1, backoffMs: [2000] })
   await jitter(1200, 2400)
 
   const box = await firstVisible(page, SEL.commentBox, 10000)

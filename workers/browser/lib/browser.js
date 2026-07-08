@@ -1,7 +1,7 @@
 // Запуск Chromium (stealth) + фабрика контекстов на аккаунт. См. plan.md §4.2/§4.3.
 import { chromium } from 'playwright-extra'
 import StealthPlugin from 'puppeteer-extra-plugin-stealth'
-import { parseProxy } from './proxy.js'
+import { resolveProxy } from './proxy.js'
 import { fingerprint } from './fingerprint.js'
 
 chromium.use(StealthPlugin())
@@ -42,7 +42,9 @@ export async function newAccountContext(opts) {
     deviceScaleFactor: fp.deviceScaleFactor,
     serviceWorkers: 'block',
   }
-  const p = parseProxy(proxy)
+  // Автоопределение схемы (http/socks5/socks4) — прокси часто даются без указания
+  // протокола, а неверная схема выглядит как «страница не загрузилась» (см. proxy.js).
+  const p = await resolveProxy(getBrowser, proxy)
   if (p) ctxOpts.proxy = p
   if (storageState) ctxOpts.storageState = storageState
 
@@ -58,6 +60,27 @@ export async function newAccountContext(opts) {
 
 export async function closeContextSafe(context) {
   try { await context?.close() } catch {}
+}
+
+/**
+ * Навигация с ретраями на СЕТЕВЫЕ сбои (ротирующие/резидентные прокси часто моргают
+ * и восстанавливаются — техника из Python-воркера, `_login_with_retry`,
+ * CLAUDE.md 2026-07-07(11)). Не путать с логическими исходами (bad_password/checkpoint) —
+ * те возвращаются штатно через DOM, сюда не попадают.
+ * @param {import('playwright-core').Page} page
+ */
+export async function gotoResilient(page, url, { timeout = 60000, retries = 2, backoffMs = [1500, 4000] } = {}) {
+  let lastErr
+  for (let i = 0; i <= retries; i++) {
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout })
+      return
+    } catch (e) {
+      lastErr = e
+      if (i < retries) await new Promise((r) => setTimeout(r, backoffMs[i] ?? 4000))
+    }
+  }
+  throw new Error(`network: прокси не доходит до Instagram (${String(lastErr?.message ?? 'таймаут').slice(0, 140)})`)
 }
 
 // ── DOM-хелперы: перебор вариантов селекторов, первый видимый ──────────────────
