@@ -29,7 +29,15 @@ def health():
         ver = getattr(instagrapi, "__version__", "unknown")
     except Exception as e:
         ver = f"import-error: {e}"
-    return {"ok": True, "build": "2026-07-07-stage5-login", "instagrapi": ver, "app_version": ig._IG_APP_VERSION,
+    # Актуальный app-профиль, который instagrapi проставляет при входе (с bloks_versioning_id).
+    try:
+        from instagrapi import config as _ig_config
+        default_app = _ig_config.DEFAULT_APP_VERSION
+        bloks_ok = bool((_ig_config.APP_SETTINGS.get(default_app) or {}).get("bloks_versioning_id"))
+    except Exception as e:
+        default_app, bloks_ok = f"config-error: {e}", False
+    return {"ok": True, "build": "2026-07-08-stage7-bloks", "instagrapi": ver,
+            "default_app_version": default_app, "bloks_ready": bloks_ok,
             "captcha": bool(ig.TWOCAPTCHA_KEY)}
 
 

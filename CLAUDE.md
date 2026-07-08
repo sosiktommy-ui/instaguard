@@ -116,7 +116,26 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
-### 2026-07-08
+### 2026-07-08 (2)
+
+#### fix(логин): `AssertionError: Client.bloks_versioning_id is empty` — наша устаревшая app_version ломала новый bloks-вход Instagram
+
+⚠️ **Нужен редеплой Python-воркера** (проверить: `<worker-url>/health` → `"build":"2026-07-08-stage7-bloks"`, `"default_app_version":"428.0.0.47.67"`, `"bloks_ready":true`).
+
+Пользователь (аккаунт `rebecca_little23`, верные логин/пароль): ошибка входа сменилась с прокси-темы на `AssertionError: Client.bloks_versioning_id is empty (hash is expected)`. Это НЕ про прокси — это новый **bloks**-путь входа Instagram, требующий хеш `X-Bloks-Version-Id`, которого у клиента не оказалось.
+
+**Корень (подтверждён по исходникам instagrapi 2.18.3, `mixins/auth.py` `set_app`):** мы жёстко писали в `device_settings` свою `app_version='359.2.0.64.89'`. В `set_settings`→`init`→`set_device`→`set_app` instagrapi:
+- ищет `APP_SETTINGS['359.2.0.64.89']` → **не находит** (в 2.18.3 известны только `428.0.0.47.67`/`385…`/`364…`);
+- отказывается «гидрировать» профиль, т.к. `is_current_or_newer_app_version('359…')` = **False** (359 < дефолт 428);
+- итог: `bloks_versioning_id` остаётся пустым → assert валит вход. То есть наш «фикс устаревшей версии» из записи 2026-07-07(11) стал теперь причиной падения — instagrapi сам ведёт актуальные app-профили.
+
+**Фикс (`workers/python/instagrapi_client.py`):**
+- **`_stable_device_settings`** больше НЕ проставляет `app_version`/`version_code` — отдаёт только «железо». instagrapi сам подставляет консистентную пару `app_version`+`version_code`+`bloks_versioning_id` из своего `config.APP_SETTINGS` (сейчас 428.0.0.47.67). Заодно вход модернизировался до текущей версии приложения.
+- **Новый `_ensure_bloks(cl)`** (защитная сетка): если после `set_settings` `bloks_versioning_id` пуст (устаревший/неизвестный `app_version` из импортированной мобильной сессии ИЛИ старая сессия из БД, сохранённая до фикса) — выравнивает весь app-триплет по текущему дефолтному профилю. `user_agent` импортированных сессий НЕ трогаем (непрерывность устройства). Вызывается во ВСЕХ путях сборки клиента: `build_client` (действия по сохранённым сессиям), `_apply_stable_fingerprint` (вход по паролю), `login_by_cookies` (мобильная + веб), `submit_challenge_code`/`resend_challenge_code`/`submit_2fa_code`.
+- **`_IG_APP_VERSION`/`_DEFAULT_DEVICE`** оставлены только как фолбэк (UA пре-флайт-проверки доходимости + дефолтное устройство при нераспознанном UA) — на вход больше не навязываются.
+- **`worker.py /health`** отдаёт `default_app_version` и `bloks_ready` вместо старого `app_version`; build → `2026-07-08-stage7-bloks`.
+
+**Проверено ОФФЛАЙН** (установил instagrapi 2.18.3, реальные IG-запросы не нужны): (1) вход по паролю — после `_apply_stable_fingerprint` `bloks_versioning_id` непустой, app_version=428; (2) устаревшее устройство через `set_settings` — было `None`, после `_ensure_bloks` непустой, триплет=428; (3) `build_client` из реалистичной старой сессии БД (app_version 359 + version_code, без bloks) — bloks проставлен, app_version=428, **cookies/sessionid сохранены**. `python -m py_compile` чисто. End-to-end на реальном аккаунте — после редеплоя воркера.
 
 #### fix(черновые): добавление аккаунта «баггалось» — дубль-модалка глотала challenge/2FA (202). Все входы аккаунта → единый надёжный попап
 

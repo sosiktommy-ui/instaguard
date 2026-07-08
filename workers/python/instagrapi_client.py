@@ -223,16 +223,17 @@ def _clear_challenge(username: str) -> None:
 _IG_RECAPTCHA_SITEKEY = '6LenUD0UAAAAABGHhh5oqMVnHlC2tDHWwHkM79Nl'
 
 
-# Версия приложения Instagram (Android). Устаревшая версия сама по себе повышает шанс
-# checkpoint/bad_password. Взята актуальная и КОНСИСТЕНТНАЯ пара app_version+version_code
-# (ровно как в примере реального UA в _parse_user_agent ниже: 359.2.0.64.89 … 671551917).
-# Оба значения переопределяются переменными окружения — можно поднять до текущей версии
-# без правки кода: IG_APP_VERSION / IG_VERSION_CODE.
+# Версия приложения Instagram (Android). ⚠️ Больше НЕ навязывается при входе — актуальную
+# пару app_version+version_code+bloks_versioning_id проставляет сам instagrapi из своего
+# config.APP_SETTINGS (см. _stable_device_settings/_ensure_bloks). Эти значения остаются лишь
+# как ФОЛБЭК: (1) UA-заголовок пре-флайт-проверки доходимости до Instagram; (2) дефолтное
+# устройство, если User-Agent сессии не удалось распознать (там _ensure_bloks добавит bloks).
+# Переопределяются переменными окружения IG_APP_VERSION / IG_VERSION_CODE.
 _IG_APP_VERSION = os.getenv("IG_APP_VERSION", "359.2.0.64.89")
 _IG_VERSION_CODE = os.getenv("IG_VERSION_CODE", "671551917")
 
-# Дефолтное устройство instagrapi — используется, только если User-Agent не удалось
-# распознать (лишь бы в device_settings всегда был app_version и остальные ключи).
+# Дефолтное устройство — используется, только если User-Agent сессии не удалось распознать
+# (лишь бы в device_settings всегда был app_version и остальные ключи; bloks добавит _ensure_bloks).
 _DEFAULT_DEVICE = {
     "app_version": _IG_APP_VERSION,
     "android_version": 26,
@@ -280,12 +281,17 @@ def _stable_android_device_id(username: str) -> str:
 
 
 def _stable_device_settings(username: str) -> dict:
-    """Тот же профиль устройства для этого username при каждом вызове."""
+    """Тот же профиль устройства (ЖЕЛЕЗО) для этого username при каждом вызове.
+
+    ВАЖНО: app_version/version_code/bloks_versioning_id здесь НЕ задаём — их подставляет сам
+    instagrapi из своего АКТУАЛЬНОГО app-профиля (config.APP_SETTINGS) на set_settings→init→set_app.
+    Раньше мы жёстко писали сюда app_version='359.2.0.64.89' — версию, которой нет в APP_SETTINGS
+    instagrapi 2.18.3 (там 428/385/364) и которая СТАРШЕ дефолтной → set_app отказывался
+    подставлять bloks_versioning_id, оставлял его пустым, и новый bloks-вход падал
+    `AssertionError: Client.bloks_versioning_id is empty`. Отдаём только «железо» —
+    instagrapi сам проставит консистентную пару app_version+version_code+bloks_versioning_id."""
     idx = _seed_int(f'{username}:device') % len(_DEVICE_POOL)
-    device = dict(_DEVICE_POOL[idx])
-    device["app_version"] = _DEFAULT_DEVICE["app_version"]
-    device["version_code"] = _DEFAULT_DEVICE["version_code"]
-    return device
+    return dict(_DEVICE_POOL[idx])
 
 
 def _stable_uuids_block(username: str) -> dict:
@@ -326,6 +332,40 @@ def _locale_for_proxy(proxy: str | None) -> tuple[str, str]:
     return 'en_US', 'US'
 
 
+def _ensure_bloks(cl: 'Client') -> None:
+    """Гарантировать НЕПУСТОЙ bloks_versioning_id у клиента (защитная сетка).
+
+    Новый вход Instagram (bloks) и часть challenge-флоу требуют хеш bloks_versioning_id;
+    instagrapi берёт его из app-профиля device_settings (config.APP_SETTINGS) на
+    set_settings→init→set_app. Если device_settings несут УСТАРЕВШИЙ/неизвестный app_version
+    (наш прежний '359…' ИЛИ app_version из импортированной мобильной сессии, ИЛИ старая
+    сессия из БД, сохранённая до этого фикса) — set_app не подставляет bloks и оставляет его
+    пустым → `AssertionError: Client.bloks_versioning_id is empty (hash is expected)`.
+
+    При пустом bloks выравниваем ВЕСЬ app-набор (app_version/version_code/bloks_versioning_id)
+    по текущему дефолтному app-профилю instagrapi — так триплет консистентен. user_agent
+    (для импортированных сессий) НЕ трогаем — сохраняем непрерывность устройства сессии.
+    Отказоустойчиво: любая ошибка не роняет вход."""
+    try:
+        if getattr(cl, 'bloks_versioning_id', None):
+            return
+        from instagrapi import config as ig_config
+        app = ig_config.APP_SETTINGS.get(ig_config.DEFAULT_APP_VERSION)
+        if not app:
+            return
+        ds = getattr(cl, 'device_settings', None)
+        if isinstance(ds, dict):
+            for k in ('app_version', 'version_code', 'bloks_versioning_id'):
+                if app.get(k):
+                    ds[k] = app[k]
+            if isinstance(getattr(cl, 'settings', None), dict):
+                cl.settings['device_settings'] = ds
+        cl.bloks_versioning_id = app.get('bloks_versioning_id')
+        logger.info("bloks_versioning_id был пуст → выровнял app-профиль по %s", ig_config.DEFAULT_APP_VERSION)
+    except Exception as e:
+        logger.warning("ensure bloks_versioning_id failed: %s", e)
+
+
 def _apply_stable_fingerprint(cl: 'Client', username: str, proxy: str | None) -> None:
     """Проставить стабильное устройство/uuid/локаль ДО login()/восстановления сессии —
     ровно так же, как рекомендует сам instagrapi (settings ДО login, чтобы IG видел
@@ -339,6 +379,8 @@ def _apply_stable_fingerprint(cl: 'Client', username: str, proxy: str | None) ->
             "locale": locale,
             "country": country,
         })
+        # set_settings пересобирает device (init→set_device→set_app). Гарантируем bloks.
+        _ensure_bloks(cl)
     except Exception as e:
         logger.warning("stable fingerprint setup failed for @%s (продолжаю со случайным устройством): %s", username, e)
 
@@ -524,6 +566,9 @@ def build_client(session_data: dict, proxy: str | None = None) -> Client:
     if proxy:
         cl.set_proxy(_resolve_proxy_scheme(proxy))
     cl.set_settings(session_data)
+    # Старые сессии из БД (сохранённые до фикса bloks) могут не нести bloks_versioning_id —
+    # подстрахуемся, иначе любое действие через них (парсинг/DM/лайк) упадёт на bloks-assert.
+    _ensure_bloks(cl)
     return cl
 
 
@@ -684,21 +729,33 @@ def login_by_credentials(username: str, password: str, proxy: str | None = None,
         return {'needs2fa': True, 'method': method, 'phone': phone, 'username': username}
 
     except ChallengeRequired:
-        challenge = cl.last_json.get('challenge', {})
+        challenge = (cl.last_json or {}).get('challenge', {}) or {}
         api_path = challenge.get('api_path', '')
 
         if not api_path:
-            raise Exception("Требуется подтверждение Instagram. Войдите вручную в приложение.")
+            raise Exception("Требуется подтверждение Instagram. Войдите вручную в приложение Instagram с этого же IP, затем повторите.")
 
-        # Fetch challenge info
+        # Получаем тип challenge. Новые checkpoint иногда отдают ПУСТОЙ / не-JSON ответ на
+        # api_path (bloks) → resp.json() падал «Expecting value». Делаем устойчиво: если тело
+        # не JSON — берём challenge-данные из ответа логина (cl.last_json / сам challenge-объект),
+        # а не роняем весь вход.
+        challenge_data: dict = {}
         try:
             resp = cl.private.get(f'https://i.instagram.com{api_path}?next=%2F')
-            challenge_data = resp.json()
+            try:
+                parsed = resp.json()
+                if isinstance(parsed, dict):
+                    challenge_data = parsed
+            except Exception:
+                logger.warning("challenge GET вернул не-JSON (%d байт) — беру данные из ответа логина", len(resp.content or b''))
         except Exception as e:
-            raise Exception(f"ChallengeRequired: не удалось получить тип challenge ({e})")
+            logger.warning("challenge GET не удался (%s) — беру данные из ответа логина", e)
+        if not challenge_data:
+            challenge_data = cl.last_json if isinstance(cl.last_json, dict) else {}
 
-        step_name = challenge_data.get('step_name', '')
-        logger.info("Challenge step=%s for @%s api_path=%s", step_name, username, api_path)
+        # step_name/step_data берём из ответа GET ИЛИ из самого challenge-объекта логина.
+        step_name = challenge_data.get('step_name') or challenge.get('step_name') or ''
+        logger.info("Challenge step=%s for @%s api_path=%s", step_name or '(пусто)', username, api_path)
 
         # Try automatic resolution depending on step type
         if step_name == 'delta_login_review':
@@ -734,8 +791,8 @@ def login_by_credentials(username: str, password: str, proxy: str | None = None,
                     logger.warning("Captcha submit failed: %s", e)
 
         # Какие каналы доступны и куда (маскированные email/телефон) — чтобы показать в UI
-        # и дать выбор/повтор. step_data приходит в ответе GET challenge.
-        step_data = challenge_data.get('step_data') or {}
+        # и дать выбор/повтор. step_data берём из GET ИЛИ из challenge-объекта логина.
+        step_data = challenge_data.get('step_data') or challenge.get('step_data') or {}
         email_masked = step_data.get('email') or ''
         phone_masked = step_data.get('phone_number') or ''
         methods = []
@@ -745,17 +802,21 @@ def login_by_credentials(username: str, password: str, proxy: str | None = None,
             methods.append('sms')
 
         sent_to = None
-        if step_name == 'select_verify_method':
+        # Просим отправить код, если шаг — выбор способа ЛИБО тип шага не распознан (пустой):
+        # на новых checkpoint GET часто пуст, но POST choice всё равно триггерит отправку кода.
+        already_sent = ('email' in step_name) or ('sms' in step_name) or ('phone' in step_name)
+        if step_name == 'select_verify_method' or (not step_name and not already_sent):
             # По умолчанию отправляем на почту (choice=1); если её нет — на SMS (choice=0).
-            default_choice = '1' if email_masked else '0'
+            default_choice = '1' if email_masked or not phone_masked else '0'
             try:
                 send_resp = cl.private.post(
                     f'https://i.instagram.com{api_path}',
                     data={'choice': default_choice}
                 ).json()
-                step_name = send_resp.get('step_name', step_name)
+                if isinstance(send_resp, dict):
+                    step_name = send_resp.get('step_name', step_name)
                 sent_to = 'email' if default_choice == '1' else 'sms'
-                logger.info("Code requested via %s, next step=%s", sent_to, step_name)
+                logger.info("Code requested via %s, next step=%s", sent_to, step_name or '(пусто)')
             except Exception as e:
                 logger.warning("Could not request code: %s", e)
 
@@ -806,26 +867,41 @@ def submit_challenge_code(username: str, code: str) -> dict:
     if pending.get('proxy'):
         cl.set_proxy(_resolve_proxy_scheme(pending['proxy']))
     cl.set_settings(pending['settings'])
+    _ensure_bloks(cl)
 
     api_path = pending['api_path']
 
+    code_clean = re.sub(r'\D', '', code or '')
     try:
         resp = cl.private.post(
             f'https://i.instagram.com{api_path}',
-            data={'security_code': code}
+            data={'security_code': code_clean}
         )
-        resp_data = resp.json()
-        logger.info("Challenge code submit response: %s", resp_data)
+        try:
+            resp_data = resp.json()
+        except Exception:
+            resp_data = {}   # bloks/пустой ответ — решим по фактической проверке сессии ниже
+        logger.info("Challenge code submit response: %s", resp_data or '(не-JSON)')
 
-        status = resp_data.get('status', '')
-        action = resp_data.get('action', '')
+        status = resp_data.get('status', '') if isinstance(resp_data, dict) else ''
+        action = resp_data.get('action', '') if isinstance(resp_data, dict) else ''
 
         if status == 'ok' or action == 'close':
             cl.get_timeline_feed()
             _clear_challenge(username)
             return {'sessionData': cl.get_settings()}
 
-        msg = resp_data.get('message', str(resp_data))
+        # Ответ неоднозначный / не-JSON — проверим, не прошёл ли вход уже фактически
+        # (Instagram нередко отдаёт пустое тело, но сессия при этом уже валидна).
+        try:
+            cl.account_info()
+            _clear_challenge(username)
+            logger.info("Challenge: код принят (подтверждено проверкой сессии) @%s", username)
+            return {'sessionData': cl.get_settings()}
+        except Exception:
+            pass
+
+        msg = (resp_data.get('message') if isinstance(resp_data, dict) else '') or 'код неверный или истёк'
         raise Exception(f"Неверный код подтверждения: {msg}")
 
     except Exception as e:
@@ -843,6 +919,7 @@ def resend_challenge_code(username: str, method: str = 'email') -> dict:
     if pending.get('proxy'):
         cl.set_proxy(_resolve_proxy_scheme(pending['proxy']))
     cl.set_settings(pending['settings'])
+    _ensure_bloks(cl)
 
     choice = '0' if method == 'sms' else '1'
     try:
@@ -873,6 +950,7 @@ def submit_2fa_code(username: str, code: str) -> dict:
     if pending.get('proxy'):
         cl.set_proxy(_resolve_proxy_scheme(pending['proxy']))
     cl.set_settings(pending['settings'])
+    _ensure_bloks(cl)
     cl.username = username
 
     identifier = pending['two_factor_identifier']
@@ -951,6 +1029,7 @@ def login_by_cookies(cookies: dict, proxy: str | None = None) -> tuple[dict, str
         settings = _parse_mobile_session(cookies['sessionid'])
         cl = _new_client()
         cl.set_settings(settings)
+        _ensure_bloks(cl)  # app_version из UA сессии часто устаревший → bloks пуст без этого
         return cl.get_settings(), _verify_and_username(cl)
 
     # Обычные (веб) куки: словарь sessionid/csrftoken/ds_user_id/… либо один sessionid.
@@ -984,6 +1063,7 @@ def login_by_cookies(cookies: dict, proxy: str | None = None) -> tuple[dict, str
         except Exception as e:
             logger.warning("stable fingerprint setup (cookies) failed (продолжаю без него): %s", e)
         cl.set_settings(settings)
+        _ensure_bloks(cl)
     else:
         cl.private.cookies.update(cookies)
     return cl.get_settings(), _verify_and_username(cl)
