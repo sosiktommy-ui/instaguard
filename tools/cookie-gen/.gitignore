@@ -1,0 +1,5 @@
+# Личные данные — НЕ коммитить
+accounts.txt
+sessions.txt
+output/
+node_modules/

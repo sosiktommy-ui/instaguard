@@ -1,0 +1,14 @@
+{
+  "name": "instaguard-cookie-gen",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Локальный генератор сессий Instagram (storageState) для вставки в «Импорт» InstaGuard. Запускается на ПК пользователя в ВИДИМОМ окне — checkpoint/капчу решаете глазами.",
+  "scripts": {
+    "start": "node gen.js",
+    "postinstall": "playwright install chromium"
+  },
+  "dependencies": {
+    "playwright": "1.48.0"
+  }
+}
