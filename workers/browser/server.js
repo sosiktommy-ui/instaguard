@@ -8,7 +8,7 @@ import { parseFollowers, parseFollowing, parseComments, parseLikers } from './li
 import { checkProxyBrowser } from './lib/proxy.js'
 import { toStorageState } from './lib/state.js'
 
-const BUILD = '2026-07-09-browser-12-loginfix'
+const BUILD = '2026-07-09-browser-13-healthfix'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -66,7 +66,7 @@ function errStatus(message) {
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 
-app.get('/health', async (_req, res) => {
+app.all('/health', async (_req, res) => {
   let chromium = 'not-launched'
   try { const b = await getBrowser(); chromium = b.version() } catch (e) { chromium = 'error: ' + e.message }
   // headful=true когда браузер видимый (под Xvfb в проде). display — есть ли виртуальный дисплей.

@@ -84,9 +84,23 @@ export async function browserTestSession(storageState: object, proxy?: string, u
   }
 }
 
-export function browserHealth() {
-  return browserFetch<{ ok: boolean; build: string; chromium: string; concurrency: number; active: number; pending: number }>('/health', {})
-    .catch((e) => ({ ok: false, build: '', chromium: 'error: ' + (e?.message ?? ''), concurrency: 0, active: 0, pending: 0 }))
+// Здоровье воркера — ПЛОСКИЙ GET на /health (воркер отдаёт его без секрета). Раньше тут был
+// browserFetch(POST) → но у воркера /health только GET → POST давал 404 → индикатор в шапке
+// ВСЕГДА показывал «Воркер офлайн», хотя воркер жив. Свой лёгкий fetch, не через browserFetch.
+export async function browserHealth() {
+  const down = { ok: false, build: '', chromium: '', concurrency: 0, active: 0, pending: 0 }
+  if (!BROWSER_WORKER_URL) return down
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 20_000)
+  try {
+    const res = await fetch(`${BROWSER_WORKER_URL}/health`, { method: 'GET', signal: ctrl.signal })
+    if (!res.ok) return down
+    return await res.json()
+  } catch {
+    return down
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 // ── Прокси (заменяет мёртвый Python-воркер) ─────────────────────────────────────
