@@ -343,23 +343,31 @@ export async function resendCode(context) {
  * @returns { ok:true, username, storageState }  @throws иначе
  */
 export async function loginByState(context) {
+  // Был ли sessionid во ВСТАВЛЕННЫХ куки ДО захода на сайт — отличает «не смогли разобрать
+  // формат» (нет куки с самого начала) от «Instagram отклонил валидную на вид сессию»
+  // (кука была, но после захода на instagram.com сервер её сбросил — устарела/гео/чужой аккаунт).
+  const hadBefore = await hasSessionCookie(context)
   const page = await context.newPage()
   await gotoResilient(page, 'https://www.instagram.com/', { timeout: 25000, retries: 1, backoffMs: [2000] })
-  await page.waitForTimeout(2000)
-  // hasSessionCookie() смотрит ТОЛЬКО в локальный cookie jar браузера — кука сама по себе
-  // ничего не доказывает (мусорное/просроченное значение тоже «присутствует»). Раньше на
-  // этом ловилась мобильная сессия, которую toStorageState() не умел разбирать (см. state.js)
-  // — мусорный cookie давал ложный «успешный» вход без реальной авторизации на сервере IG.
+  await page.waitForTimeout(2500)
+
   if (!(await hasSessionCookie(context))) {
-    throw new Error('login_required: сессия недействительна (нет sessionid) — куки устарели или другой аккаунт')
+    if (!hadBefore) {
+      // sessionid не извлёкся из ввода — проблема ФОРМАТА, не гео/срока.
+      await fail(page, 'bad_cookies: во вставленных куки/сессии не найден sessionid. Нужна веб-сессия instagram.com (кука sessionid) ИЛИ мобильная строка целиком с «Authorization=Bearer IGT:2:…». Скопируйте строку полностью.')
+    }
+    // sessionid БЫЛ, но сервер его сбросил при заходе → сессия отклонена.
+    await fail(page, 'session_rejected: Instagram отклонил сессию (скрин ниже). Частые причины: (1) ГЕО-НЕСОВПАДЕНИЕ — сессия аккаунта из одной страны, а прокси из другой (напр. аккаунт id_ID/Индонезия, прокси US) → нужен прокси В СТРАНЕ АККАУНТА; (2) сессия устарела/разлогинена; (3) это сессия другого аккаунта.')
   }
+
   await dismissInterstitials(page)
   const uname = await extractUsername(page)
   if (!uname) {
-    // Кука есть, но сервер её не принял — Instagram отрисовал логаут-версию страницы.
-    // Прямой признак — снова видна форма входа (те же селекторы, что и обычный вход).
+    // Кука осталась, но профиль не читается И снова видна форма входа — сервер не принял.
     const stillLoggedOut = await firstVisible(page, SEL.loginUsername, 1500)
-    if (stillLoggedOut) throw new Error('login_required: кука не принята сервером Instagram (сессия истекла/поддельная/чужой аккаунт) — форма входа снова видна')
+    if (stillLoggedOut) {
+      await fail(page, 'session_rejected: кука есть, но сервер Instagram показал форму входа (сессия истекла/поддельная/чужой аккаунт ИЛИ гео-несовпадение прокси). Нужен прокси в стране аккаунта или свежая сессия.')
+    }
   }
   return { ok: true, username: uname || 'unknown', storageState: await context.storageState() }
 }

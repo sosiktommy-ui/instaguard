@@ -18,10 +18,15 @@ function parseMobileSessionCookies(raw) {
     if (i > 0) headers[pair.slice(0, i).trim()] = pair.slice(i + 1).trim()
   }
   const auth = headers['Authorization'] || ''
-  const m = auth.match(/Bearer\s+IGT:2:([A-Za-z0-9+/=]+)/i)
+  // Токен обычно "Bearer IGT:2:<base64>", но встречается и без префикса IGT:2, и в base64url
+  // (-/_ вместо +//). Префикс необязателен, набор символов расширен.
+  const m = auth.match(/Bearer\s+(?:IGT:2:)?([A-Za-z0-9+/=_-]+)/i)
   if (!m) return null
   let payload
-  try { payload = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')) } catch { return null }
+  try {
+    const b64 = m[1].replace(/-/g, '+').replace(/_/g, '/')
+    payload = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'))
+  } catch { return null }
   if (!payload || !payload.sessionid) return null
   let sessionid = String(payload.sessionid)
   try { sessionid = decodeURIComponent(sessionid) } catch {}
