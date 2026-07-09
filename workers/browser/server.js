@@ -8,7 +8,7 @@ import { parseFollowers, parseFollowing, parseComments, parseLikers } from './li
 import { checkProxyBrowser } from './lib/proxy.js'
 import { toStorageState } from './lib/state.js'
 
-const BUILD = '2026-07-09-browser-19-codefield'
+const BUILD = '2026-07-09-browser-20-codefield-email'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2

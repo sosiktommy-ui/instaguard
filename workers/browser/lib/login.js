@@ -300,13 +300,26 @@ export async function resumeCode(context, { code }) {
   const page = pages[pages.length - 1] || (await context.newPage())
   await page.waitForLoadState('domcontentloaded', { timeout: 4000 }).catch(() => {})
 
+  // На экране подтверждения («Check your email») поле кода у Instagram имеет НЕОЧЕВИДНЫЕ
+  // атрибуты: подтверждено DOM-дампом — это `input name="email"` type=text с placeholder
+  // «Code» (тот же прикол, что форма входа использует name="email"/"pass"). Поэтому здесь,
+  // на СТРАНИЦЕ ПОДТВЕРЖДЕНИЯ (уже после логина), ищем шире, чем SEL.codeInput: включаем
+  // placeholder=code и единственное видимое текстовое поле (name=email/username/type=text).
+  // Это безопасно именно в resumeCode — тут нет формы логина, поле только одно (код).
+  const CODE_SELECTORS = [
+    ...SEL.codeInput,
+    'input[placeholder*="code" i]',
+    'input[name="email"]',
+    'input[name="username"]',
+    'input[type="text"]:not([name="pass"]):not([name="password"])',
+  ]
   // Ищем поле кода по ВСЕМ фреймам (challenge иногда во фрейме), с запасом по времени.
-  let codeInput = await firstVisibleAnyFrame(page, SEL.codeInput, 10000)
+  let codeInput = await firstVisibleAnyFrame(page, CODE_SELECTORS, 10000)
   if (!codeInput) {
     // Возможно, перед полем есть промежуточный шаг «отправить код / это я / продолжить».
     await clickByText(page, ['Send Security Code', 'Send Code', 'Send code', 'Отправить код', 'This Was Me', 'This was me', 'Это я', 'Continue', 'Продолжить', 'Confirm'], { timeout: 2500 })
     await page.waitForTimeout(1500)
-    codeInput = await firstVisibleAnyFrame(page, SEL.codeInput, 8000)
+    codeInput = await firstVisibleAnyFrame(page, CODE_SELECTORS, 8000)
   }
   if (!codeInput) {
     // Вдруг уже вошли (кука появилась).
