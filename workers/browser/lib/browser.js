@@ -125,6 +125,26 @@ export async function firstVisible(page, selectors, timeout = 6000) {
   return null
 }
 
+// Как firstVisible, но перебирает ВСЕ фреймы страницы (не только главный). Инстаграм обычно
+// не иет форму входа во фрейм, но некоторые consent/anti-bot прослойки могут — обычный
+// page.locator() их не видит, хотя на скриншоте форма выглядит нормально (см. login.js
+// «поля не найдены, хотя на скрине видны» — диагностика этого случая).
+export async function firstVisibleAnyFrame(page, selectors, timeout = 6000) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    for (const frame of page.frames()) {
+      for (const sel of selectors) {
+        try {
+          const loc = frame.locator(sel).first()
+          if (await loc.isVisible().catch(() => false)) return loc
+        } catch {}
+      }
+    }
+    await page.waitForTimeout(300)
+  }
+  return null
+}
+
 // Клик по кнопке/ссылке с одним из текстов (getByText, точное совпадение, первый видимый).
 export async function clickByText(page, texts, { timeout = 6000 } = {}) {
   const deadline = Date.now() + timeout

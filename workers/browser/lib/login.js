@@ -3,7 +3,7 @@
 // жизнью контекста (хранение между /login и /login/checkpoint) — на server.js.
 import crypto from 'crypto'
 import { SEL, URLS } from './selectors.js'
-import { firstVisible, clickByText, pageHasText, hasSessionCookie, gotoResilient } from './browser.js'
+import { firstVisible, firstVisibleAnyFrame, clickByText, pageHasText, hasSessionCookie, gotoResilient } from './browser.js'
 import { humanType, jitter, idleMouse } from './human.js'
 
 const LOGIN_URL = 'https://www.instagram.com/accounts/login/'
@@ -52,6 +52,28 @@ async function fail(page, message) {
   const err = new Error(message)
   try { err.diag = await captureDiag(page) } catch {}
   throw err
+}
+
+// Диагностика «поля не найдены, хотя на скрине форма видна»: реальные name/type/aria-label
+// первых инпутов страницы + число фреймов/форм — без этого скриншот не отличает «Instagram
+// переименовал атрибуты» от «форма во фрейме» от «поля правда нет». Считаем ПО ВСЕМ фреймам,
+// не только главному — если форма во фрейме, это сразу видно (frame > 0 c инпутами).
+async function domSummary(page) {
+  try {
+    const perFrame = []
+    for (const frame of page.frames()) {
+      const d = await frame.evaluate(() => {
+        const inputs = [...document.querySelectorAll('input')].slice(0, 10).map((el) => ({
+          name: el.name || null, type: el.type || null,
+          aria: el.getAttribute('aria-label') || null,
+          visible: Boolean(el.offsetWidth || el.offsetHeight || el.getClientRects().length),
+        }))
+        return { url: location.href, forms: document.querySelectorAll('form').length, inputs, ready: document.readyState }
+      }).catch(() => null)
+      if (d) perFrame.push(d)
+    }
+    return { frameCount: page.frames().length, frames: perFrame }
+  } catch { return null }
 }
 
 async function dismissCookieBanner(page) {
@@ -109,6 +131,12 @@ async function findLoginForm(page) {
   await waitForm(page, 20000)
   userInput = await firstVisible(page, SEL.loginUsername, 4000)
   passInput = userInput ? await firstVisible(page, SEL.loginPassword, 4000) : null
+  if (userInput && passInput) return { userInput, passInput }
+
+  // 4) Форма визуально на месте (видна на скрине), но обычный page.locator() её не находит —
+  //    похоже на consent/anti-bot ПРОСЛОЙКУ во ФРЕЙМЕ. Ищем по ВСЕМ фреймам страницы.
+  userInput = await firstVisibleAnyFrame(page, SEL.loginUsername, 5000)
+  passInput = userInput ? await firstVisibleAnyFrame(page, SEL.loginPassword, 5000) : null
   return { userInput, passInput }
 }
 
@@ -173,7 +201,15 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
     if (await pageHasText(page, SEL.errorPage)) {
       await fail(page, 'blocked: Instagram показал экран ошибки/«подождите» (вероятно, бот-защита headless-браузера или лимит IP). Скрин ниже — попробуйте другой прокси/позже.')
     }
-    await fail(page, 'unknown: страница входа открылась, но поля логина/пароля не найдены (промежуточный экран или бот-защита). Скрин ниже показывает, что увидел браузер.')
+    // Скрин один раз уже сбивал с толку («форма видна, а код её не находит») — вместо
+    // гадания прикладываем РЕАЛЬНЫЙ дамп DOM (name/type/aria первых инпутов по ВСЕМ фреймам).
+    // Отличает: Instagram переименовал атрибуты / форма во фрейме / поля правда исчезли.
+    const dom = await domSummary(page)
+    console.error('[login] форма не найдена, DOM-дамп:', JSON.stringify(dom))
+    const domTxt = dom
+      ? ` · фреймов: ${dom.frameCount}, инпуты по фреймам: ${JSON.stringify(dom.frames.map((f) => ({ url: f.url.slice(0, 60), forms: f.forms, inputs: f.inputs })))}`
+      : ' · DOM-дамп не снят'
+    await fail(page, `unknown: страница входа открылась, но поля логина/пароля не найдены (промежуточный экран или бот-защита). Скрин ниже показывает, что увидел браузер.${domTxt}`)
   }
   await humanType(userInput, username)
   await jitter(400, 900)
