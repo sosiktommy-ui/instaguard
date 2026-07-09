@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getCurrentUser } from '@/lib/auth'
-import { checkProxy } from '@/lib/instagram/client'
+import { browserCheckProxy } from '@/lib/browser/client'
 
 /**
  * Проверка прокси: показывает исходящий IP, страну и провайдера (как их видит Instagram).
@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const res = await checkProxy(proxyUrl)
+    const res = await browserCheckProxy(proxyUrl)
     if (savedId) {
       const alive = res.ok !== false
       const flagged = Boolean(res.datacenter || res.vpn || res.proxy)

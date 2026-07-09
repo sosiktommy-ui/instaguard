@@ -5,9 +5,10 @@ import { getBrowser, newAccountContext, closeContextSafe } from './lib/browser.j
 import { attemptLogin, resumeCode, resendCode, loginByState, testSession } from './lib/login.js'
 import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment } from './lib/actions.js'
 import { parseFollowers, parseFollowing, parseComments, parseLikers } from './lib/parse.js'
+import { checkProxyBrowser } from './lib/proxy.js'
 import { toStorageState } from './lib/state.js'
 
-const BUILD = '2026-07-09-browser-7-fastproxy'
+const BUILD = '2026-07-09-browser-8-proxycheck'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -158,6 +159,40 @@ app.post('/session/test', async (req, res) => {
     })
     res.json({ alive })
   } catch { res.json({ alive: false }) }
+})
+
+// ── Прокси (заменяет мёртвый Python-воркер /check-proxy и /pick-proxy) ──────────
+// Проверка одного прокси: исходящий IP/страна/провайдер + флаги. Всегда 200 (ok:true|false).
+app.post('/check-proxy', async (req, res) => {
+  const { proxy } = req.body || {}
+  if (!proxy) return res.json({ ok: false, error: 'нет прокси' })
+  try {
+    const result = await runLimited(() => checkProxyBrowser(getBrowser, proxy))
+    res.json(result)
+  } catch (e) {
+    res.json({ ok: false, error: String(e?.message || 'ошибка').slice(0, 200) })
+  }
+})
+
+// Подбор рабочего из списка: проверяет кандидатов, возвращает первый ЧИСТЫЙ (не датацентр/vpn),
+// иначе первый рабочий (flagged). Форма совместима со старым Python /pick-proxy (chosen/flagged/checked).
+app.post('/pick-proxy', async (req, res) => {
+  const candidates = Array.isArray(req.body?.candidates) ? req.body.candidates.slice(0, 30) : []
+  const checked = []
+  let chosenClean = null   // рабочий и НЕ датацентр/vpn — приоритет
+  let chosenDirty = null   // рабочий, но датацентр/vpn — запасной
+  try {
+    for (const url of candidates) {
+      const r = await runLimited(() => checkProxyBrowser(getBrowser, url))
+      checked.push({ url, ok: r.ok, ip: r.ip, country: r.country, datacenter: r.datacenter, vpn: r.vpn })
+      if (r.ok) {
+        if (!(r.datacenter || r.vpn)) { chosenClean = url; break }   // чистый — сразу выходим
+        if (!chosenDirty) chosenDirty = url                          // грязный — запомним, ищем чистый дальше
+      }
+    }
+  } catch { /* вернём, что успели проверить */ }
+  const chosen = chosenClean || chosenDirty
+  res.json({ chosen, flagged: !chosenClean && Boolean(chosenDirty), checked })
 })
 
 // ── Действия (Фаза 2) ─────────────────────────────────────────────────────────

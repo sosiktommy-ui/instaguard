@@ -88,6 +88,37 @@ export function browserHealth() {
     .catch((e) => ({ ok: false, build: '', chromium: 'error: ' + (e?.message ?? ''), concurrency: 0, active: 0, pending: 0 }))
 }
 
+// ── Прокси (заменяет мёртвый Python-воркер) ─────────────────────────────────────
+export interface BrowserProxyCheck {
+  ok: boolean
+  ip?: string | null
+  country?: string | null
+  isp?: string | null
+  scheme?: string | null
+  datacenter?: boolean | null
+  vpn?: boolean | null
+  proxy?: boolean | null
+  mobile?: boolean | null
+  companyType?: string | null
+  error?: string
+}
+
+/** Проверить один прокси браузерным воркером (исходящий IP/страна/провайдер + флаги). */
+export function browserCheckProxy(proxy?: string) {
+  return browserFetch<BrowserProxyCheck>('/check-proxy', { proxy })
+}
+
+export interface BrowserPickedProxy {
+  chosen: string | null
+  flagged: boolean
+  checked: Array<{ url: string; ok: boolean; ip?: string; country?: string; datacenter?: boolean | null; vpn?: boolean | null }>
+}
+
+/** Подобрать рабочий прокси из списка (первый чистый, иначе первый рабочий). */
+export function browserPickProxy(candidates: string[]) {
+  return browserFetch<BrowserPickedProxy>('/pick-proxy', { candidates })
+}
+
 // ── Действия (Фаза 2). Каждое возвращает обновлённый browserState. ──────────────
 export interface ActionResult { ok: boolean; browserState?: object; closed?: boolean; error?: string; [k: string]: any }
 

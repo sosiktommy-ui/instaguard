@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/prisma'
-import { pickProxy } from '@/lib/instagram/client'
+import { browserPickProxy } from '@/lib/browser/client'
 
 /**
  * Подбор пулового прокси для подключения аккаунта.
@@ -77,7 +77,7 @@ export async function pickPoolProxy(userId: string, cap: number, excludeIds: str
   if (unknown.length) {
     const idByUrl = new Map(free.map((p) => [p.url, p.id]))
     try {
-      const res = await pickProxy(unknown.slice(0, MAX_CANDIDATES).map((p) => p.url))
+      const res = await browserPickProxy(unknown.slice(0, MAX_CANDIDATES).map((p) => p.url))
       void persistChecked(res.checked, idByUrl)
       if (res.chosen) {
         const p = unknown.find((f) => f.url === res.chosen) ?? unknown[0]

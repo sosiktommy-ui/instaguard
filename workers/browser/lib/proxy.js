@@ -40,6 +40,13 @@ function toPlaywrightProxy(scheme, p) {
   return out
 }
 
+// Нейтральный лёгкий endpoint: проверяем, что прокси ВООБЩЕ носит трафик.
+// НЕ Instagram: раньше схему проверяли заходом на instagram.com — если IG капризничал
+// через этот IP (гео/анти-бот), схема ложно считалась нерабочей и ЖИВОЙ прокси метился
+// «мёртвым» (ровно жалоба пользователя: внешний чекер — ок, наш — «не отвечает»).
+// Доходимость прокси и достижимость IG — разные вещи; IG проверяет сам вход.
+const PROBE_URL = 'https://api.ipify.org/?format=json'
+
 // Пробное подключение через ВРЕМЕННЫЙ КОНТЕКСТ (дёшево — не новый браузер, переиспользуем
 // общий процесс Chromium из browser.js).
 async function schemeWorks(browser, scheme, p) {
@@ -47,7 +54,7 @@ async function schemeWorks(browser, scheme, p) {
   try {
     context = await browser.newContext({ proxy: toPlaywrightProxy(scheme, p) })
     const page = await context.newPage()
-    await page.goto('https://www.instagram.com/accounts/login/', { waitUntil: 'domcontentloaded', timeout: 8000 })
+    await page.goto(PROBE_URL, { waitUntil: 'domcontentloaded', timeout: 8000 })
     return true
   } catch {
     return false
@@ -103,4 +110,49 @@ export function proxyHostLabel(raw) {
   const p = splitProxy(raw)
   if (!p) return 'без прокси'
   return p.hostPort
+}
+
+/**
+ * Проверка прокси браузером: исходящий IP/страна/провайдер + флаги (датацентр/vpn/mobile),
+ * как их видит внешний сервис ЧЕРЕЗ этот прокси. Заменяет мёртвый Python-воркер `/check-proxy`
+ * (тот перестал существовать → «Application not found»). Источник — ipapi.is (тот же, что
+ * использовал Python, формы совпадают). Возвращает { ok:false } на нерабочем прокси (НЕ throw).
+ * @param {() => Promise<import('playwright-core').Browser>} getBrowser
+ */
+export async function checkProxyBrowser(getBrowser, raw) {
+  let pw
+  try {
+    pw = await resolveProxy(getBrowser, raw)  // бросит proxy_dead, если ни одна схема не носит трафик
+  } catch (e) {
+    return { ok: false, error: String(e?.message || 'proxy_dead').slice(0, 200) }
+  }
+  if (!pw) return { ok: false, error: 'пустая строка прокси' }
+
+  const browser = await getBrowser()
+  let context
+  try {
+    context = await browser.newContext({ proxy: pw })
+    const page = await context.newPage()
+    await page.goto('https://ipapi.is/json/', { waitUntil: 'domcontentloaded', timeout: 15000 })
+    const text = await page.evaluate(() => document.body?.innerText || '')
+    let d = {}
+    try { d = JSON.parse(text) } catch {}
+    const scheme = pw.server.split('://')[0]
+    return {
+      ok: true,
+      ip: d.ip || null,
+      country: d?.location?.country || d?.country || null,
+      isp: d?.company?.name || d?.asn?.org || d?.asn?.descr || null,
+      scheme,
+      datacenter: d?.is_datacenter ?? null,
+      vpn: d?.is_vpn ?? null,
+      proxy: d?.is_proxy ?? null,
+      mobile: d?.is_mobile ?? null,
+      companyType: d?.company?.type ?? null,
+    }
+  } catch (e) {
+    return { ok: false, error: String(e?.message || 'проверка не удалась').slice(0, 200) }
+  } finally {
+    await context?.close().catch(() => {})
+  }
 }
