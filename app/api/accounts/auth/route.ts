@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
         const raw = String(e?.message ?? 'Ошибка авторизации через куки')
         if (isInstagramBlacklist(raw) && proxyId) await markProxyBlocked(proxyId)
         const msg = `${raw}\n\n🌐 Вход шёл через прокси: ${proxyHostLabel(proxyUrl)}`
-        return NextResponse.json({ error: msg }, { status: 400 })
+        return NextResponse.json({ error: msg, screenshot: e?.diag?.screenshot }, { status: 400 })
       }
     } else {
       if (!username || !password) return NextResponse.json({ error: 'Username и пароль обязательны' }, { status: 400 })
@@ -151,7 +151,8 @@ export async function POST(req: NextRequest) {
           ? '\n\n♻️ Этот IP помечен как выжженный Instagram и больше не будет предлагаться. Нажмите «Авторизоваться» ещё раз — подберётся ДРУГОЙ IP. Если так по ВСЕМ прокси, а аккаунт точно живой — прокси не в стране аккаунта (гео) или выжжены перебором; попробуйте вход по «Куки».'
           : ''
         const msg = `${raw}\n\n🌐 Вход шёл через прокси: ${proxyHostLabel(proxyUrl)}${hint}`
-        return NextResponse.json({ error: msg }, { status: 400 })
+        // e.diag.screenshot — снимок того, что реально увидел браузер (браузерный движок) — покажем в модалке.
+        return NextResponse.json({ error: msg, screenshot: e?.diag?.screenshot }, { status: 400 })
       }
     }
 

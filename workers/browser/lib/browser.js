@@ -8,20 +8,41 @@ chromium.use(StealthPlugin())
 
 let _browser = null
 
+// Аргументы запуска Chromium (общие для headful/headless).
+const LAUNCH_ARGS = [
+  '--disable-blink-features=AutomationControlled',
+  '--no-sandbox',
+  '--disable-dev-shm-usage',
+  '--disable-gpu',
+  '--disable-features=IsolateOrigins,site-per-process',
+  '--lang=en-US',
+]
+
+/**
+ * Запуск Chromium. ПО УМОЛЧАНИЮ — headful (видимый браузер), т.к. в этом весь смысл
+ * перехода на «эмуль»: Instagram отдаёт headless-Chromium бот-стену (страница без формы
+ * входа), а живому окну — нормальный вход (см. plan.md §1, memory pivot-to-browser-emulator).
+ * В проде (Railway/Docker) окна нет — headful крутится под виртуальным дисплеем Xvfb
+ * (`xvfb-run` в Dockerfile CMD). RAM это почти не добавляет (кадровый буфер крошечный;
+ * тяжёлые — контексты Chromium, а не head/headless), поэтому риск §377 плана не растёт.
+ * Аварийный откат: `BROWSER_HEADLESS=1` форсит старый headless. Если headful не стартует
+ * (нет $DISPLAY — Xvfb не поднялся) — деградируем в headless, а не роняем весь воркер.
+ */
 export async function getBrowser() {
   if (_browser && _browser.isConnected()) return _browser
-  const headful = process.env.BROWSER_HEADFUL === '1' && process.env.NODE_ENV !== 'production'
-  _browser = await chromium.launch({
-    headless: !headful,
-    args: [
-      '--disable-blink-features=AutomationControlled',
-      '--no-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--disable-features=IsolateOrigins,site-per-process',
-      '--lang=en-US',
-    ],
-  })
+  const forceHeadless = process.env.BROWSER_HEADLESS === '1'
+  const wantHeadful = !forceHeadless
+  try {
+    _browser = await chromium.launch({ headless: !wantHeadful, args: LAUNCH_ARGS })
+  } catch (e) {
+    if (wantHeadful) {
+      // Скорее всего «Missing X server or $DISPLAY» — Xvfb не запущен. Не падаем.
+      console.warn('[browser] headful-запуск не удался, откат в headless:', String(e?.message || e).slice(0, 160))
+      _browser = await chromium.launch({ headless: true, args: LAUNCH_ARGS })
+    } else {
+      throw e
+    }
+  }
   return _browser
 }
 

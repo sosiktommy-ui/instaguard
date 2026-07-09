@@ -33,9 +33,12 @@ async function browserFetch<T = any>(path: string, body: object): Promise<T> {
   }
   if (!res.ok) {
     let msg: string
-    try { const d = await res.json(); msg = d.message ?? d.error ?? JSON.stringify(d) }
+    let diag: any = undefined
+    try { const d = await res.json(); msg = d.message ?? d.error ?? JSON.stringify(d); diag = d.diag }
     catch { msg = await res.text() }
-    throw new Error(msg)
+    const err = new Error(msg) as Error & { diag?: any }
+    if (diag) err.diag = diag   // скрин страницы при провале входа — прокидываем в вызывающий код (UI покажет)
+    throw err
   }
   return res.json()
 }

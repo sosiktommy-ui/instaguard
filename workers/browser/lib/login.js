@@ -34,8 +34,54 @@ function totpCode(secret) {
 
 const urlHas = (url, list) => list.some((x) => url.includes(x))
 
+// Снимок того, что реально увидел браузер (для диагностики неудачного входа — plan.md Фаза 4).
+// Возвращает { url, title, screenshot(data-URL jpeg) }. Скрин ужат (viewport, q55) — компактно.
+export async function captureDiag(page) {
+  const out = { url: '', title: '', screenshot: null }
+  try { out.url = page.url() } catch {}
+  try { out.title = await page.title() } catch {}
+  try {
+    const buf = await page.screenshot({ type: 'jpeg', quality: 55, fullPage: false })
+    out.screenshot = 'data:image/jpeg;base64,' + buf.toString('base64')
+  } catch {}
+  return out
+}
+
+// Бросить ошибку, приложив к ней скрин страницы (server.js вернёт diag в ответ, UI покажет).
+async function fail(page, message) {
+  const err = new Error(message)
+  try { err.diag = await captureDiag(page) } catch {}
+  throw err
+}
+
 async function dismissCookieBanner(page) {
   await clickByText(page, ['Allow all cookies', 'Accept All', 'Accept', 'Разрешить все файлы cookie', 'Принять все'], { timeout: 3500 })
+}
+
+// Найти форму входа устойчиво: дождаться, пока React-форма догрузится (networkidle),
+// перебрать варианты селекторов; если формы нет — попробовать открыть её кликом «Log in»
+// (logged-out домашняя иногда показывает промежуточный экран), затем повторный заход.
+async function findLoginForm(page) {
+  await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {})
+  let userInput = await firstVisible(page, SEL.loginUsername, 15000)
+  let passInput = userInput ? await firstVisible(page, SEL.loginPassword, 8000) : null
+  if (userInput && passInput) return { userInput, passInput }
+
+  // Промежуточный экран → клик «Log in» и повтор.
+  if (await clickByText(page, SEL.logInLink, { timeout: 3000 })) {
+    await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {})
+    userInput = await firstVisible(page, SEL.loginUsername, 12000)
+    passInput = userInput ? await firstVisible(page, SEL.loginPassword, 6000) : null
+    if (userInput && passInput) return { userInput, passInput }
+  }
+
+  // Последняя попытка — принудительный повторный заход на страницу входа.
+  await gotoResilient(page, LOGIN_URL, { timeout: 20000, retries: 0 }).catch(() => {})
+  await dismissCookieBanner(page)
+  await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {})
+  userInput = await firstVisible(page, SEL.loginUsername, 12000)
+  passInput = userInput ? await firstVisible(page, SEL.loginPassword, 6000) : null
+  return { userInput, passInput }
 }
 
 // Закрыть пост-логин диалоги «Save login info?», «Turn on notifications».
@@ -89,11 +135,15 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
   await dismissCookieBanner(page)
   await idleMouse(page)
 
-  const userInput = await firstVisible(page, SEL.loginUsername, 15000)
-  const passInput = await firstVisible(page, SEL.loginPassword, 8000)
+  const { userInput, passInput } = await findLoginForm(page)
   if (!userInput || !passInput) {
     // Страница открылась (гото не упал), но формы входа нет — не прокси, а вёрстка/блок.
-    throw new Error('unknown: страница входа открылась, но поля логина/пароля не найдены (изменилась вёрстка Instagram или показан промежуточный экран)')
+    // Если это экран ошибки/лимита/бот-защиты — говорим об этом прямо; иначе общий текст.
+    // В обоих случаях прикладываем СКРИН (diag) — видно, что реально показал Instagram.
+    if (await pageHasText(page, SEL.errorPage)) {
+      await fail(page, 'blocked: Instagram показал экран ошибки/«подождите» (вероятно, бот-защита headless-браузера или лимит IP). Скрин ниже — попробуйте другой прокси/позже.')
+    }
+    await fail(page, 'unknown: страница входа открылась, но поля логина/пароля не найдены (промежуточный экран или бот-защита). Скрин ниже показывает, что увидел браузер.')
   }
   await humanType(userInput, username)
   await jitter(400, 900)
@@ -119,7 +169,7 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
     const url = page.url()
 
     if (urlHas(url, URLS.suspended) || (await pageHasText(page, ['suspended your account', 'приостановили ваш аккаунт', 'We suspended']))) {
-      throw new Error('suspended: аккаунт приостановлен Instagram — войти нельзя')
+      await fail(page, 'suspended: аккаунт приостановлен Instagram — войти нельзя')
     }
 
     if (urlHas(url, URLS.twoFactor) || (await pageHasText(page, ['two-factor', 'двухфактор', 'Enter the code we', 'security code']))) {
@@ -149,15 +199,15 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
     const err = await firstVisible(page, SEL.loginError, 500)
     if (err) {
       const txt = (await err.textContent().catch(() => '')) || ''
-      if (/incorrect|неверн|wasn't right|couldn't find/i.test(txt)) throw new Error('bad_password: ' + txt.trim())
-      // иная ошибка формы — вернём текст
-      throw new Error('unknown: ' + txt.trim())
+      if (/incorrect|неверн|wasn't right|couldn't find/i.test(txt)) await fail(page, 'bad_password: ' + txt.trim())
+      // иная ошибка формы — вернём текст со скрином
+      await fail(page, 'unknown: ' + txt.trim())
     }
   }
 
   // Ничего явного за отведённое время.
   if (await firstVisible(page, SEL.codeInput, 500)) return { needsCheckpoint: true, channel: null }
-  throw new Error('network: Instagram не ответил понятным исходом за отведённое время')
+  await fail(page, 'network: Instagram не ответил понятным исходом за отведённое время')
 }
 
 /**

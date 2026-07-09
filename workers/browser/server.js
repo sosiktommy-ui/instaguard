@@ -7,7 +7,7 @@ import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment } 
 import { parseFollowers, parseFollowing, parseComments, parseLikers } from './lib/parse.js'
 import { toStorageState } from './lib/state.js'
 
-const BUILD = '2026-07-09-browser-2'
+const BUILD = '2026-07-09-browser-4-headful'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -68,7 +68,9 @@ function errStatus(message) {
 app.get('/health', async (_req, res) => {
   let chromium = 'not-launched'
   try { const b = await getBrowser(); chromium = b.version() } catch (e) { chromium = 'error: ' + e.message }
-  res.json({ ok: true, build: BUILD, playwright: true, chromium, concurrency: MAX, active, pending: pending.size })
+  // headful=true когда браузер видимый (под Xvfb в проде). display — есть ли виртуальный дисплей.
+  const headful = process.env.BROWSER_HEADLESS !== '1'
+  res.json({ ok: true, build: BUILD, playwright: true, chromium, headful, display: process.env.DISPLAY || null, concurrency: MAX, active, pending: pending.size })
 })
 
 // Вход по логину/паролю.
@@ -96,7 +98,8 @@ app.post('/login', async (req, res) => {
     res.json(result)
   } catch (e) {
     const { kind, message } = errStatus(e.message)
-    res.status(400).json({ error: kind, message })
+    // e.diag (скрин + url) приложен при провалах входа (см. login.js fail()) — отдаём в UI.
+    res.status(400).json({ error: kind, message, diag: e.diag ?? undefined })
   }
 })
 
@@ -140,7 +143,7 @@ app.post('/login/cookies', async (req, res) => {
     res.json({ ok: true, browserState: result.storageState, username: result.username })
   } catch (e) {
     const { kind, message } = errStatus(e.message)
-    res.status(400).json({ error: kind, message })
+    res.status(400).json({ error: kind, message, diag: e.diag ?? undefined })
   }
 })
 

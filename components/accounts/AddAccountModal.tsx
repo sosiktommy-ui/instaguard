@@ -66,6 +66,7 @@ export function AddAccountModal({
   const [proxy, setProxy]       = useState(presetProxy ?? '')
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState('')
+  const [shot, setShot]         = useState('')   // скрин экрана Instagram при неудачном браузерном входе
   const [step, setStep]         = useState<'form' | 'auth' | 'challenge'>('form')
   const [pasteNote, setPasteNote] = useState('')
 
@@ -178,6 +179,7 @@ export function AddAccountModal({
   const save = async () => {
     setLoading(true)
     setError('')
+    setShot('')
     setStep('auth')
 
     try {
@@ -216,7 +218,7 @@ export function AddAccountModal({
         return
       }
 
-      if (!res.ok) { setError(data.error ?? 'Ошибка авторизации'); setStep('form'); return }
+      if (!res.ok) { setError(data.error ?? 'Ошибка авторизации'); setShot(data.screenshot ?? ''); setStep('form'); return }
 
       // Черновые (HELPER) не пишем в основной стор-список — они живут на своей вкладке.
       if (role !== 'HELPER') addAccount({ id: data.account.id, username: data.account.username, followers: 0 })
@@ -314,7 +316,7 @@ export function AddAccountModal({
         </div>
         <div className="flex gap-1 p-1 bg-canvas rounded-2xl mb-5">
           {modeOrder.map((m) => (
-            <button key={m} onClick={() => { setMode(m); setError('') }}
+            <button key={m} onClick={() => { setMode(m); setError(''); setShot('') }}
               className={cn('flex-1 py-2 text-[13px] font-medium rounded-xl transition-all',
                 mode === m ? 'bg-card shadow text-ink' : 'text-subt hover:text-ink')}>
               {m === 'password' ? '🔑 Логин / Пароль' : `🍪 Куки${defaultMode === 'cookies' ? ' (рекомендуется)' : ''}`}
@@ -402,6 +404,12 @@ export function AddAccountModal({
             {resendNote && <div className="text-[12px] text-ok text-center">{resendNote}</div>}
 
             {error && <div className="text-bad text-[12.5px] whitespace-pre-wrap break-words bg-bad/[0.06] rounded-2xl p-3 max-h-56 overflow-y-auto leading-relaxed">{error}</div>}
+            {shot && (
+              <a href={shot} target="_blank" rel="noreferrer" className="block mt-1.5">
+                <img src={shot} alt="Экран Instagram при ошибке входа" className="w-full rounded-2xl border border-black/10" />
+                <span className="block text-subt text-[11px] mt-1">📷 Что увидел браузер при входе (клик — открыть крупно). Видно: бот-защита / «подождите» / checkpoint / другой экран.</span>
+              </a>
+            )}
             <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed">
               {challenge?.kind === '2fa'
                 ? 'Код из приложения обновляется каждые 30 секунд. Не закрывайте это окно.'
@@ -469,6 +477,12 @@ export function AddAccountModal({
             {pasteNote && <div className="text-[12px] text-ok bg-ok/10 rounded-2xl px-3 py-2">✓ {pasteNote}</div>}
             {proxyBlock}
             {error && <div className="text-bad text-[12.5px] whitespace-pre-wrap break-words bg-bad/[0.06] rounded-2xl p-3 max-h-56 overflow-y-auto leading-relaxed">{error}</div>}
+            {shot && (
+              <a href={shot} target="_blank" rel="noreferrer" className="block mt-1.5">
+                <img src={shot} alt="Экран Instagram при ошибке входа" className="w-full rounded-2xl border border-black/10" />
+                <span className="block text-subt text-[11px] mt-1">📷 Что увидел браузер при входе (клик — открыть крупно). Видно: бот-защита / «подождите» / checkpoint / другой экран.</span>
+              </a>
+            )}
             <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed">
               Пароль не хранится — только сессия Instagram.
             </div>
@@ -490,6 +504,12 @@ export function AddAccountModal({
             </div>
             {proxyBlock}
             {error && <div className="text-bad text-[12.5px] whitespace-pre-wrap break-words bg-bad/[0.06] rounded-2xl p-3 max-h-56 overflow-y-auto leading-relaxed">{error}</div>}
+            {shot && (
+              <a href={shot} target="_blank" rel="noreferrer" className="block mt-1.5">
+                <img src={shot} alt="Экран Instagram при ошибке входа" className="w-full rounded-2xl border border-black/10" />
+                <span className="block text-subt text-[11px] mt-1">📷 Что увидел браузер при входе (клик — открыть крупно). Видно: бот-защита / «подождите» / checkpoint / другой экран.</span>
+              </a>
+            )}
             <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed">
               Экспортируйте куки с instagram.com через расширение браузера (например, Cookie-Editor). Нужен как минимум <code className="font-mono bg-black/5 px-1 rounded">sessionid</code>.
             </div>
