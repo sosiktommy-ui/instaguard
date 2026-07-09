@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma'
+import { encrypt, encryptionConfigured } from '@/lib/crypto'
 
 export type AccountRole = 'RESPONDER' | 'HELPER' | 'BOTH'
 
@@ -37,7 +38,13 @@ export async function persistInstagramAccount(opts: {
   if (browserState !== undefined && browserState !== null) sessionFields.browserState = browserState
   if (loginMethod) sessionFields.loginMethod = loginMethod
   if (emailLogin !== undefined) sessionFields.emailLogin = emailLogin
-  if (emailPassword !== undefined) sessionFields.emailPassword = emailPassword
+  // Пароль почты — только для будущего IMAP-автокода (plan.md §337), наружу в API не отдаётся,
+  // но лежал в БД plaintext-строкой (комментарий в схеме обещал шифрование, кода не было —
+  // см. plan.md §12). Шифруем at-rest, если ENCRYPTION_KEY настроен; иначе (не настроен на
+  // окружении) сохраняем как раньше, чтобы вход не падал из-за отсутствующей переменной.
+  if (emailPassword !== undefined) {
+    sessionFields.emailPassword = emailPassword && encryptionConfigured() ? encrypt(emailPassword) : emailPassword
+  }
   // Не затираем уже сохранённый отпечаток, если этот вход геолокацию не определил
   // (напр. ручной прокси без известной страны) — ЧТОБЫ действия не «прыгали» на дефолт.
   if (locale) sessionFields.locale = locale
