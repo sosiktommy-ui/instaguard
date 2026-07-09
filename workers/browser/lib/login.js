@@ -273,11 +273,22 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
       // иная ошибка формы — вернём текст со скрином
       await fail(page, 'unknown: ' + txt.trim())
     }
+    // CSS-контейнер ошибки НЕ нашёлся (форма email/pass рисует его в другом месте/классе,
+    // см. selectors.js badCredsText) — доп. проверка по ВИДИМОМУ ТЕКСТУ страницы напрямую,
+    // не завязана на конкретный селектор контейнера.
+    if (await pageHasText(page, SEL.badCredsText)) {
+      await fail(page, 'bad_password: Instagram сообщил «неверный логин/пароль» (обнаружено по тексту страницы, не по контейнеру ошибки)')
+    }
   }
 
-  // Ничего явного за отведённое время.
+  // Ничего явного за отведённое время — прикладываем DOM-дамп (как при «форма не найдена»),
+  // чтобы следующий необъяснённый провал сразу показал реальный текст/структуру, а не
+  // расплывчатое «unknown»/«network».
   if (await firstVisible(page, SEL.codeInput, 500)) return { needsCheckpoint: true, channel: null }
-  await fail(page, 'network: Instagram не ответил понятным исходом за отведённое время')
+  const dom = await domSummary(page)
+  console.error('[login] исход не распознан за отведённое время, DOM-дамп:', JSON.stringify(dom))
+  const domTxt = dom ? ` · фреймов: ${dom.frameCount}, инпуты по фреймам: ${JSON.stringify(dom.frames.map((f) => ({ url: f.url.slice(0, 60), forms: f.forms, inputs: f.inputs })))}` : ''
+  await fail(page, `network: Instagram не ответил понятным исходом за отведённое время.${domTxt}`)
 }
 
 /**

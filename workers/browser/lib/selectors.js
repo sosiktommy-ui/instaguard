@@ -28,6 +28,18 @@ export const SEL = {
   ],
   loginSubmit: ['button[type="submit"]', 'button:has-text("Log in")', 'button:has-text("Войти")'],
   loginError: ['#slfErrorAlert', '[data-testid="login-error-message"]', 'p[role="alert"]'],
+  // Фолбэк «неверный логин/пароль» ПО ТЕКСТУ страницы, не по CSS-контейнеру — форма с
+  // name="email"/"pass" (см. выше) рендерит ошибку в СВОЁМ контейнере, который loginError
+  // не матчит: живой провал 2026-07-09 показал реальный текст Instagram («Неверный логин
+  // или пароль») на скрине, а код классифицировал это как «unknown» (CSS не нашёл элемент,
+  // текст никогда не проверялся). pageHasText ищет по видимому тексту всей страницы —
+  // не зависит от того, в каком контейнере/классе Instagram его рисует.
+  badCredsText: [
+    'Неверный логин или пароль', 'неверный логин', 'неверный пароль',
+    'Sorry, your password was incorrect', 'password was incorrect',
+    "The username you entered doesn't belong to an account",
+    'incorrect. Please double check your',
+  ],
   // Промежуточный экран (logged-out домашняя / «продолжить») — открыть форму входа
   logInLink: ['Log in', 'Log In', 'Войти', 'Log In', 'Log in with credentials'],
   // Экраны «не форма»: ошибка/лимит/бот-защита — для понятного сообщения вместо «unknown»
