@@ -8,16 +8,13 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  name          String?
-  password      String?                          // null у пользователей, вошедших через Google
-  googleId      String?   @unique                // Google sub (OAuth)
-  image         String?                          // аватар из Google
-  emailVerified DateTime?                         // когда почта подтверждена кодом / через Google
-  plan          String    @default("free")       // тариф (задел под биллинг: free / pro / …)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  password  String
+  plan      String   @default("free")   // тариф (задел под биллинг: free / pro / …)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   accounts  InstagramAccount[]
   triggers  TriggerRule[]
@@ -32,17 +29,6 @@ model User {
 model AppLock {
   key         String   @id
   lockedUntil DateTime @default(now())
-}
-
-// Ожидающая подтверждения регистрация: юзер создаётся только после ввода кода с почты.
-model EmailVerification {
-  email     String   @id                 // одна активная заявка на email
-  codeHash  String                        // bcrypt-хэш 6-значного кода
-  password  String                        // bcrypt-хэш выбранного пароля
-  name      String?
-  attempts  Int      @default(0)          // неверные попытки ввода кода
-  expiresAt DateTime                       // срок действия кода
-  sentAt    DateTime @default(now())       // для троттлинга повторной отправки
 }
 
 // Настройки пользователя
