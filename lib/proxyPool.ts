@@ -15,12 +15,12 @@ import { browserPickProxy } from '@/lib/browser/client'
  *  4. Непроверенные (status=unknown) проверяются вживую; узнанное здоровье сохраняется в БД.
  */
 export type PoolPick =
-  | { ok: true; url: string; id: string; flagged: boolean }
+  | { ok: true; url: string; id: string; flagged: boolean; country: string | null }
   | { ok: false; reason: 'no-capacity' | 'all-dead' }
 
 const MAX_CANDIDATES = 30
 
-type Cand = { id: string; url: string; status: string | null; flagged: boolean | null; igBlocked: boolean | null; load: number }
+type Cand = { id: string; url: string; status: string | null; flagged: boolean | null; igBlocked: boolean | null; country: string | null; load: number }
 
 // «Instagram выжег этот IP»: ТОЛЬКО явный сигнал про IP («change your IP … blacklist»).
 // НЕ ловим UserInvalidCredentials — это общий exception_name Instagram и для «аккаунт не
@@ -52,12 +52,12 @@ function pickRotating(list: Cand[]): Cand {
 export async function pickPoolProxy(userId: string, cap: number, excludeIds: string[] = []): Promise<PoolPick> {
   const pool = await prisma.proxy.findMany({
     where: { userId, kind: 'pool', ...(excludeIds.length ? { id: { notIn: excludeIds } } : {}) },
-    select: { id: true, url: true, status: true, flagged: true, igBlocked: true, _count: { select: { accounts: true } } },
+    select: { id: true, url: true, status: true, flagged: true, igBlocked: true, country: true, _count: { select: { accounts: true } } },
     orderBy: { createdAt: 'asc' },
   })
   const free: Cand[] = pool
     .filter((p) => p._count.accounts < cap)
-    .map((p) => ({ id: p.id, url: p.url, status: p.status, flagged: p.flagged, igBlocked: p.igBlocked, load: p._count.accounts }))
+    .map((p) => ({ id: p.id, url: p.url, status: p.status, flagged: p.flagged, igBlocked: p.igBlocked, country: p.country, load: p._count.accounts }))
   if (!free.length) return { ok: false, reason: 'no-capacity' }
 
   const notBurned = free.filter((p) => !p.igBlocked)
@@ -70,7 +70,7 @@ export async function pickPoolProxy(userId: string, cap: number, excludeIds: str
   // 1) Годный (не датацентр, не IG-бан) — сразу, с ротацией, без обращения к воркеру.
   if (aliveClean.length) {
     const p = pickRotating(aliveClean)
-    return { ok: true, url: p.url, id: p.id, flagged: false }
+    return { ok: true, url: p.url, id: p.id, flagged: false, country: p.country }
   }
 
   // 2) Непроверенные — live-проверка (воркер пропустит мёртвые), с сохранением здоровья.
@@ -81,24 +81,25 @@ export async function pickPoolProxy(userId: string, cap: number, excludeIds: str
       void persistChecked(res.checked, idByUrl)
       if (res.chosen) {
         const p = unknown.find((f) => f.url === res.chosen) ?? unknown[0]
-        return { ok: true, url: p.url, id: p.id, flagged: Boolean(res.flagged) }
+        const chk = res.checked.find((c) => c.url === res.chosen)
+        return { ok: true, url: p.url, id: p.id, flagged: Boolean(res.flagged), country: chk?.country ?? p.country }
       }
     } catch {
       const p = pickRotating(unknown)
-      return { ok: true, url: p.url, id: p.id, flagged: false }
+      return { ok: true, url: p.url, id: p.id, flagged: false, country: p.country }
     }
   }
 
   // 3) Только датацентр/VPN (не IG-бан) — с ротацией, честно flagged.
   if (aliveFlag.length) {
     const p = pickRotating(aliveFlag)
-    return { ok: true, url: p.url, id: p.id, flagged: true }
+    return { ok: true, url: p.url, id: p.id, flagged: true, country: p.country }
   }
 
   // 4) Остались только выжженные Instagram — последний шанс (вдруг IG снял бан); честно flagged.
   if (burned.length) {
     const p = pickRotating(burned)
-    return { ok: true, url: p.url, id: p.id, flagged: true }
+    return { ok: true, url: p.url, id: p.id, flagged: true, country: p.country }
   }
 
   return { ok: false, reason: 'all-dead' }

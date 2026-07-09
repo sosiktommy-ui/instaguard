@@ -22,10 +22,12 @@ export async function persistInstagramAccount(opts: {
   sectionId: string | null
   emailLogin?: string | null
   emailPassword?: string | null
+  locale?: string | null      // гео отпечатка по стране прокси (plan.md §349, lib/browser/geo.ts)
+  timezoneId?: string | null
 }) {
   const {
     userId, username, sessionData, browserState, loginMethod,
-    proxyUrl, proxyId, role, sectionId, emailLogin, emailPassword,
+    proxyUrl, proxyId, role, sectionId, emailLogin, emailPassword, locale, timezoneId,
   } = opts
 
   // Формируем набор изменяемых полей: не затираем существующую сессию null-ом,
@@ -36,6 +38,10 @@ export async function persistInstagramAccount(opts: {
   if (loginMethod) sessionFields.loginMethod = loginMethod
   if (emailLogin !== undefined) sessionFields.emailLogin = emailLogin
   if (emailPassword !== undefined) sessionFields.emailPassword = emailPassword
+  // Не затираем уже сохранённый отпечаток, если этот вход геолокацию не определил
+  // (напр. ручной прокси без известной страны) — ЧТОБЫ действия не «прыгали» на дефолт.
+  if (locale) sessionFields.locale = locale
+  if (timezoneId) sessionFields.timezoneId = timezoneId
 
   const existing = await prisma.instagramAccount.findFirst({ where: { username, userId } })
   return existing

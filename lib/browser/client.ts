@@ -56,8 +56,9 @@ export interface BrowserLoginResult {
   channel?: 'email' | 'sms' | null
 }
 
-export function browserLogin(username: string, password: string, proxy?: string, totpSecret?: string) {
-  return browserFetch<BrowserLoginResult>('/login', { username, password, proxy, totpSecret })
+/** locale/timezoneId — гео отпечатка по стране прокси (plan.md §349, lib/browser/geo.ts). Опционально: без них воркер берёт дефолт en-US/America/New_York. */
+export function browserLogin(username: string, password: string, proxy?: string, totpSecret?: string, locale?: string, timezoneId?: string) {
+  return browserFetch<BrowserLoginResult>('/login', { username, password, proxy, totpSecret, locale, timezoneId })
 }
 
 export function submitBrowserCheckpoint(username: string, code: string, proxy?: string) {
@@ -69,14 +70,14 @@ export function resendBrowserCode(username: string, _method: 'email' | 'sms' = '
   return browserFetch<{ ok: boolean }>('/login/resend', { username })
 }
 
-export function browserLoginByCookies(input: object | string, proxy?: string) {
+export function browserLoginByCookies(input: object | string, proxy?: string, locale?: string, timezoneId?: string) {
   const payload = typeof input === 'string' ? { cookies: input } : { storageState: input }
-  return browserFetch<{ ok: boolean; browserState: object; username: string }>('/login/cookies', { ...payload, proxy })
+  return browserFetch<{ ok: boolean; browserState: object; username: string }>('/login/cookies', { ...payload, proxy, locale, timezoneId })
 }
 
-export async function browserTestSession(storageState: object, proxy?: string, username?: string): Promise<boolean> {
+export async function browserTestSession(storageState: object, proxy?: string, username?: string, locale?: string, timezoneId?: string): Promise<boolean> {
   try {
-    const d = await browserFetch<{ alive: boolean }>('/session/test', { storageState, proxy, username })
+    const d = await browserFetch<{ alive: boolean }>('/session/test', { storageState, proxy, username, locale, timezoneId })
     return d.alive
   } catch {
     return false
@@ -122,7 +123,9 @@ export function browserPickProxy(candidates: string[]) {
 // ── Действия (Фаза 2). Каждое возвращает обновлённый browserState. ──────────────
 export interface ActionResult { ok: boolean; browserState?: object; closed?: boolean; error?: string; [k: string]: any }
 
-type Ctx = { storageState: object; proxy?: string; username?: string }
+// locale/timezoneId — гео отпечатка (plan.md §349): вход и действия/парсинг одного аккаунта
+// должны использовать ОДИН и тот же отпечаток, поэтому Ctx их несёт наравне с proxy/username.
+type Ctx = { storageState: object; proxy?: string; username?: string; locale?: string; timezoneId?: string }
 
 export function browserDM(ctx: Ctx, toUsername: string, text: string) {
   return browserFetch<ActionResult>('/dm', { ...ctx, toUsername, text })

@@ -9,18 +9,20 @@ export interface DraftAccount {
   username: string
   browserState: object
   proxy: string | null
+  locale: string | null      // гео отпечатка чернового (plan.md §349) — свой прокси, своя страна
+  timezoneId: string | null
 }
 
 export async function pickDraft(userId: string): Promise<DraftAccount | null> {
   const list = await prisma.instagramAccount.findMany({
     where: { userId, role: 'HELPER', status: 'ACTIVE' },
     orderBy: { lastChecked: 'asc' },
-    select: { id: true, username: true, browserState: true, proxy: true },
+    select: { id: true, username: true, browserState: true, proxy: true, locale: true, timezoneId: true },
     take: 5,
   })
   const a = list.find((x) => x.browserState)
   if (!a || !a.browserState) return null
-  return { id: a.id, username: a.username, browserState: a.browserState as object, proxy: a.proxy }
+  return { id: a.id, username: a.username, browserState: a.browserState as object, proxy: a.proxy, locale: a.locale, timezoneId: a.timezoneId }
 }
 
 export async function markDraftUsed(id: string): Promise<void> {

@@ -7,6 +7,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { normalizeCookies } from '@/lib/cookies'
 import { pickPoolProxy, markProxyBlocked } from '@/lib/proxyPool'
 import { persistInstagramAccount } from '@/lib/accountPersist'
+import { localeForCountry } from '@/lib/browser/geo'
 
 /**
  * Массовый импорт аккаунтов. Одна строка — один аккаунт. Два режима (mode):
@@ -54,13 +55,13 @@ function proxyHostLabel(url: string | null): string {
 
 // Резолвим прокси ДО входа — пропуская мёртвые, предпочитая рабочие (см. lib/proxyPool).
 // excludeIds — прокси, которые уже пробовали в ЭТОЙ строке (ретрай на другом IP).
-async function resolveProxy(userId: string, allowNoProxy: boolean, cap: number, excludeIds: string[] = []): Promise<{ url: string | null; id: string | null; error?: string }> {
+async function resolveProxy(userId: string, allowNoProxy: boolean, cap: number, excludeIds: string[] = []): Promise<{ url: string | null; id: string | null; country: string | null; error?: string }> {
   const pick = await pickPoolProxy(userId, cap, excludeIds)
-  if (pick.ok) return { url: pick.url, id: pick.id }
+  if (pick.ok) return { url: pick.url, id: pick.id, country: pick.country }
   if (!allowNoProxy) {
-    return { url: null, id: null, error: pick.reason === 'all-dead' ? 'все свободные прокси в пуле не отвечают' : 'нет свободных прокси в пуле' }
+    return { url: null, id: null, country: null, error: pick.reason === 'all-dead' ? 'все свободные прокси в пуле не отвечают' : 'нет свободных прокси в пуле' }
   }
-  return { url: null, id: null }   // работа без прокси разрешена
+  return { url: null, id: null, country: null }   // работа без прокси разрешена
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -116,6 +117,8 @@ export async function POST(req: NextRequest) {
         const px = await resolveProxy(user.id, allowNoProxy, cap, triedProxyIds)
         if (px.error) { results.push({ line: i + 1, ok: false, reason: px.error }); break }
         if (px.id) triedProxyIds.push(px.id)
+        // Гео отпечатка по стране прокси (plan.md §349) — известной страны нет → воркер берёт дефолт.
+        const geo = localeForCountry(px.country)
 
         try {
           let sessionData: object | null = null
@@ -147,7 +150,7 @@ export async function POST(req: NextRequest) {
             clean = login.replace(/^@/, '').trim().toLowerCase()
 
             if (engine === 'browser') {
-              const r = await browserLogin(login, password, px.url || undefined, totp)
+              const r = await browserLogin(login, password, px.url || undefined, totp, geo?.locale, geo?.timezoneId)
               // Код (checkpoint «новое устройство» или 2FA без ключа) — строку дожмёт модалка (роут /auth/challenge).
               if (r.needsCheckpoint || r.needs2fa) {
                 results.push({
@@ -200,7 +203,7 @@ export async function POST(req: NextRequest) {
             }
             if (engine === 'browser') {
               // Браузер: отдаём строку как есть — воркер соберёт storageState/куки и проверит сессию.
-              const res = await browserLoginByCookies(cookiesRaw, px.url || undefined)
+              const res = await browserLoginByCookies(cookiesRaw, px.url || undefined, geo?.locale, geo?.timezoneId)
               browserState = res.browserState
               clean = res.username.replace(/^@/, '').trim().toLowerCase()
               loginMethod = 'cookies'
@@ -218,6 +221,7 @@ export async function POST(req: NextRequest) {
             sessionData, browserState, loginMethod,
             proxyUrl: px.url, proxyId: px.id, role: accountRole, sectionId: validSection,
             emailLogin: emLogin, emailPassword: emPass,
+            locale: geo?.locale, timezoneId: geo?.timezoneId,
           })
           imported++
           results.push({ line: i + 1, ok: true, username: clean })

@@ -78,7 +78,7 @@ async function parseFollowersFor(username: string, parsingSource: string, getDra
     const d = await getDraft()
     if (d) {
       try {
-        const r = await parseFollowersBrowser({ storageState: d.browserState, proxy: d.proxy ?? undefined, username: d.username }, username, limit)
+        const r = await parseFollowersBrowser({ storageState: d.browserState, proxy: d.proxy ?? undefined, username: d.username, locale: d.locale ?? undefined, timezoneId: d.timezoneId ?? undefined }, username, limit)
         await markDraftUsed(d.id)
         return { followers: r.followers ?? [] }
       } catch { /* черновой недоступен — попробуем API, если разрешено (см. ниже) */ }
@@ -93,7 +93,7 @@ async function parseCommentsFor(username: string, parsingSource: string, getDraf
     const d = await getDraft()
     if (d) {
       try {
-        const r = await parseCommentsBrowser({ storageState: d.browserState, proxy: d.proxy ?? undefined, username: d.username }, username, mediaCount, perMedia)
+        const r = await parseCommentsBrowser({ storageState: d.browserState, proxy: d.proxy ?? undefined, username: d.username, locale: d.locale ?? undefined, timezoneId: d.timezoneId ?? undefined }, username, mediaCount, perMedia)
         await markDraftUsed(d.id)
         return { comments: r.comments ?? [] }
       } catch {}
@@ -108,7 +108,7 @@ async function parseLikersFor(username: string, parsingSource: string, getDraft:
     const d = await getDraft()
     if (d) {
       try {
-        const r = await parseLikersBrowser({ storageState: d.browserState, proxy: d.proxy ?? undefined, username: d.username }, username, mediaCount, perMedia)
+        const r = await parseLikersBrowser({ storageState: d.browserState, proxy: d.proxy ?? undefined, username: d.username, locale: d.locale ?? undefined, timezoneId: d.timezoneId ?? undefined }, username, mediaCount, perMedia)
         await markDraftUsed(d.id)
         return { likers: r.likers ?? [] }
       } catch {}
@@ -255,6 +255,7 @@ async function runFollowerActionsInline(job: any) {
   if (job.engine === 'browser' && job.browserState) {
     const r = await runFollowerActionsBrowser({
       browserState: job.browserState, ownerUsername: job.ownerUsername, proxy: job.proxy,
+      locale: job.locale, timezoneId: job.timezoneId,
       followerUsername: job.followerUsername, text: job.text || undefined,
       doFollow: job.doFollow, doLike: job.doLike, viewStories: job.viewStories, storyLike: job.storyLike,
       fallbackFollow: job.fallbackFollow, fallbackLike: job.fallbackLike,
@@ -569,6 +570,7 @@ export async function POST(req: NextRequest) {
           const job = {
             sessionData: account.sessionData, browserState: account.browserState,
             engine, ownerUsername: account.username, accountId: account.id,
+            locale: account.locale ?? undefined, timezoneId: account.timezoneId ?? undefined,
             triggerId: trigger.id, triggerName: trigger.name,
             followerPk: target.pk, followerUsername: target.username,
             text: text.trim(), image: willDM ? image : undefined,
@@ -698,7 +700,7 @@ export async function POST(req: NextRequest) {
         if (useBrowserForStories) {
           try {
             const r = await browserStoryEvents(
-              { storageState: account.browserState as object, proxy: account.proxy ?? undefined, username: account.username },
+              { storageState: account.browserState as object, proxy: account.proxy ?? undefined, username: account.username, locale: account.locale ?? undefined, timezoneId: account.timezoneId ?? undefined },
               STORY_EVENTS_AMOUNT,
             )
             events = r.events ?? []
@@ -758,7 +760,7 @@ export async function POST(req: NextRequest) {
         // Браузерная сессия «дозревает» между действиями — трекаем локально, пишем в БД
         // после каждой обработанной пары (коммент × триггер), как в runFollowerActionsInline.
         let cState: object | undefined = account.browserState as object | undefined
-        const bctx = () => ({ storageState: cState as object, proxy: account.proxy ?? undefined, username: account.username })
+        const bctx = () => ({ storageState: cState as object, proxy: account.proxy ?? undefined, username: account.username, locale: account.locale ?? undefined, timezoneId: account.timezoneId ?? undefined })
 
         for (const c of toProcess) {
           for (const trigger of commentTriggers) {

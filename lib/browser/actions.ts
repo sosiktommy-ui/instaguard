@@ -8,6 +8,8 @@ export interface BrowserFollowerJob {
   browserState: object
   ownerUsername?: string        // username ОСНОВНОГО — для стабильного отпечатка контекста
   proxy?: string
+  locale?: string                // гео отпечатка (plan.md §349) — тот же, что при входе аккаунта
+  timezoneId?: string
   followerUsername: string      // цель действия (браузер ходит на /{username}/)
   text?: string
   doFollow?: boolean
@@ -33,7 +35,7 @@ const isSessionDead = (m: string) => /login_required|сессия недейст
 
 export async function runFollowerActionsBrowser(job: BrowserFollowerJob): Promise<BrowserActionsResult> {
   let state: object = job.browserState
-  const ctx = () => ({ storageState: state, proxy: job.proxy, username: job.ownerUsername })
+  const ctx = () => ({ storageState: state, proxy: job.proxy, username: job.ownerUsername, locale: job.locale, timezoneId: job.timezoneId })
   const incFired: Record<string, number> = {}
   const incDone: Record<string, number> = {}
   const errors: string[] = []

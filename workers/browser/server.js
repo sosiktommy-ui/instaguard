@@ -8,7 +8,7 @@ import { parseFollowers, parseFollowing, parseComments, parseLikers } from './li
 import { checkProxyBrowser } from './lib/proxy.js'
 import { toStorageState } from './lib/state.js'
 
-const BUILD = '2026-07-09-browser-10-proxycheck'
+const BUILD = '2026-07-09-browser-11-geolocale'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -150,10 +150,10 @@ app.post('/login/cookies', async (req, res) => {
 
 // Проверка живости сессии.
 app.post('/session/test', async (req, res) => {
-  const { storageState, proxy, username } = req.body || {}
+  const { storageState, proxy, username, locale, timezoneId } = req.body || {}
   try {
     const alive = await runLimited(async () => {
-      const context = await newAccountContext({ username: username || 'test', proxy, storageState })
+      const context = await newAccountContext({ username: username || 'test', proxy, storageState, locale, timezoneId })
       try { return await testSession(context) }
       finally { await closeContextSafe(context) }
     })

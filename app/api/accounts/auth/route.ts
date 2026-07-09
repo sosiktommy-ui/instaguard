@@ -7,6 +7,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { normalizeCookies } from '@/lib/cookies'
 import { pickPoolProxy, isInstagramBlacklist, isAccountNotFound, markProxyBlocked } from '@/lib/proxyPool'
 import { persistInstagramAccount } from '@/lib/accountPersist'
+import { localeForCountry } from '@/lib/browser/geo'
 
 // host:port прокси без логина/пароля — чтобы в ошибке было видно, ЧЕРЕЗ КАКОЙ IP шёл вход.
 function proxyHostLabel(url: string | null): string {
@@ -45,11 +46,12 @@ export async function POST(req: NextRequest) {
 
     let proxyUrl: string | null = manualProxy
     let proxyId: string | null = null
+    let proxyCountry: string | null = null
     const needPool = proxyMode === 'auto' || (!manualProxy && !allowNoProxy)
 
     if (needPool) {
       const pick = await pickPoolProxy(user.id, cap)
-      if (pick.ok) { proxyUrl = pick.url; proxyId = pick.id }
+      if (pick.ok) { proxyUrl = pick.url; proxyId = pick.id; proxyCountry = pick.country }
       else if (proxyMode === 'auto' || !allowNoProxy) {
         return NextResponse.json({
           error: pick.reason === 'all-dead'
@@ -61,7 +63,12 @@ export async function POST(req: NextRequest) {
       const found = await prisma.proxy.findFirst({ where: { userId: user.id, url: manualProxy } })
       const p = found ?? await prisma.proxy.create({ data: { userId: user.id, url: manualProxy, kind: 'individual' } })
       proxyId = p.id
+      proxyCountry = p.country
     }
+    // Гео отпечатка (locale/timezoneId) по стране прокси — plan.md §349. Страна прокси не
+    // известна (ручной прокси без проверки/пул без сохранённой страны) → geo=null → воркер
+    // сам возьмёт дефолт (en-US/America/New_York), как и раньше — регрессии нет.
+    const geo = localeForCountry(proxyCountry)
     // ──────────────────────────────────────────────────────────────────────────
 
     let sessionData: object | null = null
@@ -74,7 +81,7 @@ export async function POST(req: NextRequest) {
       try {
         if (engine === 'browser') {
           // Браузер: принимаем storageState/куки как есть — воркер соберёт и проверит сессию.
-          const result = await browserLoginByCookies(typeof cookies === 'string' ? cookies : JSON.stringify(cookies), proxyUrl || undefined)
+          const result = await browserLoginByCookies(typeof cookies === 'string' ? cookies : JSON.stringify(cookies), proxyUrl || undefined, geo?.locale, geo?.timezoneId)
           browserState = result.browserState
           clean = result.username
           loginMethod = 'cookies'
@@ -97,7 +104,7 @@ export async function POST(req: NextRequest) {
       const totp = typeof totpSecret === 'string' && totpSecret.trim() ? totpSecret.trim() : undefined
       try {
         if (engine === 'browser') {
-          const result = await browserLogin(clean, password, proxyUrl || undefined, totp)
+          const result = await browserLogin(clean, password, proxyUrl || undefined, totp, geo?.locale, geo?.timezoneId)
           if (result.needsCheckpoint || result.needs2fa || !result.browserState) {
             const is2fa = Boolean(result.needs2fa)
             return NextResponse.json({
@@ -168,6 +175,8 @@ export async function POST(req: NextRequest) {
       sectionId: validSection,
       emailLogin: emLogin,
       emailPassword: emPass,
+      locale: geo?.locale,
+      timezoneId: geo?.timezoneId,
     })
 
     return NextResponse.json({ ok: true, account: { id: account.id, username: account.username, status: account.status } })

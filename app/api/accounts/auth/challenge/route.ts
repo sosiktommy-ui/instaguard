@@ -6,6 +6,7 @@ import { resolveEngine } from '@/lib/browser/engine'
 import { getCurrentUser } from '@/lib/auth'
 import { persistInstagramAccount, type AccountRole } from '@/lib/accountPersist'
 import { isInstagramBlacklist, markProxyBlocked } from '@/lib/proxyPool'
+import { localeForCountry } from '@/lib/browser/geo'
 
 /**
  * Шаг 2 входа: пользователь ввёл код (challenge с почты/SMS ИЛИ 2FA).
@@ -29,10 +30,15 @@ export async function POST(req: NextRequest) {
 
     let proxyUrl: string | null = null
     let validProxyId: string | null = null
+    let proxyCountry: string | null = null
     if (typeof proxyId === 'string' && proxyId) {
-      const p = await prisma.proxy.findFirst({ where: { id: proxyId, userId: user.id }, select: { id: true, url: true } })
-      if (p) { proxyUrl = p.url; validProxyId = p.id }
+      const p = await prisma.proxy.findFirst({ where: { id: proxyId, userId: user.id }, select: { id: true, url: true, country: true } })
+      if (p) { proxyUrl = p.url; validProxyId = p.id; proxyCountry = p.country }
     }
+    // Контекст /login/checkpoint резюмирует УЖЕ созданную на шаге /login страницу (тот же
+    // отпечаток) — geo здесь нужен только чтобы записать locale/timezoneId в БД для будущих
+    // действий (актуально, если у step-1 запроса не было proxyId и geo не сохранился).
+    const geo = localeForCountry(proxyCountry)
 
     let validSection: string | null = null
     if (typeof sectionId === 'string' && sectionId) {
@@ -71,6 +77,8 @@ export async function POST(req: NextRequest) {
       proxyId: validProxyId,
       role: accountRole,
       sectionId: validSection,
+      locale: geo?.locale,
+      timezoneId: geo?.timezoneId,
     })
 
     return NextResponse.json({ ok: true, account: { id: account.id, username: account.username, status: account.status } })
