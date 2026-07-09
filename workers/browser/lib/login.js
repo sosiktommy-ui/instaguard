@@ -71,28 +71,43 @@ async function submitCodeForm(page, codeInput) {
 // Найти форму входа устойчиво: дождаться, пока React-форма догрузится (networkidle),
 // перебрать варианты селекторов; если формы нет — попробовать открыть её кликом «Log in»
 // (logged-out домашняя иногда показывает промежуточный экран), затем повторный заход.
+// Стабильные поля формы входа Instagram — по ним ждём появления (name= держится годами,
+// в отличие от aria-label/placeholder, которые IG крутит по регионам).
+const LOGIN_FORM_CORE = 'input[name="username"], input[name="password"], input[type="password"], input[autocomplete="username"]'
+
+// Дождаться, пока React отрисует форму (возвращается СРАЗУ, как поле стало видимым).
+// Ключевой фикс: раньше форму искали жёстко 9с обычным поллингом — под headful + медленным
+// резидентным прокси она появляется позже, поля «не находились», хотя реально были на экране.
+async function waitForm(page, timeout) {
+  try { await page.waitForSelector(LOGIN_FORM_CORE, { state: 'visible', timeout }); return true }
+  catch { return false }
+}
+
 async function findLoginForm(page) {
-  // Таймауты урезаны: при bot-стене (формы НЕТ) нужно быстро сдаться и отдать СКРИН,
-  // а не молотить ~80с — иначе клиент (180с) может оборвать fetch до diag (аудит-баг #1).
-  // networkidle у IG-SPA почти никогда не наступает (открытые сокеты) → короткий best-effort.
-  await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
-  let userInput = await firstVisible(page, SEL.loginUsername, 9000)
-  let passInput = userInput ? await firstVisible(page, SEL.loginPassword, 5000) : null
+  // 1) Терпеливо ждём саму форму (до 25с; вернётся мгновенно, если она уже есть).
+  await waitForm(page, 25000)
+  let userInput = await firstVisible(page, SEL.loginUsername, 4000)
+  let passInput = userInput ? await firstVisible(page, SEL.loginPassword, 4000) : null
   if (userInput && passInput) return { userInput, passInput }
 
-  // Промежуточный экран → клик «Log in» и повтор.
-  if (await clickByText(page, SEL.logInLink, { timeout: 2500 })) {
-    await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {})
-    userInput = await firstVisible(page, SEL.loginUsername, 7000)
-    passInput = userInput ? await firstVisible(page, SEL.loginPassword, 4000) : null
-    if (userInput && passInput) return { userInput, passInput }
-  }
+  // 2) Возможно, это logged-out ЛЕНДИНГ (не /login). Открываем форму по ССЫЛКЕ «Log in»,
+  //    а НЕ через clickByText (тот матчил и кнопку submit пустой формы — вредный фолбэк).
+  try {
+    const link = page.getByRole('link', { name: /^log ?in$|^войти$/i }).first()
+    if (await link.isVisible().catch(() => false)) {
+      await link.click({ delay: 60 }).catch(() => {})
+      await waitForm(page, 12000)
+    }
+  } catch {}
+  userInput = await firstVisible(page, SEL.loginUsername, 3000)
+  passInput = userInput ? await firstVisible(page, SEL.loginPassword, 3000) : null
+  if (userInput && passInput) return { userInput, passInput }
 
-  // Последняя попытка — принудительный повторный заход на страницу входа.
-  await gotoResilient(page, LOGIN_URL, { timeout: 15000, retries: 0 }).catch(() => {})
+  // 3) Последняя попытка — принудительный повторный заход на страницу входа + ожидание формы.
+  await gotoResilient(page, LOGIN_URL, { timeout: 20000, retries: 1, backoffMs: [2500] }).catch(() => {})
   await dismissCookieBanner(page)
-  await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {})
-  userInput = await firstVisible(page, SEL.loginUsername, 7000)
+  await waitForm(page, 20000)
+  userInput = await firstVisible(page, SEL.loginUsername, 4000)
   passInput = userInput ? await firstVisible(page, SEL.loginPassword, 4000) : null
   return { userInput, passInput }
 }
