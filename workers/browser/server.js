@@ -8,7 +8,7 @@ import { parseFollowers, parseFollowing, parseComments, parseLikers } from './li
 import { checkProxyBrowser } from './lib/proxy.js'
 import { toStorageState } from './lib/state.js'
 
-const BUILD = '2026-07-09-browser-18-cookiediag'
+const BUILD = '2026-07-09-browser-19-codefield'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -116,8 +116,9 @@ app.post('/login/checkpoint', async (req, res) => {
     res.json({ ok: true, browserState: result.storageState, username: result.username === 'unknown' ? uname : result.username })
   } catch (e) {
     const { kind, message } = errStatus(e.message)
-    if (kind === 'expired') await clearPending(uname) // истёк — чистим; bad_code оставляем для повтора
-    res.status(400).json({ error: kind, message })
+    if (kind === 'expired') await clearPending(uname) // истёк — чистим; bad_code/code_field_not_found оставляем для повтора
+    // diag (скрин + DOM экрана подтверждения) при code_field_not_found — покажем в модалке.
+    res.status(400).json({ error: kind, message, diag: e.diag ?? undefined })
   }
 })
 

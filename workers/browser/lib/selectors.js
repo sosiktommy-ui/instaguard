@@ -57,11 +57,19 @@ export const SEL = {
   codeInput: [
     'input[name="verificationCode"]',
     'input[name="security_code"]',
-    'input[name="email"][maxlength="6"]',
+    'input[name="confirmationCode"]',
     'input[autocomplete="one-time-code"]',
+    'input[name*="code" i]',
     'input[aria-label*="Security" i]',
+    'input[aria-label*="confirmation" i]',
+    'input[aria-label*="code" i]',
     'input[aria-label*="код" i]',
-    'input[type="tel"][maxlength="6"]',
+    'input[inputmode="numeric"]',
+    'input[type="tel"]',
+    'input[maxlength="6"]',
+    'input[maxlength="8"]',
+    // Последний шанс — единственное текстовое поле в форме challenge (не логин/пароль).
+    'form input[type="text"]:not([name="username"]):not([name="email"]):not([name="pass"]):not([name="password"])',
   ],
   // ТОЛЬКО тексты — используется через clickByText (текстовый матчер). CSS-кнопку
   // submit отправляет submitCodeForm() отдельно (firstVisible=CSS). Раньше сюда была

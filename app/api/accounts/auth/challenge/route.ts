@@ -64,7 +64,8 @@ export async function POST(req: NextRequest) {
     } catch (e: any) {
       const raw = String(e?.message ?? 'Не удалось подтвердить код')
       if (isInstagramBlacklist(raw) && validProxyId) await markProxyBlocked(validProxyId)
-      return NextResponse.json({ error: raw }, { status: 400 })
+      // e.diag.screenshot — снимок экрана подтверждения (при code_field_not_found) — покажем в модалке.
+      return NextResponse.json({ error: raw, screenshot: e?.diag?.screenshot }, { status: 400 })
     }
 
     const account = await persistInstagramAccount({

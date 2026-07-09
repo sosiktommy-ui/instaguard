@@ -298,15 +298,29 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
 export async function resumeCode(context, { code }) {
   const pages = context.pages()
   const page = pages[pages.length - 1] || (await context.newPage())
+  await page.waitForLoadState('domcontentloaded', { timeout: 4000 }).catch(() => {})
 
-  const codeInput = await firstVisible(page, SEL.codeInput, 8000)
+  // Ищем поле кода по ВСЕМ фреймам (challenge иногда во фрейме), с запасом по времени.
+  let codeInput = await firstVisibleAnyFrame(page, SEL.codeInput, 10000)
   if (!codeInput) {
-    // Возможно, страница уже уехала — проверим, вдруг уже вошли.
+    // Возможно, перед полем есть промежуточный шаг «отправить код / это я / продолжить».
+    await clickByText(page, ['Send Security Code', 'Send Code', 'Send code', 'Отправить код', 'This Was Me', 'This was me', 'Это я', 'Continue', 'Продолжить', 'Confirm'], { timeout: 2500 })
+    await page.waitForTimeout(1500)
+    codeInput = await firstVisibleAnyFrame(page, SEL.codeInput, 8000)
+  }
+  if (!codeInput) {
+    // Вдруг уже вошли (кука появилась).
     if (await hasSessionCookie(context)) {
       const uname = (await extractUsername(page)) || 'unknown'
       return { ok: true, username: uname, storageState: await context.storageState() }
     }
-    throw new Error('expired: поле кода не найдено — сессия ввода истекла, начните вход заново')
+    // Не нашли поле — приложим СКРИН + DOM-дамп реального экрана подтверждения, чтобы
+    // сразу видеть настоящее имя/тип поля (как сделали для формы входа), а не гадать.
+    const dump = await domSummary(page)
+    const domTxt = dump ? ` · фреймов: ${dump.frameCount}, инпуты: ${JSON.stringify(dump.frames.map((f) => f.inputs))}` : ''
+    const err = new Error(`code_field_not_found: поле ввода кода не найдено на экране подтверждения. Скрин ниже — пришлите его.${domTxt}`)
+    try { err.diag = await captureDiag(page) } catch {}
+    throw err
   }
   await codeInput.fill('')
   await humanType(codeInput, String(code).replace(/\D/g, ''))

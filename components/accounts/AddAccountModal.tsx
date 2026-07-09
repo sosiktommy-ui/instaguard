@@ -251,7 +251,7 @@ export function AddAccountModal({
         }),
       })
       const data = await res.json()
-      if (!res.ok) { setError(data.error ?? 'Неверный код подтверждения'); return }
+      if (!res.ok) { setError(data.error ?? 'Неверный код подтверждения'); setShot(data.screenshot ?? ''); return }
 
       // Черновые (HELPER) не пишем в основной стор-список — они живут на своей вкладке.
       if (role !== 'HELPER') addAccount({ id: data.account.id, username: data.account.username, followers: 0 })
