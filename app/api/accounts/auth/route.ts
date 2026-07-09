@@ -9,6 +9,23 @@ import { pickPoolProxy, isInstagramBlacklist, isAccountNotFound, markProxyBlocke
 import { persistInstagramAccount } from '@/lib/accountPersist'
 import { localeForCountry } from '@/lib/browser/geo'
 
+// Достать логин/пароль/2FA/почту из мобильной Android-сессии («логин:пароль[:2fa]|UA|…||почта:пароль»).
+// Нужно для ФОЛБЭКА куки→пароль: если вставленная сессия отклонена Instagram, пробуем войти
+// теми же логином/паролем, что зашиты в этой же строке.
+function parseMobileSessionCreds(raw: string): { login?: string; password?: string; totp?: string; emailLogin?: string; emailPassword?: string } | null {
+  if (typeof raw !== 'string' || !raw.includes('|')) return null
+  const segs = raw.split('|')
+  const cparts = (segs[0] ?? '').trim().split(':')
+  const login = cparts[0]?.trim()
+  const password = cparts[1]?.trim()
+  if (!login || !password) return null
+  const totp = cparts[2] && /^[A-Z2-7\s]{12,}$/i.test(cparts[2].trim()) ? cparts[2].trim().replace(/\s+/g, '') : undefined
+  let emailLogin: string | undefined, emailPassword: string | undefined
+  const mailSeg = segs.map((s) => s.trim()).find((s) => /\S+@\S+:\S+/.test(s))
+  if (mailSeg) { const ai = mailSeg.indexOf(':'); emailLogin = mailSeg.slice(0, ai).trim(); emailPassword = mailSeg.slice(ai + 1).trim() }
+  return { login, password, totp, emailLogin, emailPassword }
+}
+
 // host:port прокси без логина/пароля — чтобы в ошибке было видно, ЧЕРЕЗ КАКОЙ IP шёл вход.
 function proxyHostLabel(url: string | null): string {
   if (!url) return 'без прокси (IP сервера)'
@@ -75,28 +92,70 @@ export async function POST(req: NextRequest) {
     let browserState: object | null = null
     let loginMethod: 'browser' | 'cookies' | 'legacy' = 'legacy'
     let clean = ''
+    // Почта из мобильной строки (для persist, если в теле запроса её не передали).
+    let mobileEmail: string | null = null
+    let mobileEmailPass: string | null = null
 
     if (authMethod === 'cookies') {
       if (!cookies) return NextResponse.json({ error: 'Куки обязательны' }, { status: 400 })
+      const cookieStr = typeof cookies === 'string' ? cookies : JSON.stringify(cookies)
+      const creds = parseMobileSessionCreds(cookieStr)
+      if (creds?.emailLogin) { mobileEmail = creds.emailLogin; mobileEmailPass = creds.emailPassword ?? null }
       try {
         if (engine === 'browser') {
           // Браузер: принимаем storageState/куки как есть — воркер соберёт и проверит сессию.
-          const result = await browserLoginByCookies(typeof cookies === 'string' ? cookies : JSON.stringify(cookies), proxyUrl || undefined, geo?.locale, geo?.timezoneId)
+          const result = await browserLoginByCookies(cookieStr, proxyUrl || undefined, geo?.locale, geo?.timezoneId)
           browserState = result.browserState
           clean = result.username
           loginMethod = 'cookies'
         } else {
-          const norm = normalizeCookies(typeof cookies === 'string' ? cookies : JSON.stringify(cookies))
+          const norm = normalizeCookies(cookieStr)
           if (norm.error) return NextResponse.json({ error: norm.error }, { status: 400 })
           const result = await loginByCookies(norm.cookies, proxyUrl || undefined)
           sessionData = result.sessionData
           clean = result.username
         }
-      } catch (e: any) {
-        const raw = String(e?.message ?? 'Ошибка авторизации через куки')
-        if (isInstagramBlacklist(raw) && proxyId) await markProxyBlocked(proxyId)
-        const msg = `${raw}\n\n🌐 Вход шёл через прокси: ${proxyHostLabel(proxyUrl)}`
-        return NextResponse.json({ error: msg, screenshot: e?.diag?.screenshot }, { status: 400 })
+      } catch (cookieErr: any) {
+        const cookieRaw = String(cookieErr?.message ?? 'Ошибка авторизации через куки')
+        // ── ФОЛБЭК: куки отклонены → пробуем вход ЛОГИНОМ/ПАРОЛЕМ из той же строки ──
+        // (по запросу пользователя). Работает только на браузерном движке и если в мобильной
+        // сессии есть логин:пароль. Гео-проблему это не лечит (тот же прокси), но покрывает
+        // случай «сессия устарела, а пароль живой».
+        if (engine === 'browser' && creds?.login && creds?.password) {
+          try {
+            const result = await browserLogin(creds.login, creds.password, proxyUrl || undefined, creds.totp, geo?.locale, geo?.timezoneId)
+            if (result.needsCheckpoint || result.needs2fa || !result.browserState) {
+              const is2fa = Boolean(result.needs2fa)
+              return NextResponse.json({
+                needsChallenge: is2fa ? undefined : true,
+                needs2fa: is2fa || undefined,
+                stepName: is2fa ? '2fa' : 'challenge',
+                sentTo: result.channel ?? null,
+                username: result.username ?? creds.login,
+                proxyId, role: accountRole, sectionId: validSection,
+                emailLogin: mobileEmail, emailPassword: mobileEmailPass,
+                note: 'Куки не приняты — переключился на вход по логину/паролю из этой же строки.',
+                error: is2fa
+                  ? 'Куки отклонены. Пробую логин/пароль → Instagram запросил код 2FA.'
+                  : 'Куки отклонены. Пробую логин/пароль → Instagram требует код подтверждения (письмо/SMS).',
+              }, { status: 202 })
+            }
+            browserState = result.browserState
+            clean = result.username || creds.login
+            loginMethod = 'browser'
+            // успех фолбэка → проваливаемся к persist ниже
+          } catch (pwErr: any) {
+            const pwRaw = String(pwErr?.message ?? 'вход по паролю не удался')
+            if (isInstagramBlacklist(pwRaw) && proxyId) await markProxyBlocked(proxyId)
+            const geoHint = '\n\n🌍 Оба способа отклонены на ЭТОМ IP. Если аккаунт из другой страны (напр. id_ID), а прокси US — это гео-несовпадение: нужен прокси В СТРАНЕ АККАУНТА.'
+            const msg = `Куки отклонены: ${cookieRaw}\n\n↩️ Пробовал вход по логину/паролю: ${pwRaw}\n\n🌐 Прокси: ${proxyHostLabel(proxyUrl)}${geoHint}`
+            return NextResponse.json({ error: msg, screenshot: pwErr?.diag?.screenshot ?? cookieErr?.diag?.screenshot }, { status: 400 })
+          }
+        } else {
+          if (isInstagramBlacklist(cookieRaw) && proxyId) await markProxyBlocked(proxyId)
+          const msg = `${cookieRaw}\n\n🌐 Вход шёл через прокси: ${proxyHostLabel(proxyUrl)}`
+          return NextResponse.json({ error: msg, screenshot: cookieErr?.diag?.screenshot }, { status: 400 })
+        }
       }
     } else {
       if (!username || !password) return NextResponse.json({ error: 'Username и пароль обязательны' }, { status: 400 })
@@ -173,8 +232,8 @@ export async function POST(req: NextRequest) {
       proxyId,
       role: accountRole,
       sectionId: validSection,
-      emailLogin: emLogin,
-      emailPassword: emPass,
+      emailLogin: emLogin ?? mobileEmail,
+      emailPassword: emPass ?? mobileEmailPass,
       locale: geo?.locale,
       timezoneId: geo?.timezoneId,
     })
