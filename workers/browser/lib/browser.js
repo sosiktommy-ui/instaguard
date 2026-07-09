@@ -90,15 +90,20 @@ export async function closeContextSafe(context) {
  * те возвращаются штатно через DOM, сюда не попадают.
  * @param {import('playwright-core').Page} page
  */
-export async function gotoResilient(page, url, { timeout = 60000, retries = 2, backoffMs = [1500, 4000] } = {}) {
+export async function gotoResilient(page, url, { timeout = 60000, retries = 3, backoffMs = [2000, 5000, 10000] } = {}) {
   let lastErr
   for (let i = 0; i <= retries; i++) {
     try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout })
+      // 'commit' (первый байт ответа) толерантнее к медленным/моргающим резидентным прокси,
+      // чем 'domcontentloaded'. Форму/сессию дальше по коду ждём ЯВНО (waitForSelector /
+      // hasSessionCookie), поэтому ранний commit безопасен и не «недогружает» страницу.
+      // Ошибки уровня прокси (ERR_HTTP_RESPONSE_CODE_FAILURE / ERR_TUNNEL_CONNECTION_FAILED /
+      // таймаут) — часто транзиентны у резидентных прокси; повторяем с нарастающей паузой.
+      await page.goto(url, { waitUntil: 'commit', timeout })
       return
     } catch (e) {
       lastErr = e
-      if (i < retries) await new Promise((r) => setTimeout(r, backoffMs[i] ?? 4000))
+      if (i < retries) await new Promise((r) => setTimeout(r, backoffMs[i] ?? 8000))
     }
   }
   throw new Error(`network: прокси не доходит до Instagram (${String(lastErr?.message ?? 'таймаут').slice(0, 140)})`)

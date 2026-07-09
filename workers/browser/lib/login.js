@@ -159,7 +159,9 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
   const page = await context.newPage()
   // Таймауты урезаны относительно дефолта gotoResilient — вход и так многофазный
   // (набор текста + ожидание исхода до 28с), нужен запас в общем бюджете Next.js-клиента (120с).
-  await gotoResilient(page, LOGIN_URL, { timeout: 20000, retries: 1, backoffMs: [2000] })
+  // Больше ретраев/пауза: резидентный прокси может моргнуть на первой навигации
+  // (ERR_HTTP_RESPONSE_CODE_FAILURE / таймаут) и восстановиться через пару секунд.
+  await gotoResilient(page, LOGIN_URL, { timeout: 30000, retries: 3, backoffMs: [3000, 6000, 12000] })
   await dismissCookieBanner(page)
   await idleMouse(page)
 
