@@ -74,13 +74,28 @@ export async function resolveProxy(getBrowser, raw) {
   if (cached) return toPlaywrightProxy(cached, p)
 
   const browser = await getBrowser()
-  for (const scheme of ['http', 'socks5', 'socks4']) {
-    if (await schemeWorks(browser, scheme, p)) {
-      _schemeCache.set(p.hostPort, scheme)
-      return toPlaywrightProxy(scheme, p)
-    }
+  // Схемы пробуем ПАРАЛЛЕЛЬНО — первая рабочая выигрывает. Мёртвый прокси выявляется
+  // за ~8с (один таймаут), а не за ~24с последовательного перебора. Это критично:
+  // при мёртвом прокси вход иначе висел до клиентского таймаута (см. CLAUDE.md — TCP_INVALID).
+  const probes = ['http', 'socks5', 'socks4'].map((scheme) =>
+    schemeWorks(browser, scheme, p).then((ok) => {
+      if (ok) return scheme
+      throw new Error('scheme-fail')
+    }),
+  )
+  let winner = null
+  try { winner = await Promise.any(probes) } catch { winner = null }
+  if (winner) {
+    _schemeCache.set(p.hostPort, winner)
+    return toPlaywrightProxy(winner, p)
   }
-  return toPlaywrightProxy('http', p)
+  // Ни одна схема не дошла до Instagram → прокси мёртв/битый (или неверные креды/тип).
+  // Быстрый ЯВНЫЙ отказ вместо доомной навигации на 40+ секунд.
+  throw new Error(
+    'proxy_dead: прокси не отвечает ни по одной схеме (http/socks5/socks4). ' +
+    'Проверьте его на вкладке «Прокси» → «Проверить IP» или замените — ' +
+    'вход через нерабочий прокси невозможен. В сетевом логе такой прокси даёт TCP_INVALID.',
+  )
 }
 
 // host:port без логина/пароля — для логов (видно, через какой IP шёл вход).
