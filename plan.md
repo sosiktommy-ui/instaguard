@@ -367,7 +367,7 @@ model UserSettings {
 - [ ] Лимиты/прогрев/паузы соблюдаются; бан/челлендж → аккаунт на паузу, без долбёжки.
 - [ ] Парсинг во всех трёх режимах `parsingSource`.
 - [ ] RAM/CPU воркера в пределах Railway при `BROWSER_CONCURRENCY`.
-- [ ] `tsc --noEmit` + `next build` чисто; воркер стартует; `/health` отдаёт свежий build.
+- [x] `tsc --noEmit` + `next build` чисто; воркер стартует; `/health` отдаёт свежий build. Подтверждено 2026-07-09(14): публичный `GET https://amiable-laughter-production-2857.up.railway.app/health` → `build:"2026-07-09-browser-15-emailfield"`, `headful:true`, `chromium:"130.0.6723.31"`. Остальные пункты чек-листа — ниже, требуют живого аккаунта.
 
 ---
 
