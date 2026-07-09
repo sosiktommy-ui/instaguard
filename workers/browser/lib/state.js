@@ -1,22 +1,62 @@
+// Мобильная Android-сессия купленных аккаунтов: "логин:пароль[:2fa] | UA | device-ids |
+// headers-с-Bearer | ... || почта:пароль-почты". До сих пор это понимал ТОЛЬКО legacy
+// Python-воркер (_parse_mobile_session) — у браузерного эмуля парсера не было вообще:
+// toStorageState() ниже (до этого фикса) сваливал ВСЮ строку в один мусорный cookie
+// "sessionid" (т.к. строка содержит и "=", и пробелы из UA — не проходила ни одну ветку
+// нормального разбора). Кука с мусорным значением всё равно ПРИСУТСТВУЕТ в contexte →
+// hasSessionCookie() наивно считал сессию живой → ложный "успешный" вход без реальной
+// авторизации (см. login.js loginByState — там же добавлена доп. проверка на этот случай).
+// Bearer-токен реально несёт JSON {ds_user_id, sessionid} — тот же sessionid, что и
+// веб-кука instagram.com (тот же формат "<uid>:<rand>:<ver>:<hash>"), просто
+// URL-кодированный — поэтому его МОЖНО подставить как настоящую веб-сессию.
+function parseMobileSessionCookies(raw) {
+  const headerSeg = raw.split('|').find((p) => /Authorization\s*=\s*Bearer/i.test(p))
+  if (!headerSeg) return null
+  const headers = {}
+  for (const pair of headerSeg.split(';')) {
+    const i = pair.indexOf('=')
+    if (i > 0) headers[pair.slice(0, i).trim()] = pair.slice(i + 1).trim()
+  }
+  const auth = headers['Authorization'] || ''
+  const m = auth.match(/Bearer\s+IGT:2:([A-Za-z0-9+/=]+)/i)
+  if (!m) return null
+  let payload
+  try { payload = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')) } catch { return null }
+  if (!payload || !payload.sessionid) return null
+  let sessionid = String(payload.sessionid)
+  try { sessionid = decodeURIComponent(sessionid) } catch {}
+  const cookies = { sessionid }
+  const dsUserId = payload.ds_user_id || headers['IG-U-DS-USER-ID'] || headers['IG-INTENDED-USER-ID']
+  if (dsUserId) cookies.ds_user_id = String(dsUserId)
+  return cookies
+}
+
 // Привести произвольный ввод куки к Playwright storageState.
 // Понимает: готовый storageState ({cookies:[...]}), массив Cookie-Editor [{name,value,...}],
-// объект-карту {sessionid,ds_user_id,...}, строку JSON или сырой sessionid.
+// объект-карту {sessionid,ds_user_id,...}, строку JSON, мобильную Android-сессию (см. выше)
+// или сырой sessionid.
 export function toStorageState(input) {
   let data = input
   if (typeof input === 'string') {
     const s = input.trim()
-    try { data = JSON.parse(s) }
-    catch {
-      // сырой sessionid или "k=v; k=v"
-      if (s.includes('=') && !s.includes(' ')) {
-        const map = {}
-        for (const pair of s.split(';')) {
-          const i = pair.indexOf('=')
-          if (i > 0) map[pair.slice(0, i).trim()] = pair.slice(i + 1).trim()
+    if (s.includes('|') && /Authorization\s*=\s*Bearer/i.test(s)) {
+      // Мобильная сессия — НЕ пытаться разобрать как обычные куки (там пробелы из UA
+      // сломают все ветки ниже и дадут мусорный "успех", см. комментарий выше).
+      data = parseMobileSessionCookies(s) || {}
+    } else {
+      try { data = JSON.parse(s) }
+      catch {
+        // сырой sessionid или "k=v; k=v"
+        if (s.includes('=') && !s.includes(' ')) {
+          const map = {}
+          for (const pair of s.split(';')) {
+            const i = pair.indexOf('=')
+            if (i > 0) map[pair.slice(0, i).trim()] = pair.slice(i + 1).trim()
+          }
+          data = map
+        } else {
+          data = { sessionid: s }
         }
-        data = map
-      } else {
-        data = { sessionid: s }
       }
     }
   }

@@ -346,12 +346,22 @@ export async function loginByState(context) {
   const page = await context.newPage()
   await gotoResilient(page, 'https://www.instagram.com/', { timeout: 25000, retries: 1, backoffMs: [2000] })
   await page.waitForTimeout(2000)
+  // hasSessionCookie() смотрит ТОЛЬКО в локальный cookie jar браузера — кука сама по себе
+  // ничего не доказывает (мусорное/просроченное значение тоже «присутствует»). Раньше на
+  // этом ловилась мобильная сессия, которую toStorageState() не умел разбирать (см. state.js)
+  // — мусорный cookie давал ложный «успешный» вход без реальной авторизации на сервере IG.
   if (!(await hasSessionCookie(context))) {
     throw new Error('login_required: сессия недействительна (нет sessionid) — куки устарели или другой аккаунт')
   }
   await dismissInterstitials(page)
-  const uname = (await extractUsername(page)) || 'unknown'
-  return { ok: true, username: uname, storageState: await context.storageState() }
+  const uname = await extractUsername(page)
+  if (!uname) {
+    // Кука есть, но сервер её не принял — Instagram отрисовал логаут-версию страницы.
+    // Прямой признак — снова видна форма входа (те же селекторы, что и обычный вход).
+    const stillLoggedOut = await firstVisible(page, SEL.loginUsername, 1500)
+    if (stillLoggedOut) throw new Error('login_required: кука не принята сервером Instagram (сессия истекла/поддельная/чужой аккаунт) — форма входа снова видна')
+  }
+  return { ok: true, username: uname || 'unknown', storageState: await context.storageState() }
 }
 
 export async function testSession(context) {
