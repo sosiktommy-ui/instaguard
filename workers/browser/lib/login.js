@@ -4,7 +4,7 @@
 import crypto from 'crypto'
 import { SEL, URLS } from './selectors.js'
 import { firstVisible, firstVisibleAnyFrame, clickByText, pageHasText, hasSessionCookie, gotoResilient } from './browser.js'
-import { humanType, jitter, idleMouse } from './human.js'
+import { humanType, jitter, idleMouse, warmupFeed } from './human.js'
 
 const LOGIN_URL = 'https://www.instagram.com/accounts/login/'
 
@@ -407,5 +407,24 @@ export async function testSession(context) {
     return await hasSessionCookie(context)
   } catch {
     return false
+  }
+}
+
+/**
+ * Прогрев + keep-alive сессии: заходим на главную как человек (скролл ленты), чтобы
+ * (а) Instagram видел периодическую живую активность с ТОГО ЖЕ IP и не «остужал» сессию,
+ * (б) аккаунт грелся, (в) вернуть СВЕЖИЙ storageState (сессия дозревает — токены обновляются).
+ * @returns { alive:boolean, storageState:object }
+ */
+export async function warmupSession(context) {
+  const page = await context.newPage()
+  try {
+    await warmupFeed(page) // навигация на главную + человекоподобный скролл (human.js)
+    const alive = await hasSessionCookie(context)
+    if (alive) await dismissInterstitials(page).catch(() => {})
+    return { alive, storageState: await context.storageState() }
+  } catch {
+    // Сбой прогрева не должен ронять цикл — вернём текущее состояние и «жива по куке».
+    return { alive: await hasSessionCookie(context).catch(() => false), storageState: await context.storageState().catch(() => null) }
   }
 }

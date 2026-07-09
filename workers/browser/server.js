@@ -2,13 +2,13 @@
 // См. plan.md §4. Контракт ответов согласован с lib/browser/client.ts в Next.js.
 import express from 'express'
 import { getBrowser, newAccountContext, closeContextSafe } from './lib/browser.js'
-import { attemptLogin, resumeCode, resendCode, loginByState, testSession } from './lib/login.js'
+import { attemptLogin, resumeCode, resendCode, loginByState, testSession, warmupSession } from './lib/login.js'
 import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment, readStoryEvents } from './lib/actions.js'
 import { parseFollowers, parseFollowing, parseComments, parseLikers } from './lib/parse.js'
 import { checkProxyBrowser } from './lib/proxy.js'
 import { toStorageState } from './lib/state.js'
 
-const BUILD = '2026-07-09-browser-20-codefield-email'
+const BUILD = '2026-07-09-browser-21-warmup'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -160,6 +160,24 @@ app.post('/session/test', async (req, res) => {
     })
     res.json({ alive })
   } catch { res.json({ alive: false }) }
+})
+
+// Прогрев + keep-alive: периодический человекоподобный заход, чтобы сессия не «остывала»
+// (Instagram видит живую активность с того же IP) и аккаунт грелся. Возвращает свежий
+// browserState (сессия дозревает — токены обновляются).
+app.post('/session/warmup', async (req, res) => {
+  const { storageState, proxy, username, locale, timezoneId } = req.body || {}
+  if (!storageState) return res.status(400).json({ alive: false, error: 'storageState обязателен' })
+  try {
+    const r = await runLimited(async () => {
+      const context = await newAccountContext({ username: username || 'owner', proxy, storageState, locale, timezoneId })
+      try { return await warmupSession(context) }
+      finally { await closeContextSafe(context) }
+    })
+    res.json({ alive: r.alive, browserState: r.storageState ?? undefined })
+  } catch (e) {
+    res.json({ alive: false, error: String(e?.message || 'ошибка').slice(0, 160) })
+  }
 })
 
 // ── Прокси (заменяет мёртвый Python-воркер /check-proxy и /pick-proxy) ──────────

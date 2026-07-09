@@ -12,7 +12,7 @@ import { resolveEngine } from '@/lib/browser/engine'
 import { runFollowerActionsBrowser } from '@/lib/browser/actions'
 import {
   browserComment, browserReply, browserFollow, browserLike, browserDM, browserStories,
-  browserStoryEvents,
+  browserStoryEvents, browserWarmup,
   parseFollowersBrowser, parseCommentsBrowser, parseLikersBrowser,
 } from '@/lib/browser/client'
 import { pickDraft, markDraftUsed } from '@/lib/browser/draftPool'
@@ -31,6 +31,9 @@ const COMMENT_COOLDOWN_MS = 60 * 60 * 1000
 // Лайки и стори-события — тоже реже подписчиков
 const LIKE_COOLDOWN_MS = 30 * 60 * 1000
 const STORY_COOLDOWN_MS = 60 * 60 * 1000
+// Прогрев/keep-alive браузерной сессии: не чаще раза в ~3.5ч на аккаунт (живой заход,
+// чтобы сессия не остывала и аккаунт грелся). Метка времени — в limits.lastWarmup.
+const WARMUP_KEEPALIVE_MS = 3.5 * 60 * 60 * 1000
 // Сколько последних постов сканировать на лайкнувших и сколько лайков с поста брать
 const LIKERS_MEDIA_COUNT = 3
 const LIKERS_PER_MEDIA = 50
@@ -926,9 +929,28 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // ── Прогрев + keep-alive браузерной сессии (по запросу пользователя) ──────────
+      // Периодический живой заход с ТОГО ЖЕ прокси: сессия дозревает (свежий browserState),
+      // аккаунт греется, Instagram видит активность и не «остужает» сессию. Гейт по кулдауну
+      // (метка limits.lastWarmup) — не на каждый поллинг. Сбой прогрева НЕ роняет цикл.
+      let warmedState: object | undefined
+      if (engine === 'browser' && account.browserState) {
+        const lastWarmup = Number((account.limits as any)?.lastWarmup || 0)
+        if (isManual || Date.now() - lastWarmup >= WARMUP_KEEPALIVE_MS) {
+          try {
+            const w = await browserWarmup(account.browserState as object, proxy, account.username, account.locale ?? undefined, account.timezoneId ?? undefined)
+            if (w.browserState) warmedState = w.browserState
+            ;(counters as any).lastWarmup = Date.now()
+            if (!w.alive) {
+              await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: '⚠️ Прогрев: сессия не подтвердилась (возможно, остыла/отклонена IP). Если повторяется — нужен повторный вход.' } }).catch(() => null)
+            }
+          } catch { /* прогрев не критичен для цикла */ }
+        }
+      }
+
       await prisma.instagramAccount.update({
         where: { id: account.id },
-        data: { lastChecked: new Date(), errorCount: 0, limits: counters as any, ...(realFollowers !== undefined ? { followers: realFollowers, followersHistory } : {}) },
+        data: { lastChecked: new Date(), errorCount: 0, limits: counters as any, ...(warmedState ? { browserState: warmedState as any } : {}), ...(realFollowers !== undefined ? { followers: realFollowers, followersHistory } : {}) },
       })
       summary.push(s)
     } catch (e: any) {
