@@ -116,6 +116,20 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-09 (4)
+
+#### feat(эмуль): Фаза 3 завершена — микс парсинга (HikerAPI + черновые браузером). Авторитетный план — `plan.md`
+
+Достроен последний крупный кусок Фазы 3 из `plan.md` §5/§7.3 — источник парсинга переключается настройкой `UserSettings.parsingSource` (`api` | `drafts` | `drafts_then_api`).
+
+- **Браузерный воркер:** эндпоинты `/parse/followers|following|comments|likers` (`workers/browser/lib/parse.js`) — черновой парсит публичные данные основного через DOM своей браузерной сессией.
+- **`lib/browser/client.ts`:** обёртки `parseFollowersBrowser/parseFollowingBrowser/parseCommentsBrowser/parseLikersBrowser`.
+- **`lib/browser/draftPool.ts` (новый):** `pickDraft(userId)` — живой HELPER с `browserState`, round-robin по `lastChecked`; `markDraftUsed`.
+- **`app/api/poll/route.ts`:** `parseFollowersFor/parseCommentsFor/parseLikersFor` ветвятся по `parsingSource`: `api`→HikerAPI (дефолт), `drafts`→черновой браузером (пусто, если чернового нет), `drafts_then_api`→черновой, при отсутствии живого → HikerAPI. Гейт `needsScraper` больше не стопорит владельцев в режиме `drafts`.
+- **`app/(dashboard)/drafts/page.tsx`:** динамическая — тянет `/api/settings`, при draft-режимах рендерит `DraftsManager` (список HELPER-аккаунтов, «Добавить»/«Импорт списком», прокси, сброс снапшота), иначе `ParsingStatus` (статус HikerAPI). `TopNav` уже реагировал (пункт «Черновые аккаунты»/«Парсинг (API)»).
+
+Схема/миграция не менялись (`parsingSource` уже в `20260709000000_browser_engine`). Проверено: `tsc --noEmit` + `next build` чисто, воркер `node --check` чисто. ⚠️ Draft-парсинг браузером (`/parse/*` через DOM) НЕ прогонялся на живом Instagram — помечен экспериментальным; дефолтный рабочий режим — `api` (HikerAPI). Коммит точечный (паузная auth-работа не тронута). Осталось: стори-инбокс основного браузером, полировка селекторов (Фаза 4), вывод legacy (Фаза 5).
+
 ### 2026-07-09 (3)
 
 #### feat(эмуль): убран выбор движка входа/действий в Настройках — всегда браузер

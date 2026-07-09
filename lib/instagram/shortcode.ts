@@ -20,5 +20,10 @@ export function mediaPkToShortcode(mediaId: string): string {
 }
 
 export function mediaPostUrl(mediaId: string): string {
-  return `https://www.instagram.com/p/${mediaPkToShortcode(mediaId)}/`
+  const id = String(mediaId).split('_')[0]
+  // Комментарии, спарсенные браузером у черновых (workers/browser/lib/parse.js), несут
+  // media_id = УЖЕ shortcode из URL поста (DOM не отдаёт числовой pk) — используем как есть.
+  // Числовой pk (HikerAPI) — конвертируем через pk2code.
+  if (!/^\d+$/.test(id)) return `https://www.instagram.com/p/${id}/`
+  return `https://www.instagram.com/p/${mediaPkToShortcode(id)}/`
 }

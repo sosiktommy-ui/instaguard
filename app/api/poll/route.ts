@@ -10,7 +10,11 @@ import {
 import { scrapeFollowers, scrapeFollowing, scrapeComments, scrapeLikers, scraperConfigured } from '@/lib/scraper/hiker'
 import { resolveEngine } from '@/lib/browser/engine'
 import { runFollowerActionsBrowser } from '@/lib/browser/actions'
-import { browserComment, browserReply, browserFollow, browserLike, browserDM, browserStories } from '@/lib/browser/client'
+import {
+  browserComment, browserReply, browserFollow, browserLike, browserDM, browserStories,
+  parseFollowersBrowser, parseCommentsBrowser, parseLikersBrowser,
+} from '@/lib/browser/client'
+import { pickDraft, markDraftUsed } from '@/lib/browser/draftPool'
 import { mediaPostUrl } from '@/lib/instagram/shortcode'
 import { Queue } from 'bullmq'
 import { loadCounters, consume, warmupFactor, scaleCaps, MAX_NEW_PER_POLL, type Counters, type ActionKind } from '@/lib/limits'
@@ -51,6 +55,66 @@ const ERROR_PAUSE_THRESHOLD = 5
 function capPks(set: Set<string>, max: number): string[] {
   const arr = Array.from(set)
   return arr.length > max ? arr.slice(arr.length - max) : arr
+}
+
+// ── Микс парсинга: API (HikerAPI) / черновые браузером — plan.md §5. ──────────
+// ⚠️ Черновой путь (parseXBrowser) экспериментален — DOM-парсинг воркера не проверялся
+// на живом Instagram (см. workers/browser/lib/parse.js). Любой сбой чернового —
+// не фатален: 'drafts_then_api' падает в API, 'drafts' просто возвращает пусто
+// (WARN залогирует внешний scrape()-обёртчик в вызывающем коде).
+type DraftGetter = () => Promise<Awaited<ReturnType<typeof pickDraft>>>
+
+function makeDraftGetter(userId: string): DraftGetter {
+  let cached: Awaited<ReturnType<typeof pickDraft>> | undefined
+  return async () => {
+    if (cached === undefined) cached = await pickDraft(userId)
+    return cached
+  }
+}
+
+async function parseFollowersFor(username: string, parsingSource: string, getDraft: DraftGetter, limit: number) {
+  if (parsingSource !== 'api') {
+    const d = await getDraft()
+    if (d) {
+      try {
+        const r = await parseFollowersBrowser({ storageState: d.browserState, proxy: d.proxy ?? undefined, username: d.username }, username, limit)
+        await markDraftUsed(d.id)
+        return { followers: r.followers ?? [] }
+      } catch { /* черновой недоступен — попробуем API, если разрешено (см. ниже) */ }
+    }
+    if (parsingSource === 'drafts') return { followers: [] }
+  }
+  return scrapeFollowers(username, limit)
+}
+
+async function parseCommentsFor(username: string, parsingSource: string, getDraft: DraftGetter, mediaCount: number, perMedia: number) {
+  if (parsingSource !== 'api') {
+    const d = await getDraft()
+    if (d) {
+      try {
+        const r = await parseCommentsBrowser({ storageState: d.browserState, proxy: d.proxy ?? undefined, username: d.username }, username, mediaCount, perMedia)
+        await markDraftUsed(d.id)
+        return { comments: r.comments ?? [] }
+      } catch {}
+    }
+    if (parsingSource === 'drafts') return { comments: [] }
+  }
+  return scrapeComments(username, mediaCount, perMedia)
+}
+
+async function parseLikersFor(username: string, parsingSource: string, getDraft: DraftGetter, mediaCount: number, perMedia: number) {
+  if (parsingSource !== 'api') {
+    const d = await getDraft()
+    if (d) {
+      try {
+        const r = await parseLikersBrowser({ storageState: d.browserState, proxy: d.proxy ?? undefined, username: d.username }, username, mediaCount, perMedia)
+        await markDraftUsed(d.id)
+        return { likers: r.likers ?? [] }
+      } catch {}
+    }
+    if (parsingSource === 'drafts') return { likers: [] }
+  }
+  return scrapeLikers(username, mediaCount, perMedia)
 }
 
 // Выбирает НОВЫЕ цели и помечает «известными» ТОЛЬКО обработанные (+ всю базу на
@@ -324,37 +388,33 @@ export async function POST(req: NextRequest) {
     },
   })
 
-  // Настройки владельцев: работа без прокси (защита от бана). «Черновые» больше не используются —
-  // парсинг вынесен в скрейпер-API (см. lib/scraper/hiker), поэтому likeByDraft/storyByDraft/
-  // allowNoDrafts больше не читаем (все действия делает основной, всё чтение — API).
+  // Настройки владельцев: работа без прокси (защита от бана) + источник парсинга (plan.md §5).
+  // «Черновые» (HELPER) вернулись как ОПЦИЯ (parsingSource='drafts'|'drafts_then_api') — по
+  // умолчанию всё ещё 'api' (скрейпер-API), likeByDraft/storyByDraft/allowNoDrafts (действия
+  // черновым) остаются LEGACY no-op — черновые теперь только парсят, не действуют.
   const ownerIds = [...new Set(accounts.map((a) => a.userId))]
   const settingsRows = ownerIds.length
-    ? await prisma.userSettings.findMany({ where: { userId: { in: ownerIds } }, select: { userId: true, allowNoProxy: true } })
+    ? await prisma.userSettings.findMany({ where: { userId: { in: ownerIds } }, select: { userId: true, allowNoProxy: true, parsingSource: true } })
     : []
   const allowNoProxy = new Map(settingsRows.map((r) => [r.userId, r.allowNoProxy]))
+  const parsingSourceOf = new Map(settingsRows.map((r) => [r.userId, r.parsingSource ?? 'api']))
   // Прокси обязателен, если владелец НЕ включил «Работать без прокси» (по умолчанию — обязателен).
   const proxyRequired = (userId: string) => !allowNoProxy.get(userId)
 
   // Основные, которым реально есть что делать (есть сессия — legacy ИЛИ браузерная — и активные триггеры)
   const workingMains = accounts.filter((a) => (a.sessionData || a.browserState) && a.triggersAsResponder.length)
 
-  // Парсинг идёт через скрейпер-API (HikerAPI). Если ключ не задан — парсить нечем: тревога + стоп.
-  // (Стори-события читаются сессией основного и работали бы и без ключа, но без парсинга
-  // подписчиков/комментов/лайков продукт по сути не функционирует — честнее остановить и сказать.)
-  if (workingMains.length && !scraperConfigured()) {
+  // Скрейпер-API нужен владельцам с parsingSource 'api' или 'drafts_then_api' (там он фолбэк).
+  // Чисто 'drafts' — ключ не нужен вообще. Если ключа нет — блокируем ТОЛЬКО тех, кому он
+  // реально нужен (честная тревога + стоп для них), остальные (drafts-only) идут в общий цикл.
+  const needsScraper = (uid: string) => (parsingSourceOf.get(uid) ?? 'api') !== 'drafts'
+  const blockedMains = workingMains.filter((a) => needsScraper(a.userId) && !scraperConfigured())
+  const blockedIds = new Set(blockedMains.map((a) => a.id))
+  if (blockedMains.length) {
     await notifyOwner(
-      workingMains.map((a) => a.id),
-      '🚨 Не задан ключ скрейпер-API (HIKER_API_KEY) — парсинг подписчиков/комментариев/лайков невозможен. Добавьте ключ в переменные окружения Next.js-сервиса (оформить: hikerapi.com).'
+      blockedMains.map((a) => a.id),
+      '🚨 Не задан ключ скрейпер-API (HIKER_API_KEY) — парсинг подписчиков/комментариев/лайков невозможен. Добавьте ключ в переменные окружения Next.js-сервиса (оформить: hikerapi.com) либо переключите «Источник парсинга» на «Только черновые» в Настройках.'
     )
-    return NextResponse.json({
-      ok: true, alert: 'no-scraper',
-      message: 'Не задан ключ скрейпер-API — парсинг остановлен.',
-      summary: workingMains.map((a) => ({
-        accountId: a.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0,
-        triggersFound: a.triggersAsResponder.length, totalComments: 0, newComments: 0,
-        commentActions: 0, skipped: 'no-scraper',
-      })),
-    })
   }
 
   const summary: PollSummary[] = []
@@ -362,6 +422,13 @@ export async function POST(req: NextRequest) {
 
   for (const account of accounts) {
     if (!account.sessionData && !account.browserState) continue
+
+    // Владельцу нужен скрейпер-API (parsingSource 'api'/'drafts_then_api'), но ключ не задан —
+    // уже уведомили выше, этого конкретного аккаунта просто пропускаем.
+    if (blockedIds.has(account.id)) {
+      summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, triggersFound: account.triggersAsResponder.length, totalComments: 0, newComments: 0, commentActions: 0, skipped: 'no-scraper' })
+      continue
+    }
 
     // Прокси обязателен и не задан → НЕ работаем этим аккаунтом (защита от мгновенного бана).
     // Отключается тумблером «Работать без прокси» в Настройках.
@@ -387,8 +454,13 @@ export async function POST(req: NextRequest) {
 
     const session = account.sessionData as object
     const proxy = account.proxy ?? undefined
-    // Движок действий владельца: браузер (если воркер задеплоен и не выбран legacy), иначе legacy.
+    // Движок действий владельца: всегда браузер (кроме недеплоя воркера — см. lib/browser/engine.ts).
     const engine = await resolveEngine(account.userId)
+    // Источник парсинга владельца (plan.md §5): 'api' (по умолч.) | 'drafts' | 'drafts_then_api'.
+    // getDraft лениво подбирает и КЕШИРУЕТ чернового на весь цикл этого аккаунта (не дёргаем
+    // подбор на каждый поток отдельно — один черновой обслуживает все потоки одного основного).
+    const parsingSource = parsingSourceOf.get(account.userId) ?? 'api'
+    const getDraft = makeDraftGetter(account.userId)
     const s: PollSummary = {
       accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0,
       triggersFound: triggers.length, totalComments: 0, newComments: 0, commentActions: 0, limited: 0,
@@ -558,7 +630,7 @@ export async function POST(req: NextRequest) {
     try {
       // ── Поток подписчиков ────────────────────────────────────────────────
       if (followerTriggers.length) {
-        const scraped = await scrape(() => scrapeFollowers(account.username, FOLLOWERS_FETCH_LIMIT))
+        const scraped = await scrape(() => parseFollowersFor(account.username, parsingSource, getDraft, FOLLOWERS_FETCH_LIMIT))
         if (scraped) {
           const { followers } = scraped
           const snapFollowers = account.snapshots.find((sn) => sn.type === 'FOLLOWERS')
@@ -588,7 +660,7 @@ export async function POST(req: NextRequest) {
       const snapLikesMeta = account.snapshots.find((sn) => sn.type === 'LIKES')
       const likeElapsed = snapLikesMeta ? Date.now() - new Date(snapLikesMeta.createdAt).getTime() : Infinity
       if (likeTriggers.length && (isManual || likeElapsed >= LIKE_COOLDOWN_MS)) {
-        const scraped = await scrape(() => scrapeLikers(account.username, LIKERS_MEDIA_COUNT, LIKERS_PER_MEDIA))
+        const scraped = await scrape(() => parseLikersFor(account.username, parsingSource, getDraft, LIKERS_MEDIA_COUNT, LIKERS_PER_MEDIA))
         if (scraped) {
           const { likers } = scraped
           const hadBaseline = Boolean(snapLikesMeta)
@@ -644,7 +716,7 @@ export async function POST(req: NextRequest) {
       // workers/browser/lib/actions.js replyComment — тред отложен на Фазу 4).
       const useBrowserForComments = engine === 'browser' && Boolean(account.browserState)
       if (commentTriggers.length && (useBrowserForComments || account.sessionData) && (isManual || commentElapsed >= COMMENT_COOLDOWN_MS)) {
-        const scraped = await scrape(() => scrapeComments(account.username, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA))
+        const scraped = await scrape(() => parseCommentsFor(account.username, parsingSource, getDraft, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA))
         if (scraped) {
         const { comments } = scraped
         const hadBaseline = Boolean(snapCommentsMeta)

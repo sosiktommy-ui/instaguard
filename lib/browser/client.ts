@@ -105,3 +105,20 @@ export function browserComment(ctx: Ctx, postUrl: string, text: string) {
 export function browserReply(ctx: Ctx, postUrl: string, text: string) {
   return browserFetch<ActionResult>('/reply-comment', { ...ctx, postUrl, text })
 }
+
+// ── Парсинг черновыми (Фаза 3, plan.md §4.4/§5). Формы = lib/scraper/hiker.ts, чтобы
+// poll/route.ts мог переключаться между API/черновыми без переписывания потребителей.
+// ⚠️ ЭКСПЕРИМЕНТАЛЬНО — DOM-парсинг воркера не проверялся на живом Instagram, см.
+// workers/browser/lib/parse.js.
+export function parseFollowersBrowser(ctx: Ctx, targetUsername: string, limit = 50) {
+  return browserFetch<{ followers: { pk: string; username: string }[]; error?: string }>('/parse/followers', { ...ctx, targetUsername, limit })
+}
+export function parseFollowingBrowser(ctx: Ctx, targetUsername: string, limit = 200) {
+  return browserFetch<{ following: { pk: string; username: string }[]; error?: string }>('/parse/following', { ...ctx, targetUsername, limit })
+}
+export function parseCommentsBrowser(ctx: Ctx, targetUsername: string, mediaCount = 3, perMedia = 20) {
+  return browserFetch<{ comments: { pk: string; text: string; user_pk: string; username: string; media_id: string }[] }>('/parse/comments', { ...ctx, targetUsername, mediaCount, perMedia })
+}
+export function parseLikersBrowser(ctx: Ctx, targetUsername: string, mediaCount = 3, perMedia = 50) {
+  return browserFetch<{ likers: { pk: string; username: string; media_id: string }[] }>('/parse/likers', { ...ctx, targetUsername, mediaCount, perMedia })
+}
