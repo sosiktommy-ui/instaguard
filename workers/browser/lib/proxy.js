@@ -47,7 +47,7 @@ async function schemeWorks(browser, scheme, p) {
   try {
     context = await browser.newContext({ proxy: toPlaywrightProxy(scheme, p) })
     const page = await context.newPage()
-    await page.goto('https://www.instagram.com/accounts/login/', { waitUntil: 'domcontentloaded', timeout: 12000 })
+    await page.goto('https://www.instagram.com/accounts/login/', { waitUntil: 'domcontentloaded', timeout: 8000 })
     return true
   } catch {
     return false

@@ -58,29 +58,42 @@ async function dismissCookieBanner(page) {
   await clickByText(page, ['Allow all cookies', 'Accept All', 'Accept', 'Разрешить все файлы cookie', 'Принять все'], { timeout: 3500 })
 }
 
+// Отправить форму кода (challenge/2FA) НАДЁЖНО: сначала CSS-кнопка submit (firstVisible=CSS),
+// затем текстовая кнопка (clickByText), затем Enter по полю. Раньше жали только clickByText
+// по списку, куда затесался CSS-селектор — он как текст не матчился, и код не отправлялся.
+async function submitCodeForm(page, codeInput) {
+  const cssBtn = await firstVisible(page, SEL.codeSubmitCss, 2500)
+  if (cssBtn) { await cssBtn.click({ delay: 60 }).catch(() => {}); return }
+  if (await clickByText(page, SEL.codeSubmit, { timeout: 3000 })) return
+  await codeInput.press('Enter').catch(() => {})
+}
+
 // Найти форму входа устойчиво: дождаться, пока React-форма догрузится (networkidle),
 // перебрать варианты селекторов; если формы нет — попробовать открыть её кликом «Log in»
 // (logged-out домашняя иногда показывает промежуточный экран), затем повторный заход.
 async function findLoginForm(page) {
-  await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {})
-  let userInput = await firstVisible(page, SEL.loginUsername, 15000)
-  let passInput = userInput ? await firstVisible(page, SEL.loginPassword, 8000) : null
+  // Таймауты урезаны: при bot-стене (формы НЕТ) нужно быстро сдаться и отдать СКРИН,
+  // а не молотить ~80с — иначе клиент (180с) может оборвать fetch до diag (аудит-баг #1).
+  // networkidle у IG-SPA почти никогда не наступает (открытые сокеты) → короткий best-effort.
+  await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
+  let userInput = await firstVisible(page, SEL.loginUsername, 9000)
+  let passInput = userInput ? await firstVisible(page, SEL.loginPassword, 5000) : null
   if (userInput && passInput) return { userInput, passInput }
 
   // Промежуточный экран → клик «Log in» и повтор.
-  if (await clickByText(page, SEL.logInLink, { timeout: 3000 })) {
-    await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {})
-    userInput = await firstVisible(page, SEL.loginUsername, 12000)
-    passInput = userInput ? await firstVisible(page, SEL.loginPassword, 6000) : null
+  if (await clickByText(page, SEL.logInLink, { timeout: 2500 })) {
+    await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {})
+    userInput = await firstVisible(page, SEL.loginUsername, 7000)
+    passInput = userInput ? await firstVisible(page, SEL.loginPassword, 4000) : null
     if (userInput && passInput) return { userInput, passInput }
   }
 
   // Последняя попытка — принудительный повторный заход на страницу входа.
-  await gotoResilient(page, LOGIN_URL, { timeout: 20000, retries: 0 }).catch(() => {})
+  await gotoResilient(page, LOGIN_URL, { timeout: 15000, retries: 0 }).catch(() => {})
   await dismissCookieBanner(page)
-  await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {})
-  userInput = await firstVisible(page, SEL.loginUsername, 12000)
-  passInput = userInput ? await firstVisible(page, SEL.loginPassword, 6000) : null
+  await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {})
+  userInput = await firstVisible(page, SEL.loginUsername, 7000)
+  passInput = userInput ? await firstVisible(page, SEL.loginPassword, 4000) : null
   return { userInput, passInput }
 }
 
@@ -172,12 +185,16 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
       await fail(page, 'suspended: аккаунт приостановлен Instagram — войти нельзя')
     }
 
-    if (urlHas(url, URLS.twoFactor) || (await pageHasText(page, ['two-factor', 'двухфактор', 'Enter the code we', 'security code']))) {
+    // 2FA определяем СТРОГО — по URL или специфичным для приложения-аутентификатора фразам.
+    // Общие «Enter the code we sent…»/«security code» убраны: они есть и на email/SMS-checkpoint,
+    // из-за чего обычный challenge ошибочно уходил в 2FA-ветку (аудит-баг #3). Дефолт для
+    // «просто поле кода» — challenge (ветка ниже), это почти всегда почта/SMS.
+    if (urlHas(url, URLS.twoFactor) || (await pageHasText(page, ['two-factor', 'two factor', 'двухфактор', 'authentication app', 'приложении для аутентификации', 'authenticator app']))) {
       if (totpSecret) {
         const codeInput = await firstVisible(page, SEL.codeInput, 6000)
         if (codeInput) {
           await humanType(codeInput, totpCode(totpSecret))
-          await clickByText(page, SEL.codeSubmit, { timeout: 4000 })
+          await submitCodeForm(page, codeInput)
           await page.waitForTimeout(2500)
           if (await hasSessionCookie(context)) {
             await dismissInterstitials(page)
@@ -229,7 +246,7 @@ export async function resumeCode(context, { code }) {
   }
   await codeInput.fill('')
   await humanType(codeInput, String(code).replace(/\D/g, ''))
-  await clickByText(page, SEL.codeSubmit, { timeout: 4000 })
+  await submitCodeForm(page, codeInput)
 
   const deadline = Date.now() + 15000
   while (Date.now() < deadline) {

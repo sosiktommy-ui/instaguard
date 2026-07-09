@@ -44,7 +44,12 @@ export const SEL = {
     'input[aria-label*="код" i]',
     'input[type="tel"][maxlength="6"]',
   ],
-  codeSubmit: ['button[type="submit"]', 'Confirm', 'Submit', 'Подтвердить', 'Далее', 'Next'],
+  // ТОЛЬКО тексты — используется через clickByText (текстовый матчер). CSS-кнопку
+  // submit отправляет submitCodeForm() отдельно (firstVisible=CSS). Раньше сюда была
+  // ошибочно вписана 'button[type="submit"]' — clickByText её как текст не матчит.
+  codeSubmit: ['Confirm', 'Submit', 'Подтвердить', 'Далее', 'Next', 'Continue', 'Продолжить'],
+  // CSS-кнопки подтверждения кода (для firstVisible).
+  codeSubmitCss: ['button[type="submit"]:not([disabled])', 'div[role="button"][tabindex]:has-text("Confirm")'],
   resendLink: ['Resend', 'Resend Code', 'Send again', 'Отправить снова', 'Отправить ещё раз'],
 
   // Профиль / действия
@@ -59,7 +64,7 @@ export const SEL = {
 
 // URL-признаки состояний входа.
 export const URLS = {
-  challenge: ['/challenge/', '/auth_platform/codeentry', '/accounts/login/two_factor'],
+  challenge: ['/challenge/', '/auth_platform/codeentry'],
   twoFactor: ['/accounts/login/two_factor', 'two_factor'],
   suspended: ['/accounts/suspended', '/challenge/action/'],
 }

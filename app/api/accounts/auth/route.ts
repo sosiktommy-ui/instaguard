@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
       try {
         if (engine === 'browser') {
           // Браузер: принимаем storageState/куки как есть — воркер соберёт и проверит сессию.
-          const result = await browserLoginByCookies(typeof cookies === 'string' ? cookies : cookies, proxyUrl || undefined)
+          const result = await browserLoginByCookies(typeof cookies === 'string' ? cookies : JSON.stringify(cookies), proxyUrl || undefined)
           browserState = result.browserState
           clean = result.username
           loginMethod = 'cookies'

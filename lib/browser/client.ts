@@ -6,7 +6,10 @@
 const BROWSER_WORKER_URL = process.env.BROWSER_WORKER_URL ?? process.env.BROWSER_URL ?? ''
 const BROWSER_WORKER_SECRET = process.env.BROWSER_WORKER_SECRET ?? ''
 // Браузер медленнее приватного API (вход 30–60с) — таймаут выше, чем у Python-воркера.
-const TIMEOUT_MS = Number(process.env.BROWSER_WORKER_TIMEOUT_MS) || 120_000
+// 180с (не 120): при bot-стене воркер сначала перебирает селекторы/повторы и лишь потом
+// отдаёт СКРИН — на 120с клиент рвал fetch до diag (аудит-баг #1). Бюджет воркера подрезан,
+// но запас нужен на медленный прокси + первый scheme-детект.
+const TIMEOUT_MS = Number(process.env.BROWSER_WORKER_TIMEOUT_MS) || 180_000
 
 /** Задеплоен ли браузерный воркер (задан URL). Если нет — движок остаётся legacy. */
 export function browserConfigured(): boolean {
