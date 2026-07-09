@@ -120,14 +120,16 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 #### fix(эмуль): вход браузером был HEADLESS → Instagram отдавал бот-стену без формы. Теперь HEADFUL под Xvfb + СКРИН при неудаче
 
-⚠️ **Нужен редеплой браузерного воркера** (проверить: `<url>/health` → `"build":"2026-07-09-browser-4-headful"`, `"headful":true`, `"display":":99"` или подобное — значит Xvfb поднялся).
+✅ **Задеплоено и подтверждено живым:** `<url>/health` → `"build":"2026-07-09-browser-5-xvfb"`, `"headful":true`, `"display":":99"` (Xvfb поднялся, браузер реально headful).
+
+⚠️ **Грабли (важно для будущих агентов):** первый заход через `xvfb-run` в `startCommand`/`CMD` **уронил воркер в 502-краш-луп** — `xvfb-run` в образе Playwright не оказалось. Правильное решение: (1) `apt-get install -y xvfb` в Dockerfile (гарантия бинаря Xvfb), (2) `workers/browser/start.sh` поднимает `Xvfb :99` НАПРЯМУЮ (без `xvfb-run`), `export DISPLAY=:99`, `exec node server.js` — всё под guard `command -v Xvfb` (если Xvfb нет — node стартует всё равно, деградация в headless, без 502), (3) `railway.json` `startCommand: "sh start.sh"` (он перекрывает `CMD` Dockerfile — правим ИМЕННО его). НЕ возвращать `xvfb-run`.
 
 Пользователь: «вход не работает + он должен присылать скрин при неудачном входе». По просьбе изучены `autofacebook` (Playwright-бот для FB) и leadfeed.ru.
 
 **Корень (почему «страница открылась, но полей логина/пароля нет»):** браузерный воркер в проде был жёстко залочен в **headless** (`getBrowser`: `headful = BROWSER_HEADFUL==='1' && NODE_ENV!=='production'` — в проде всегда false). А смысл всего перехода на «эмуль» (plan.md §1, memory [[pivot-to-browser-emulator]]) — что живой браузер Instagram ПУСКАЕТ, а headless он отдаёт бот-стену (страница без формы). Урок из `autofacebook` тот же — он работает на `headless:false`. То есть мы бежали на «половине живого» браузера.
 
 - **`workers/browser/lib/browser.js` `getBrowser`:** теперь ПО УМОЛЧАНИЮ headful. В проде окна нет → крутится под виртуальным дисплеем **Xvfb**. RAM почти не растёт (кадровый буфер крошечный; тяжёлые — контексты Chromium, а не head/headless — риск §377 плана не усилен). Аварийный откат — env `BROWSER_HEADLESS=1` (форсит старый headless). Если headful не стартует (нет `$DISPLAY`) — graceful-деградация в headless, воркер не падает.
-- **`workers/browser/Dockerfile`:** `CMD` теперь `xvfb-run -a --server-args="-screen 0 1280x1024x24" node server.js` (xvfb-run уже в образе Playwright). `/health` отдаёт `headful`/`display`.
+- **`workers/browser/Dockerfile` + `start.sh` + `railway.json`:** `apt-get install xvfb` + `start.sh` (Xvfb :99 напрямую → `exec node`) + `startCommand: sh start.sh`. `/health` отдаёт `headful`/`display` (при живом Xvfb `display:":99"`). Прошлая попытка через `xvfb-run` дала 502 (см. блок «Грабли» выше).
 - **СКРИН при неудачном входе (plan.md Фаза 4):** `login.js` — новые `captureDiag(page)` (url+title+jpeg-скрин viewport, q55) и `fail(page,msg)` (кидает ошибку с `err.diag`). Прикладывается ко ВСЕМ жёстким исходам (нет формы / suspended / bad_password / таймаут). `server.js /login` отдаёт `diag` в теле ошибки → `lib/browser/client.ts browserFetch` сохраняет `err.diag` → `accounts/auth` возвращает `screenshot` → `AddAccountModal` показывает картинкой (кликабельна, открывается в новой вкладке). Теперь видно, что РЕАЛЬНО показал Instagram, а не «войти не удалось» вслепую.
 - **Устойчивое обнаружение формы** (`login.js findLoginForm`): ждём `networkidle`, перебираем расширенные селекторы (`selectors.js` — добавлены `aria-label`, `type`, промежуточный экран «Log in»), при отсутствии формы — клик «Log in» и повторный заход на `/accounts/login/`. Раньше был один `firstVisible` по узкому `input[name="username"]`.
 
