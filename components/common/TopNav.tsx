@@ -37,12 +37,19 @@ export default function TopNav() {
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [parsingSource, setParsingSource] = useState('api')
+  // Реальный статус браузерного воркера (вход + действия). Раньше индикатор «Активно» был
+  // захардкожен зелёным всегда — врал, даже когда воркер мёртв. Теперь отражает /health.
+  const [health, setHealth] = useState<'loading' | 'online' | 'offline' | 'unconfigured'>('loading')
 
   // Close drawer on route change
   useEffect(() => { setOpen(false) }, [pathname])
 
   useEffect(() => {
     fetch('/api/settings').then((r) => r.json()).then((d) => { if (d?.parsingSource) setParsingSource(d.parsingSource) }).catch(() => {})
+    fetch('/api/browser-health?test=1')
+      .then((r) => r.json())
+      .then((d) => setHealth(!d?.configured ? 'unconfigured' : d?.ok ? 'online' : 'offline'))
+      .catch(() => setHealth('offline'))
   }, [])
 
   const SUBTABS = buildSubtabs(parsingSource)
@@ -110,13 +117,23 @@ export default function TopNav() {
 
           <div className="flex-1" />
 
-          <div className="hidden sm:flex items-center gap-2 text-[13px] font-medium text-subt">
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full rounded-full bg-ok opacity-60 animate-ping" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-ok" />
-            </span>
-            Активно
-          </div>
+          {(() => {
+            const meta = {
+              loading:      { dot: 'bg-subt', text: 'Проверка…',     ping: false, title: 'Проверяю связь с браузерным воркером…' },
+              online:       { dot: 'bg-ok',   text: 'Онлайн',         ping: true,  title: 'Браузерный воркер отвечает — вход и действия работают' },
+              offline:      { dot: 'bg-bad',  text: 'Воркер офлайн',  ping: false, title: 'Браузерный воркер не отвечает — вход и действия недоступны' },
+              unconfigured: { dot: 'bg-warn', text: 'Не настроен',    ping: false, title: 'Не задан BROWSER_WORKER_URL — движок не подключён' },
+            }[health]
+            return (
+              <div className="hidden sm:flex items-center gap-2 text-[13px] font-medium text-subt" title={meta.title}>
+                <span className="relative flex h-2 w-2">
+                  {meta.ping && <span className="absolute inline-flex h-full w-full rounded-full bg-ok opacity-60 animate-ping" />}
+                  <span className={cn('relative inline-flex h-2 w-2 rounded-full', meta.dot)} />
+                </span>
+                {meta.text}
+              </div>
+            )
+          })()}
           <button onClick={handleLogout} className="text-subt hover:text-bad transition-colors p-2" title="Выйти">
             <LogOut className="w-[18px] h-[18px]" />
           </button>

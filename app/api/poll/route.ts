@@ -3,11 +3,11 @@ import { prisma } from '@/lib/prisma'
 import {
   sendDM, sendDMPhoto, replyComment, likeComment,
   viewStories, followUser, likeLatestMedia, likeUserMedias,
-  getStoryEvents, getAccountInfo,
+  getStoryEvents,
 } from '@/lib/instagram/client'
 // Парсинг подписчиков/комментариев/лайкнувших/подписок — через скрейпер-API (замена черновых).
 // Формы ответов 1:1 совпадают со старыми getFollowers/getComments/getLikers/getFollowing.
-import { scrapeFollowers, scrapeFollowing, scrapeComments, scrapeLikers, scraperConfigured } from '@/lib/scraper/hiker'
+import { scrapeFollowers, scrapeFollowing, scrapeComments, scrapeLikers, scraperConfigured, scrapeUserInfo } from '@/lib/scraper/hiker'
 import { resolveEngine } from '@/lib/browser/engine'
 import { runFollowerActionsBrowser } from '@/lib/browser/actions'
 import {
@@ -603,9 +603,14 @@ export async function POST(req: NextRequest) {
     const today = new Date().toISOString().slice(0, 10)
     const histNow = Array.isArray(account.followersHistory) ? (account.followersHistory as any[]) : []
     const haveToday = histNow.length > 0 && histNow[histNow.length - 1].d === today && account.followers != null
-    if (account.sessionData && (isManual || !haveToday)) {
-      try { realFollowers = (await getAccountInfo(account.sessionData as object, account.proxy ?? undefined)).follower_count }
-      catch {}
+    if (isManual || !haveToday) {
+      // Реальное число подписчиков — через скрейпер-API по username (публичные данные,
+      // работают независимо от движка входа). Раньше шло через account_info мёртвого
+      // Python-воркера → всегда падало, поэтому метрика «Подписчики» и спарклайн были пусты.
+      if (scraperConfigured()) {
+        try { realFollowers = (await scrapeUserInfo(account.username)).follower_count }
+        catch {}
+      }
     }
     // Копим историю подписчиков (одна точка в день) для спарклайна прироста
     if (realFollowers !== undefined) {

@@ -14,6 +14,7 @@ export function DraftsStatus({ showBanner = true }: { showBanner?: boolean }) {
   const [total, setTotal] = useState<number | null>(null)
   const [active, setActive] = useState(0)
   const [allowNoDrafts, setAllowNoDrafts] = useState(false)
+  const [parsingSource, setParsingSource] = useState<string>('api')
   const [dismissed, setDismissed] = useState(false)
 
   useEffect(() => {
@@ -25,11 +26,16 @@ export function DraftsStatus({ showBanner = true }: { showBanner?: boolean }) {
       setTotal(drafts.length)
       setActive(drafts.filter((a: any) => a.status === 'ACTIVE').length)
       setAllowNoDrafts(Boolean(s?.allowNoDrafts))
+      setParsingSource(String(s?.parsingSource ?? 'api'))
     }).catch(() => setTotal(0))
   }, [])
 
   if (total === null) return null
-  const banner = showBanner && total === 0 && !allowNoDrafts && !dismissed
+  // По умолчанию парсинг идёт через скрейпер-API — черновые НЕ нужны, и их отсутствие
+  // НИЧЕГО не ломает. Тревожный баннер уместен только в режиме «Только черновые» (parsingSource
+  // === 'drafts'), где API не используется и без черновых событий действительно нет.
+  const draftsRequired = parsingSource === 'drafts'
+  const banner = showBanner && draftsRequired && total === 0 && !allowNoDrafts && !dismissed
 
   return (
     <div className="space-y-3">
@@ -38,6 +44,7 @@ export function DraftsStatus({ showBanner = true }: { showBanner?: boolean }) {
         Черновые аккаунты: <span className="font-semibold text-ink tabular-nums">{total}</span>
         {total > 0 && <>· активно <span className="font-semibold text-ok tabular-nums">{active}</span></>}
         {total > 0 && allowNoDrafts && <span className="text-subt">· «без черновых» включено</span>}
+        {total === 0 && !draftsRequired && <span className="text-subt">· не нужны (парсинг через API)</span>}
       </div>
 
       {banner && (

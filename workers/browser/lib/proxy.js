@@ -129,6 +129,7 @@ export async function checkProxyBrowser(getBrowser, raw) {
   if (!pw) return { ok: false, error: 'пустая строка прокси' }
 
   const browser = await getBrowser()
+  const scheme = pw.server.split('://')[0]
   let context
   try {
     context = await browser.newContext({ proxy: pw })
@@ -137,7 +138,6 @@ export async function checkProxyBrowser(getBrowser, raw) {
     const text = await page.evaluate(() => document.body?.innerText || '')
     let d = {}
     try { d = JSON.parse(text) } catch {}
-    const scheme = pw.server.split('://')[0]
     return {
       ok: true,
       ip: d.ip || null,
@@ -151,7 +151,16 @@ export async function checkProxyBrowser(getBrowser, raw) {
       companyType: d?.company?.type ?? null,
     }
   } catch (e) {
-    return { ok: false, error: String(e?.message || 'проверка не удалась').slice(0, 200) }
+    // resolveProxy выше УЖЕ подтвердил, что прокси НОСИТ трафик (дошёл до ipify).
+    // Значит сбой здесь — недоступность гео-сервиса ipapi.is, а НЕ мёртвый прокси.
+    // Не метим прокси мёртвым: отдаём ok:true (degraded) без гео-деталей, чтобы живой
+    // прокси не считался дохлым из-за хиккапа стороннего сервиса.
+    return {
+      ok: true, degraded: true, scheme,
+      ip: null, country: null, isp: null,
+      datacenter: null, vpn: null, proxy: null, mobile: null,
+      note: 'Прокси работает, но гео-сервис не ответил — детали IP недоступны',
+    }
   } finally {
     await context?.close().catch(() => {})
   }

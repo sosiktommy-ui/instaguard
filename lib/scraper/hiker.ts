@@ -106,6 +106,31 @@ export async function scrapeUserId(username: string): Promise<string> {
   return pk
 }
 
+/**
+ * Профиль аккаунта по username: pk + счётчики (подписчики/подписки/посты).
+ * Тот же эндпоинт, что scrapeUserId (та же цена), но отдаёт и follower_count — используется
+ * для реального числа подписчиков (метрика «Подписчики» + спарклайн прироста). Кеширует pk,
+ * поэтому последующий scrapeFollowers/… в том же цикле не делает повторный платный запрос.
+ */
+export async function scrapeUserInfo(username: string): Promise<{
+  pk: string; username: string; full_name: string
+  follower_count: number; following_count: number; media_count: number
+}> {
+  const key = username.toLowerCase()
+  const data = await req('/v1/user/by/username', { username: key })
+  const src = data?.user ?? data ?? {}
+  const pk = String(src.pk ?? src.id ?? src.user_id ?? '')
+  if (pk) _uidCache.set(key, pk)
+  return {
+    pk,
+    username: String(src.username ?? username),
+    full_name: String(src.full_name ?? ''),
+    follower_count: Number(src.follower_count ?? 0) || 0,
+    following_count: Number(src.following_count ?? 0) || 0,
+    media_count: Number(src.media_count ?? 0) || 0,
+  }
+}
+
 async function recentMediaIds(username: string, count: number): Promise<string[]> {
   const key = username.toLowerCase()
   const cached = _mediaCache.get(key)

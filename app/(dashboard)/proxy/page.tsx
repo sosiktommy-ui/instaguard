@@ -26,6 +26,9 @@ interface MainAccount { id: string; username: string; role: string; status: stri
 type IpInfo = {
   loading?: boolean; ip?: string; country?: string; isp?: string; scheme?: string; error?: string
   datacenter?: boolean | null; vpn?: boolean | null; proxy?: boolean | null; mobile?: boolean | null; flagged?: boolean | null
+  // Не ответил САМ браузерный воркер (не прокси) — это НЕ вердикт «прокси мёртв».
+  // Такой результат не красит прокси в «не отвечает», а откатывается к сохранённому статусу.
+  workerError?: boolean
 }
 
 // Вердикт по флагам: годится прокси для Instagram или нет
@@ -121,9 +124,10 @@ function Proxies() {
     try {
       const r = await fetch('/api/proxies/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proxyId: p.id }) })
       const d = await r.json().catch(() => ({}))
-      if (!r.ok || d.ok === false) setIpCheck((s) => ({ ...s, [p.id]: { error: d.error ?? 'прокси не отвечает' } }))
+      if (d.workerError || r.status === 502) setIpCheck((s) => ({ ...s, [p.id]: { workerError: true, error: d.error ?? 'браузерный воркер не ответил' } }))
+      else if (!r.ok || d.ok === false) setIpCheck((s) => ({ ...s, [p.id]: { error: d.error ?? 'прокси не отвечает' } }))
       else setIpCheck((s) => ({ ...s, [p.id]: { ip: d.ip, country: d.country, isp: d.isp, scheme: d.scheme, datacenter: d.datacenter, vpn: d.vpn, proxy: d.proxy, mobile: d.mobile } }))
-    } catch { setIpCheck((s) => ({ ...s, [p.id]: { error: 'ошибка сети' } })) }
+    } catch { setIpCheck((s) => ({ ...s, [p.id]: { workerError: true, error: 'ошибка сети — статус не изменён' } })) }
   }
 
   // Массовая проверка вставленного списка прокси (по строке на прокси), с ограничением параллельности.
@@ -139,7 +143,9 @@ function Proxies() {
         try {
           const r = await fetch('/api/proxies/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: lines[i] }) })
           const d = await r.json().catch(() => ({}))
-          const val: IpInfo & { src: string } = (!r.ok || d.ok === false)
+          const val: IpInfo & { src: string } = (d.workerError || r.status === 502)
+            ? { src: lines[i], workerError: true, error: d.error ?? 'воркер не ответил' }
+            : (!r.ok || d.ok === false)
             ? { src: lines[i], error: d.error ?? 'не отвечает' }
             : { src: lines[i], ip: d.ip, country: d.country, isp: d.isp, scheme: d.scheme, datacenter: d.datacenter, vpn: d.vpn, proxy: d.proxy, mobile: d.mobile }
           setBulkRes((prev) => prev.map((x, j) => (j === i ? val : x)))
@@ -191,7 +197,9 @@ function Proxies() {
     const live = ipCheck[p.id]
     if (live?.loading) return 'checking'
     if (p.igBlocked) return 'blocked'   // Instagram выжег этот IP — сильнее любой ipapi-репутации
-    const c = live ?? persistedToIpInfo(p)
+    // Сбой САМОГО воркера (не прокси) — не вердикт: откатываемся к сохранённому статусу,
+    // чтобы живой прокси не покраснел из-за хиккапа воркера.
+    const c = (live && !live.workerError) ? live : persistedToIpInfo(p)
     if (!c) return 'unchecked'
     if (c.error) return 'dead'
     if (c.datacenter || c.vpn || c.proxy || c.flagged) return 'flagged'
@@ -209,7 +217,8 @@ function Proxies() {
       flagged:   { cls: 'bg-bad/10 text-bad', text: '🔴 датацентр/VPN' },
       alive:     { cls: 'bg-ok/10 text-ok', text: '✅ живой' },
     }
-    const c = ipCheck[p.id] ?? persistedToIpInfo(p)
+    const liveChip = ipCheck[p.id]
+    const c = (liveChip && !liveChip.workerError) ? liveChip : persistedToIpInfo(p)
     const extra = s === 'alive' && c ? (c.mobile ? ' · мобильный' : c.datacenter === false ? ' · резидент' : '') : ''
     return (
       <span className={cn('inline-flex items-center px-2 py-0.5 rounded-lg text-[11px] font-medium shrink-0', meta[s].cls)}

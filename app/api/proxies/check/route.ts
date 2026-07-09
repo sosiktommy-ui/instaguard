@@ -48,13 +48,13 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json(res)
   } catch (e: any) {
-    // Воркер/прокси не ответил (таймаут, connection refused) — помечаем сохранённый прокси мёртвым.
-    if (savedId) {
-      await prisma.proxy.update({
-        where: { id: savedId },
-        data: { status: 'dead', lastCheckedAt: new Date(), flagged: null },
-      }).catch(() => null)
-    }
-    return NextResponse.json({ error: e?.message ?? 'Не удалось проверить прокси' }, { status: 400 })
+    // Сюда попадаем, ТОЛЬКО если не ответил САМ браузерный воркер (down/таймаут/HTTP-ошибка),
+    // а не прокси: мёртвый прокси воркер отдаёт как {ok:false} (обработано выше). Поэтому НЕ
+    // метим прокси мёртвым — иначе временный сбой воркера гасил бы здоровые прокси (жалоба
+    // «все прокси стали мёртвыми»). Статус в БД оставляем прежним, сообщаем о сбое воркера.
+    return NextResponse.json({
+      error: `Браузерный воркер не ответил — статус прокси не изменён (${e?.message ?? 'нет связи'}).`,
+      workerError: true,
+    }, { status: 502 })
   }
 }

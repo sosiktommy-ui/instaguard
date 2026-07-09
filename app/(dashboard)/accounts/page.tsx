@@ -549,7 +549,7 @@ function Accounts() {
 
   return (
     <div className="space-y-6">
-      <PageHeader icon={Users} color={TONE.brand} title="Основные аккаунты" subtitle="Аккаунты подключены через Instagram API">
+      <PageHeader icon={Users} color={TONE.brand} title="Основные аккаунты" subtitle="Отправляют директ, лайк и подписку — вход и действия через реальный браузер">
         <Button variant="secondary" onClick={handlePoll} disabled={polling}>
           {polling ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
           {polling ? 'Проверка…' : 'Проверить подписчиков'}
