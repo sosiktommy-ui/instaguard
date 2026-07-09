@@ -12,6 +12,7 @@ import { resolveEngine } from '@/lib/browser/engine'
 import { runFollowerActionsBrowser } from '@/lib/browser/actions'
 import {
   browserComment, browserReply, browserFollow, browserLike, browserDM, browserStories,
+  browserStoryEvents,
   parseFollowersBrowser, parseCommentsBrowser, parseLikersBrowser,
 } from '@/lib/browser/client'
 import { pickDraft, markDraftUsed } from '@/lib/browser/draftPool'
@@ -684,11 +685,27 @@ export async function POST(req: NextRequest) {
       // ── Поток стори-событий: ответы на мои сторис + упоминания (сессией основного) ──
       const snapStoryMeta = account.snapshots.find((sn) => sn.type === 'STORY')
       const storyElapsed = snapStoryMeta ? Date.now() - new Date(snapStoryMeta.createdAt).getTime() : Infinity
-      // Стори-события читает legacy-сессия основного (его личка). Для браузерных аккаунтов
-      // без sessionData этот поток пока пропускается (инбокс-чтение через браузер — Фаза 3/4).
-      if (storyTriggers.length && account.sessionData && (isManual || storyElapsed >= STORY_COOLDOWN_MS)) {
-        // Входящие story-события видит только основной аккаунт (это его личка)
-        const { events } = await getStoryEvents(session, proxy, STORY_EVENTS_AMOUNT)
+      // Стори-события видит только ОСНОВНОЙ (это его личка). Браузерные аккаунты читают
+      // инбокс своим Chromium (`/story-inbox`, веб-приватный API), legacy — instagrapi.
+      const useBrowserForStories = engine === 'browser' && Boolean(account.browserState)
+      if (storyTriggers.length && (useBrowserForStories || account.sessionData) && (isManual || storyElapsed >= STORY_COOLDOWN_MS)) {
+        let events: Array<{ pk?: string | number; user_pk: string | number; username: string }> = []
+        if (useBrowserForStories) {
+          try {
+            const r = await browserStoryEvents(
+              { storageState: account.browserState as object, proxy: account.proxy ?? undefined, username: account.username },
+              STORY_EVENTS_AMOUNT,
+            )
+            events = r.events ?? []
+            // Сессия «дозрела» за чтение инбокса — сохраняем обновлённый storageState.
+            if (r.browserState) await prisma.instagramAccount.update({ where: { id: account.id }, data: { browserState: r.browserState as any } }).catch(() => null)
+          } catch (e: any) {
+            await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Стори-инбокс (браузер) не прочитан: ${String(e?.message ?? e).slice(0, 120)}` } }).catch(() => null)
+          }
+        } else {
+          const r = await getStoryEvents(session, proxy, STORY_EVENTS_AMOUNT)
+          events = r.events
+        }
         const hadBaseline = Boolean(snapStoryMeta)
         const knownS = extractKnownPks(snapStoryMeta?.data)
         const { fresh, process } = selectTargets(events, knownS, hadBaseline, (e) => (e.pk ? String(e.pk) : ''))

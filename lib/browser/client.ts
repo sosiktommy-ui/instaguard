@@ -143,6 +143,13 @@ export function browserReply(ctx: Ctx, postUrl: string, text: string) {
   return browserFetch<ActionResult>('/reply-comment', { ...ctx, postUrl, text })
 }
 
+// Стори-события основного (ответы на сторис + упоминания) — читает директ своим браузером.
+// Форма совпадает с legacy getStoryEvents, чтобы poll/route.ts не переписывать.
+export interface BrowserStoryEvent { pk: string; user_pk: string; username: string; text: string; kind: 'reply' | 'mention' }
+export function browserStoryEvents(ctx: Ctx, amount = 10) {
+  return browserFetch<{ events: BrowserStoryEvent[]; browserState?: object }>('/story-inbox', { ...ctx, amount })
+}
+
 // ── Парсинг черновыми (Фаза 3, plan.md §4.4/§5). Формы = lib/scraper/hiker.ts, чтобы
 // poll/route.ts мог переключаться между API/черновыми без переписывания потребителей.
 // ⚠️ ЭКСПЕРИМЕНТАЛЬНО — DOM-парсинг воркера не проверялся на живом Instagram, см.

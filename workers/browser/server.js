@@ -3,12 +3,12 @@
 import express from 'express'
 import { getBrowser, newAccountContext, closeContextSafe } from './lib/browser.js'
 import { attemptLogin, resumeCode, resendCode, loginByState, testSession } from './lib/login.js'
-import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment } from './lib/actions.js'
+import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment, readStoryEvents } from './lib/actions.js'
 import { parseFollowers, parseFollowing, parseComments, parseLikers } from './lib/parse.js'
 import { checkProxyBrowser } from './lib/proxy.js'
 import { toStorageState } from './lib/state.js'
 
-const BUILD = '2026-07-09-browser-8-proxycheck'
+const BUILD = '2026-07-09-browser-9-storyinbox'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -221,6 +221,8 @@ app.post('/like', actionRoute((ctx, b) => likeUser(ctx, { targetUsername: b.targ
 app.post('/stories', actionRoute((ctx, b) => viewStories(ctx, { targetUsername: b.targetUsername, like: b.like })))
 app.post('/comment', actionRoute((ctx, b) => commentPost(ctx, { postUrl: b.postUrl, text: b.text })))
 app.post('/reply-comment', actionRoute((ctx, b) => replyComment(ctx, { postUrl: b.postUrl, text: b.text })))
+// Стори-события основного (ответы на сторис + упоминания) — чтение директа своим браузером.
+app.post('/story-inbox', actionRoute((ctx, b) => readStoryEvents(ctx, { amount: b.amount })))
 
 // ── Парсинг черновыми (Фаза 3, plan.md §4.4/§5) — DOM, без сохранения browserState (чтение) ──
 app.post('/parse/followers', actionRoute((ctx, b) => parseFollowers(ctx, { targetUsername: b.targetUsername, limit: b.limit })))

@@ -132,3 +132,58 @@ export async function commentPost(context, { postUrl, text }) {
 export async function replyComment(context, { postUrl, text }) {
   return commentPost(context, { postUrl, text })
 }
+
+// ── Стори-события из директа (ответы на мои сторис + упоминания) ─────────────────
+// Читаем ВЕБ-приватный API изнутри залогиненной страницы (fetch с cookies + x-ig-app-id) —
+// это надёжнее DOM-скрейпа инбокса (React-вёрстка часто меняется). Форма события совпадает
+// с Python get_story_events: {pk, user_pk, username, text, kind:'reply'|'mention'} — poll
+// не нужно переписывать. См. plan.md §5 (стори всегда сессией ОСНОВНОГО — его личка).
+export async function readStoryEvents(context, { amount = 10 } = {}) {
+  await requireSession(context)
+  const page = await context.newPage()
+  // Нужен origin instagram.com, чтобы fetch унаследовал cookies и прошёл CORS/same-origin.
+  await gotoResilient(page, 'https://www.instagram.com/', { timeout: 30000, retries: 1, backoffMs: [2000] })
+  await jitter(1200, 2200)
+
+  const events = await page.evaluate(async (amount) => {
+    const headers = { 'x-ig-app-id': '936619743392459' }
+    async function getJson(url) {
+      try {
+        const r = await fetch(url, { headers, credentials: 'include' })
+        if (!r.ok) return null
+        return await r.json()
+      } catch { return null }
+    }
+    const inbox = await getJson(`/api/v1/direct_v2/inbox/?visual_message_return_type=unseen&thread_message_limit=10&persistentBadging=true&limit=${amount}`)
+    const pending = await getJson(`/api/v1/direct_v2/pending_inbox/?visual_message_return_type=unseen&thread_message_limit=10&limit=${amount}`)
+    const ownId = String(inbox?.viewer?.pk ?? pending?.viewer?.pk ?? '')
+    const threads = [...(inbox?.inbox?.threads ?? []), ...(pending?.inbox?.threads ?? [])]
+    const out = []
+    const seen = new Set()
+    for (const t of threads) {
+      const unameByPk = {}
+      for (const u of (t.users ?? [])) unameByPk[String(u.pk)] = u.username || ''
+      for (const it of (t.items ?? [])) {
+        const itype = it.item_type || ''
+        const uid = String(it.user_id || '')
+        if (!uid || uid === ownId) continue
+        let kind = null, text = ''
+        if (itype === 'reel_share') {
+          const rs = it.reel_share || {}
+          kind = rs.type === 'mention' ? 'mention' : 'reply'
+          text = rs.text || ''
+        } else if (itype === 'story_share') {
+          kind = 'mention'
+        }
+        if (!kind) continue
+        const pk = String(it.item_id || '')
+        if (pk && seen.has(pk)) continue
+        if (pk) seen.add(pk)
+        out.push({ pk, user_pk: uid, username: unameByPk[uid] || '', text, kind })
+      }
+    }
+    return out
+  }, amount)
+
+  return { events: Array.isArray(events) ? events : [], storageState: await context.storageState() }
+}
