@@ -3,9 +3,15 @@
 // helpers ниже (firstVisible / clickByText) перебирают варианты и берут первый видимый.
 
 export const SEL = {
-  // Форма входа (несколько вариантов — IG меняет вёрстку/aria-label по регионам)
+  // Форма входа (несколько вариантов — IG меняет вёрстку/aria-label по регионам).
+  // name="email"/"pass" — РЕАЛЬНЫЙ вариант формы входа (подтверждено DOM-дампом живого провала
+  // 2026-07-09: {name:"email",type:"text"} + {name:"pass",type:"password"}, БЕЗ aria-label —
+  // ни один из старых селекторов не матчил, поэтому userInput был null И passInput даже не
+  // проверялся (код искал username ПЕРВЫМ и не доходил до password, хотя type="password" его
+  // бы нашёл). Похоже на общую с Facebook вёрстку формы входа Meta, не выдумка/бот-стена.
   loginUsername: [
     'input[name="username"]',
+    'input[name="email"]',
     'input[autocomplete="username"]',
     'input[aria-label*="username" i]',
     'input[aria-label*="Phone number" i]',
@@ -14,6 +20,7 @@ export const SEL = {
   ],
   loginPassword: [
     'input[name="password"]',
+    'input[name="pass"]',
     'input[type="password"]',
     'input[autocomplete="current-password"]',
     'input[aria-label*="Password" i]',

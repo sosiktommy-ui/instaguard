@@ -95,7 +95,7 @@ async function submitCodeForm(page, codeInput) {
 // (logged-out домашняя иногда показывает промежуточный экран), затем повторный заход.
 // Стабильные поля формы входа Instagram — по ним ждём появления (name= держится годами,
 // в отличие от aria-label/placeholder, которые IG крутит по регионам).
-const LOGIN_FORM_CORE = 'input[name="username"], input[name="password"], input[type="password"], input[autocomplete="username"]'
+const LOGIN_FORM_CORE = 'input[name="username"], input[name="email"], input[name="password"], input[name="pass"], input[type="password"], input[autocomplete="username"]'
 
 // Дождаться, пока React отрисует форму (возвращается СРАЗУ, как поле стало видимым).
 // Ключевой фикс: раньше форму искали жёстко 9с обычным поллингом — под headful + медленным
