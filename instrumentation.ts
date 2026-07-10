@@ -1,5 +1,6 @@
 import { mergeStatsMap } from './lib/stats'
 import { runFollowerActionsBrowser } from './lib/browser/actions'
+import { acquireBrowserLock, releaseBrowserLock } from './lib/browserLock'
 
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return
@@ -24,6 +25,9 @@ export async function register() {
     const { PrismaClient } = await import(/* webpackIgnore: true */ '@prisma/client')
     const prisma = new PrismaClient()
     const connection = { url: redisUrl }
+    // Очередь dm-send для ПОВТОРНОЙ постановки отложенных джобов (§4.8: если браузерная сессия
+    // аккаунта сейчас занята poll'ом — джоб не теряем, а откладываем на later).
+    const dmSendQueue = new Queue('dm-send', { connection })
 
     // ── Воркер отправки DM (с задержкой из очереди) ──────────────────────────
     new Worker(
@@ -34,29 +38,51 @@ export async function register() {
         {
           const d = job.data as any
           if (d.engine === 'browser' && d.browserState) {
-            const r = await runFollowerActionsBrowser({
-              browserState: d.browserState, ownerUsername: d.ownerUsername, proxy: d.proxy,
-              locale: d.locale, timezoneId: d.timezoneId,
-              followerUsername: d.followerUsername, text: d.text || undefined, image: d.image || undefined,
-              doFollow: d.doFollow, doLike: d.doLike, viewStories: d.viewStories, storyLike: d.storyLike,
-              fallbackFollow: d.fallbackFollow, fallbackLike: d.fallbackLike,
-            })
-            if (r.browserState) await prisma.instagramAccount.update({ where: { id: d.accountId }, data: { browserState: r.browserState as any } }).catch(() => null)
-            const attempted = Object.keys(r.incFired).length > 0
-            const success = Object.keys(r.incDone).length > 0
-            if (attempted) {
-              const cur = await prisma.triggerRule.findUnique({ where: { id: d.triggerId }, select: { stats: true } }).catch(() => null)
-              const level = success ? (r.errors.length ? 'WARN' : 'SUCCESS') : 'ERROR'
-              const message = success
-                ? `Сработал триггер «${d.triggerName}» → @${d.followerUsername}${r.errors.length ? ` (частично: ${r.errors.join('; ')})` : ''}`
-                : `Триггер «${d.triggerName}» → @${d.followerUsername}: действия не выполнены${r.errors.length ? ` (${r.errors.join('; ')})` : ''}`
-              await Promise.all([
-                prisma.log.create({ data: { accountId: d.accountId, level, message } }),
-                prisma.triggerRule.update({ where: { id: d.triggerId }, data: { fireCount: { increment: 1 }, stats: mergeStatsMap(cur?.stats ?? {}, r.incFired, r.incDone) as any } }),
-              ])
+            // §4.8 — эксклюзив на браузерную сессию аккаунта (сериализация с poll: оба процесса
+            // пишут browserState). Занято (poll обрабатывает этот аккаунт) → джоб не теряем,
+            // а откладываем повторной постановкой с задержкой (до 8 попыток).
+            const held = await acquireBrowserLock(prisma, d.accountId)
+            if (!held) {
+              const deferCount = (d._defer ?? 0) + 1
+              if (deferCount <= 8) {
+                await dmSendQueue.add('send', { ...d, _defer: deferCount }, { delay: 60_000 + Math.floor(Math.random() * 60_000), attempts: 1, removeOnComplete: true, removeOnFail: 100 })
+                console.log(`[dm-worker/browser] ⏳ @${d.followerUsername}: сессия занята (poll) — отложен (попытка ${deferCount})`)
+              } else {
+                await prisma.log.create({ data: { accountId: d.accountId, level: 'WARN', message: `DM @${d.followerUsername}: браузерная сессия долго занята — отложенная отправка отменена` } }).catch(() => null)
+              }
+              return
             }
-            if (r.brk) await prisma.instagramAccount.update({ where: { id: d.accountId }, data: { status: r.brk as any } }).catch(() => null)
-            console.log(`[dm-worker/browser] ${success ? '✓ выполнено' : '⚠ без выполнения'} → @${d.followerUsername}`)
+            try {
+              // §4.8 — берём САМЫЙ свежий browserState из БД: d.browserState снят при постановке
+              // в очередь и мог устареть за время ожидания (иначе действие пойдёт по старой сессии
+              // и затрёт актуальную, накопленную прогревом/другими джобами).
+              const fresh = await prisma.instagramAccount.findUnique({ where: { id: d.accountId }, select: { browserState: true } }).catch(() => null)
+              const r = await runFollowerActionsBrowser({
+                browserState: (fresh?.browserState ?? d.browserState) as any, ownerUsername: d.ownerUsername, proxy: d.proxy,
+                locale: d.locale, timezoneId: d.timezoneId,
+                followerUsername: d.followerUsername, text: d.text || undefined, image: d.image || undefined,
+                doFollow: d.doFollow, doLike: d.doLike, viewStories: d.viewStories, storyLike: d.storyLike,
+                fallbackFollow: d.fallbackFollow, fallbackLike: d.fallbackLike,
+              })
+              if (r.browserState) await prisma.instagramAccount.update({ where: { id: d.accountId }, data: { browserState: r.browserState as any } }).catch(() => null)
+              const attempted = Object.keys(r.incFired).length > 0
+              const success = Object.keys(r.incDone).length > 0
+              if (attempted) {
+                const cur = await prisma.triggerRule.findUnique({ where: { id: d.triggerId }, select: { stats: true } }).catch(() => null)
+                const level = success ? (r.errors.length ? 'WARN' : 'SUCCESS') : 'ERROR'
+                const message = success
+                  ? `Сработал триггер «${d.triggerName}» → @${d.followerUsername}${r.errors.length ? ` (частично: ${r.errors.join('; ')})` : ''}`
+                  : `Триггер «${d.triggerName}» → @${d.followerUsername}: действия не выполнены${r.errors.length ? ` (${r.errors.join('; ')})` : ''}`
+                await Promise.all([
+                  prisma.log.create({ data: { accountId: d.accountId, level, message } }),
+                  prisma.triggerRule.update({ where: { id: d.triggerId }, data: { fireCount: { increment: 1 }, stats: mergeStatsMap(cur?.stats ?? {}, r.incFired, r.incDone) as any } }),
+                ])
+              }
+              if (r.brk) await prisma.instagramAccount.update({ where: { id: d.accountId }, data: { status: r.brk as any } }).catch(() => null)
+              console.log(`[dm-worker/browser] ${success ? '✓ выполнено' : '⚠ без выполнения'} → @${d.followerUsername}`)
+            } finally {
+              await releaseBrowserLock(prisma, d.accountId)
+            }
             return
           }
           // [A1] engine=browser, но нет browserState — НЕ звать мёртвый legacy Python.

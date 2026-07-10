@@ -16,6 +16,7 @@ import {
   parseFollowersBrowser, parseCommentsBrowser, parseLikersBrowser,
 } from '@/lib/browser/client'
 import { pickDraft, markDraftUsed } from '@/lib/browser/draftPool'
+import { acquireBrowserLock, releaseBrowserLock } from '@/lib/browserLock'
 import { mediaPostUrl } from '@/lib/instagram/shortcode'
 import { Queue } from 'bullmq'
 import { loadCounters, consume, warmupFactor, scaleCaps, MAX_NEW_PER_POLL, type Counters, type ActionKind } from '@/lib/limits'
@@ -501,6 +502,7 @@ export async function POST(req: NextRequest) {
     // Дневные счётчики действий (защита от бана)
     const counters: Counters = loadCounters(account.limits)
     // Разнесённые задержки: первое действие скоро, дальше с интервалом ~45–115с
+    let browserLockHeld = false   // §4.8 — держим ли per-account лок браузерной сессии (release в finally)
     let cursor = (isManual ? 8 + Math.random() * 14 : 45 + Math.random() * 75) * 1000
     const nextGap = () => (45 + Math.random() * 70) * 1000
     // Черновых больше нет: парсинг идёт через скрейпер-API (по username основного), а ВСЕ
@@ -730,9 +732,24 @@ export async function POST(req: NextRequest) {
       // затирал бы дозревание сессии, уже накопленное потоками стори/комментов в ЭТОМ же
       // цикле (гонка записи browserState внутри одного поллинга). Финальный апдейт пишет
       // самый свежий liveState один раз.
-      const originalState = account.browserState
+      let originalState = account.browserState
       let liveState: object | undefined = (account.browserState as object) ?? undefined
-      const useBrowserForStories = engine === 'browser' && Boolean(account.browserState)
+      // §4.8 — межпроцессный лок на браузерную сессию (poll ↔ dm-воркер). Берём эксклюзив и
+      // ПЕРЕЧИТЫВАЕМ самый свежий browserState из БД (dm-воркер мог записать после bulk-загрузки
+      // аккаунтов). Не удалось взять (сессию сейчас держит dm-воркер) → откладываем стори/комменты/
+      // прогрев до следующего цикла (события останутся «новыми» — не потеряются), НЕ затирая сессию.
+      let skipBrowserSection = false
+      if (engine === 'browser' && account.browserState) {
+        browserLockHeld = await acquireBrowserLock(prisma, account.id)
+        if (browserLockHeld) {
+          const fresh = await prisma.instagramAccount.findUnique({ where: { id: account.id }, select: { browserState: true } }).catch(() => null)
+          if (fresh?.browserState) { originalState = fresh.browserState; liveState = fresh.browserState as object }
+        } else {
+          skipBrowserSection = true
+          await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: 'Браузерная сессия занята отправкой (dm-воркер) — стори/комменты/прогрев отложены до следующего цикла (§4.8).' } }).catch(() => null)
+        }
+      }
+      const useBrowserForStories = engine === 'browser' && Boolean(account.browserState) && !skipBrowserSection
       if (storyTriggers.length && (useBrowserForStories || account.sessionData) && (isManual || storyElapsed >= STORY_COOLDOWN_MS)) {
         let events: Array<{ pk?: string | number; user_pk: string | number; username: string }> = []
         if (useBrowserForStories) {
@@ -777,7 +794,7 @@ export async function POST(req: NextRequest) {
       // воркера — postUrl строится из media_id (shortcode, lib/instagram/shortcode.ts). Реплай
       // браузером сейчас = обычный коммент к посту, НЕ тред-ответ конкретному комменту (см.
       // workers/browser/lib/actions.js replyComment — тред отложен на Фазу 4).
-      const useBrowserForComments = engine === 'browser' && Boolean(account.browserState)
+      const useBrowserForComments = engine === 'browser' && Boolean(account.browserState) && !skipBrowserSection
       if (commentTriggers.length && (useBrowserForComments || account.sessionData) && (isManual || commentElapsed >= COMMENT_COOLDOWN_MS)) {
         const scraped = await scrape(() => parseCommentsFor(account.username, parsingSource, getDraft, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA))
         if (scraped) {
@@ -977,7 +994,7 @@ export async function POST(req: NextRequest) {
       // Периодический живой заход с ТОГО ЖЕ прокси: сессия дозревает (свежий browserState),
       // аккаунт греется, Instagram видит активность и не «остужает» сессию. Гейт по кулдауну
       // (метка limits.lastWarmup) — не на каждый поллинг. Сбой прогрева НЕ роняет цикл.
-      if (engine === 'browser' && liveState) {
+      if (engine === 'browser' && liveState && !skipBrowserSection) {
         const lastWarmup = Number((account.limits as any)?.lastWarmup || 0)
         if (isManual || Date.now() - lastWarmup >= WARMUP_KEEPALIVE_MS) {
           try {
@@ -1010,6 +1027,9 @@ export async function POST(req: NextRequest) {
         data: { accountId: account.id, level: 'ERROR', message: `Ошибка проверки: ${e.message}${data.status ? ` → аккаунт остановлен (${data.status})` : ''}` },
       })
       summary.push(s)
+    } finally {
+      // §4.8 — освобождаем per-account лок браузерной сессии (если брали), чтобы dm-воркер мог работать.
+      if (browserLockHeld) await releaseBrowserLock(prisma, account.id)
     }
   }
 
