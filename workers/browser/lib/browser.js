@@ -13,9 +13,12 @@ const LAUNCH_ARGS = [
   '--disable-blink-features=AutomationControlled',
   '--no-sandbox',
   '--disable-dev-shm-usage',
-  '--disable-gpu',
   '--disable-features=IsolateOrigins,site-per-process',
-  '--lang=en-US',
+  // WebRTC: не отдавать не-проксированный UDP → реальный IP сервера не утекает в обход прокси
+  // (PLAN-IDEAL §2.9 [D11]). Без этого STUN может светить датацентр-IP даже на чистом резиденте.
+  '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+  // УБРАНЫ: --disable-gpu (давал WebGL=SwiftShader — headless/VM-утечка, §2.1 [D1]) и
+  // --lang=en-US (конфликтовал с гео-локалью контекста, §2.6 [D4]; локаль ставит сам контекст).
 ]
 
 /**
@@ -62,6 +65,8 @@ export async function newAccountContext(opts) {
     timezoneId: fp.timezoneId,
     deviceScaleFactor: fp.deviceScaleFactor,
     serviceWorkers: 'block',
+    // UA-CH platform под заявленную ОС (иначе Chrome шлёт "Linux" → палит сервер, §2.2 [D2]).
+    extraHTTPHeaders: { 'sec-ch-ua-platform': `"${fp.uaPlatform}"` },
   }
   // Автоопределение схемы (http/socks5/socks4) — прокси часто даются без указания
   // протокола, а неверная схема выглядит как «страница не загрузилась» (см. proxy.js).
@@ -70,10 +75,38 @@ export async function newAccountContext(opts) {
   if (storageState) ctxOpts.storageState = storageState
 
   const context = await browser.newContext(ctxOpts)
-  // Доп. маскировка (stealth покрывает большую часть; это подстраховка).
-  await context.addInitScript(() => {
-    try { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }) } catch {}
-  })
+  // Доп. маскировка (stealth покрывает часть; это подстраховка + консистентность с ОС отпечатка).
+  // Все значения — из fingerprint() (стабильны на аккаунт). PLAN-IDEAL §2.1/2.2/2.7.
+  await context.addInitScript((fp) => {
+    const def = (obj, prop, val) => { try { Object.defineProperty(obj, prop, { get: () => val }) } catch {} }
+    def(navigator, 'webdriver', false)
+    def(navigator, 'platform', fp.platform)
+    def(navigator, 'hardwareConcurrency', fp.hardwareConcurrency)
+    def(navigator, 'deviceMemory', fp.deviceMemory)
+    // UA Client Hints → под заявленную ОС (иначе navigator.userAgentData.platform='Linux' — палево).
+    try {
+      const uad = navigator.userAgentData
+      if (uad) {
+        def(uad, 'platform', fp.uaPlatform)
+        const orig = uad.getHighEntropyValues && uad.getHighEntropyValues.bind(uad)
+        if (orig) uad.getHighEntropyValues = (hints) => orig(hints).then((v) => Object.assign({}, v, { platform: fp.uaPlatform }))
+      }
+    } catch {}
+    // WebGL UNMASKED vendor/renderer → правдоподобный GPU вместо SwiftShader (§2.1 [D1]).
+    try {
+      const patch = (proto) => {
+        if (!proto || !proto.getParameter) return
+        const gp = proto.getParameter
+        proto.getParameter = function (p) {
+          if (p === 37445) return fp.glVendor    // UNMASKED_VENDOR_WEBGL
+          if (p === 37446) return fp.glRenderer   // UNMASKED_RENDERER_WEBGL
+          return gp.call(this, p)
+        }
+      }
+      patch(window.WebGLRenderingContext && window.WebGLRenderingContext.prototype)
+      patch(window.WebGL2RenderingContext && window.WebGL2RenderingContext.prototype)
+    } catch {}
+  }, fp)
   context.setDefaultTimeout(45000)
   context.setDefaultNavigationTimeout(60000)
   return context

@@ -68,12 +68,13 @@
 
 ## 2. АНТИДЕТЕКТ / ОТПЕЧАТОК (технические факторы)
 
-### 2.1 [D1] Убрать SwiftShader-утечку (`--disable-gpu`)
+### 2.1 [D1] Убрать SwiftShader-утечку (`--disable-gpu`) — [x] СДЕЛАНО (код; детектор-приёмка позже)
 - Убрать `--disable-gpu` из `LAUNCH_ARGS` (в headful под Xvfb рендер и так софтовый, но флаг усугубляет).
 - Спуфить `UNMASKED_VENDOR_WEBGL`/`UNMASKED_RENDERER_WEBGL` через `addInitScript` под правдоподобный десктоп-GPU, консистентный с ОС отпечатка (напр. Windows-профиль → `ANGLE (Intel, Intel(R) UHD Graphics...)`, Mac → `ANGLE (Apple, Apple M1...)`), стабильно на аккаунт.
 - Проверить на creepjs/fingerprint.com через прокси, что renderer больше не SwiftShader.
+- **[x] Заметка (2026-07-09):** `fingerprint.js` — каждый профиль несёт консистентный с ОС GPU (`glVendor`/`glRenderer`: Intel/NVIDIA для Win, Intel/AMD для Mac), `platform`, `uaPlatform`, `hardwareConcurrency`/`deviceMemory`, Mac DPR=2. `browser.js`: убраны `--disable-gpu`+`--lang` [D1/D4], добавлен `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` [D11], добавлен `sec-ch-ua-platform` в extraHTTPHeaders [D2], `addInitScript` спуфит `navigator.platform/hardwareConcurrency/deviceMemory/webdriver`, `userAgentData.platform`+`getHighEntropyValues`, WebGL `getParameter(37445/37446)`. Всё стабильно на аккаунт (из fingerprint()). `node --check` чист, build `browser-22-antidetect`. ⚠️ **Эмпирическая детектор-приёмка (0 сигналов) — §11.2, нужен прокси + живой прогон;** локально chromium-1140 не докачался (песочница).
 
-### 2.2 [D2] Синхронизировать UA Client Hints с ОС отпечатка (ВЫСШИЙ приоритет)
+### 2.2 [D2] Синхронизировать UA Client Hints с ОС отпечатка (ВЫСШИЙ приоритет) — [x] СДЕЛАНО (код; замер позже)
 - Убедиться (замер), что `navigator.userAgentData.platform` и заголовок `Sec-CH-UA-Platform` = заявленной ОС (Windows/macOS), а НЕ Linux.
 - Если stealth не покрывает — принудительно: `addInitScript` для `userAgentData` + перехват заголовков запросов (route/CDP) для `sec-ch-ua-platform`, `sec-ch-ua`, `sec-ch-ua-mobile`.
 - Это самый явный технический бот-сигнал при десктоп-UA на Linux — закрыть в первую очередь.
@@ -89,20 +90,20 @@
 ### 2.5 [D3] UA-версия из реального Chromium
 - Вычислять мажор Chrome из реальной версии запущенного браузера (`browser.version()` после `launch`), не хардкодить `130` в `fingerprint.js`. Пере-собирать UA-строку профиля с реальным мажором.
 
-### 2.6 [D4] Убрать `--lang=en-US` из args
-- Локаль ставит контекст (`fingerprint.locale`); хардкод `--lang` в launch-args убрать, чтобы не конфликтовал с гео-локалью.
+### 2.6 [D4] Убрать `--lang=en-US` из args — [x] СДЕЛАНО
+- Локаль ставит контекст (`fingerprint.locale`); хардкод `--lang` в launch-args убрать, чтобы не конфликтовал с гео-локалью. **[x] Убран из `LAUNCH_ARGS` (browser.js).**
 
 ### 2.7 [D6][D7][D8][D10] Мелочи
-- [D6] Mac-профилям `deviceScaleFactor=2` (Retina).
-- [D7] Спуфить `hardwareConcurrency` (8) и `deviceMemory` (8) под десктоп.
-- [D8] Расширить пул профилей (10–15) + варьировать шрифты/цветовую глубину.
-- [D10] Убрать ручной `navigator.webdriver` override (stealth уже покрывает) — не критично.
+- [x] [D6] Mac-профилям `deviceScaleFactor=2` (Retina) — СДЕЛАНО (fingerprint.js `dpr:2` для Mac).
+- [x] [D7] Спуфить `hardwareConcurrency`/`deviceMemory` под десктоп — СДЕЛАНО (пары из `HW`, стабильно на аккаунт).
+- [ ] [D8] Расширить пул профилей (10–15) + варьировать шрифты/цветовую глубину — осталось.
+- [x] [D10] `navigator.webdriver` — теперь возвращает `false` (реалистичнее `undefined`), в одном initScript.
 
 ### 2.8 Проверка отпечатка в CI/по кнопке
 - Скрипт-детектор (creepjs / fingerprint.com / bot.sannysoft) прогонять ЧЕРЕЗ прокси на реальном IG-домене; результат («сколько сигналов бота») — в лог/на страницу «Здоровье». Стремимся к 0 красных.
 
 ### 2.9 Дополнительные векторы (обязательно закрыть)
-- **[D11] WebRTC-утечка реального IP (КРИТИЧНО).** WebRTC STUN может раскрыть настоящий IP сервера В ОБХОД прокси → мгновенный флаг «датацентр» даже при чистом резидентном прокси. Отключить не-проксированный UDP (`--force-webrtc-ip-handling-policy=disable_non_proxied_udp`) и/или заглушить `RTCPeerConnection` через initScript. Проверить, что ICE-кандидаты НЕ светят серверный IP.
+- **[x] [D11] WebRTC-утечка реального IP (КРИТИЧНО) — СДЕЛАНО (launch-флаг).** Добавлен `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` в `LAUNCH_ARGS` → не-проксированный UDP не отдаётся, серверный IP не утекает. ⚠️ Подтвердить замером (ICE-кандидаты не светят серверный IP) в §11.2. `RTCPeerConnection` намеренно НЕ убивал (отсутствие тоже сигнал).
 - **[D12] Консистентность гео-связки.** IP-страна = timezone = locale = `Accept-Language` (HTTP-заголовок, не только `navigator.language`) = язык интерфейса — ВСЁ одно гео. Любое расхождение — сигнал.
 - **[D13] Font enumeration** — набор доступных шрифтов под ОС отпечатка (Windows-шрифты для Windows-профиля; на Linux-сервере их нет → поставить/спуфить).
 - **[D14] Permissions/Notification API** — `Notification.permission='default'`, `permissions.query` консистентны с обычным Chrome (headless часто выдаёт `denied` → палево).
@@ -247,7 +248,7 @@
 **Фаза I — выживание (макс. приоритет, без прокси-теста реализуемо):**
 1. [x] [A1] не звать мёртвый Python (гард browserState). — СДЕЛАНО 2026-07-09 (poll-гард + страховки в исполнителях).
 2. [x] §1.6 суточный ритм + §1.8 консервативные лимиты. — СДЕЛАНО 2026-07-09 (`lib/activity.ts` + снижены DAILY_CAPS). §1.7 разброс пауз — частично (выходные есть, ±30%/хвост пауз — в Фазе II).
-3. §2.2 [D2] UA-CH platform + §2.1 [D1] WebGL — технические палева.
+3. [x] §2.2 [D2] UA-CH platform + §2.1 [D1] WebGL + [D4/D6/D7/D10/D11] — СДЕЛАНО 2026-07-09 (fingerprint.js/browser.js, build `browser-22-antidetect`; детектор-приёмка §11.2 позже).
 4. [H1] прогрев черновых.
 
 **Фаза II — поведение до идеала:**
