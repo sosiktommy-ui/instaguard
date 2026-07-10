@@ -88,94 +88,10 @@ export async function register() {
             }
             return
           }
-          // [A1] engine=browser, но нет browserState — НЕ звать мёртвый legacy Python.
-          // Штатно poll не ставит такие джобы в очередь; это страховка от «протёкшего» джоба.
-          if (d.engine === 'browser') {
-            console.warn(`[dm-worker] пропуск @${d.followerUsername}: engine=browser без browserState (нужен вход браузером)`)
-            return
-          }
-        }
-        const {
-          sessionData, accountId, triggerId, triggerName,
-          followerPk, followerUsername, text, image, doFollow, doLike,
-          viewStories, storyLike, proxy,
-          fallbackFollow, fallbackLike,
-          likeSession, likeProxy, storySession, storyProxy,
-        } = job.data
-        // DM/фото/подписка/fallback — основной (sessionData). Лайк/сторис могут выполняться
-        // черновым (Настройки): если для них передана отдельная сессия — используем её, иначе основного.
-        const likeSess  = likeSession ?? sessionData
-        const likePx    = likeProxy ?? proxy
-        const storySess = storySession ?? sessionData
-        const storyPx   = storyProxy ?? proxy
-
-        const workerUrl = process.env.PYTHON_WORKER_URL ?? 'http://localhost:8001'
-        const workerSecret = process.env.PYTHON_WORKER_SECRET ?? ''
-
-        const WORKER_TIMEOUT_MS = Number(process.env.WORKER_TIMEOUT_MS) || 75_000
-        const call = async (path: string, body: object) => {
-          const ctrl = new AbortController()
-          const timer = setTimeout(() => ctrl.abort(), WORKER_TIMEOUT_MS)
-          let res: Response
-          try {
-            res = await fetch(`${workerUrl}${path}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-Worker-Secret': workerSecret },
-              body: JSON.stringify(body),
-              signal: ctrl.signal,
-            })
-          } catch (e: any) {
-            if (e?.name === 'AbortError') throw new Error(`Таймаут ${Math.round(WORKER_TIMEOUT_MS / 1000)}с: воркер не ответил (${path})`)
-            throw e
-          } finally {
-            clearTimeout(timer)
-          }
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({}))
-            throw new Error(err.detail ?? `HTTP ${res.status}`)
-          }
-          return res.json()
-        }
-
-        // Каждое действие независимо: ошибка лайка/подписки не блокирует DM.
-        // Между действиями — случайная пауза (2-8 с) для естественности.
-        const rd = (a: number, b: number) => new Promise<void>((r) => setTimeout(r, Math.round((a + Math.random() * (b - a)) * 1000)))
-        const errors: string[] = []
-        const incFired: Record<string, number> = {}   // «сработало» (попытки)
-        const incDone: Record<string, number> = {}    // «выполнено» (успехи)
-        let dmFired = false, dmSucceeded = false
-        if (text) {
-          dmFired = true
-          try { await call('/send-dm', { sessionData, toUserId: followerPk, text, proxy }); dmSucceeded = true }
-          catch (e: any) {
-            const m = (e.message || '').toLowerCase()
-            // бан/челлендж/лимит → пробрасываем (обработчик failed остановит основной)
-            if (/challenge|checkpoint|verify|feedback_required|spam|blocked|action.?block|429|login_required|please wait|few minutes/.test(m)) throw e
-            // личка закрыта / не доставлено → мягкий контакт основным (follow+лайк, если бюджет выделен)
-            errors.push(`директ закрыт: ${e.message}`)
-            if (fallbackFollow) { incFired.follow = (incFired.follow || 0) + 1; try { await call('/follow-user', { sessionData, userId: followerPk, proxy }); incDone.follow = (incDone.follow || 0) + 1 } catch {} }
-            if (fallbackLike)   { incFired.like = (incFired.like || 0) + 1; try { await rd(2, 5); await call('/like-latest-media', { sessionData, userId: followerPk, proxy }); incDone.like = (incDone.like || 0) + 1 } catch {} }
-          }
-        }
-        if (image) { dmFired = true; await rd(2, 5); try { await call('/send-dm-photo', { sessionData, toUserId: followerPk, image, proxy }); dmSucceeded = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
-        if (dmFired) { incFired.dm = (incFired.dm || 0) + 1; if (dmSucceeded) incDone.dm = (incDone.dm || 0) + 1 }
-        if (doFollow) { incFired.follow = (incFired.follow || 0) + 1; await rd(3, 8); try { await call('/follow-user', { sessionData, userId: followerPk, proxy }); incDone.follow = (incDone.follow || 0) + 1 } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
-        if (doLike)   { incFired.like = (incFired.like || 0) + 1; await rd(4, 10); try { await call('/like-latest-media', { sessionData: likeSess, userId: followerPk, proxy: likePx }); incDone.like = (incDone.like || 0) + 1 } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
-        if (viewStories) { incFired.story = (incFired.story || 0) + 1; await rd(5, 12); try { await call('/user-stories', { sessionData: storySess, userId: followerPk, like: storyLike, proxy: storyPx }); incDone.story = (incDone.story || 0) + 1 } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
-
-        const attempted = Object.keys(incFired).length > 0
-        const success = Object.keys(incDone).length > 0
-        if (attempted) {
-          const cur = await prisma.triggerRule.findUnique({ where: { id: triggerId }, select: { stats: true } }).catch(() => null)
-          const level = success ? (errors.length ? 'WARN' : 'SUCCESS') : 'ERROR'
-          const message = success
-            ? `Сработал триггер «${triggerName}» → @${followerUsername}${errors.length ? ` (частично: ${errors.join('; ')})` : ''}`
-            : `Триггер «${triggerName}» → @${followerUsername}: действия не выполнены${errors.length ? ` (${errors.join('; ')})` : ''}`
-          await Promise.all([
-            prisma.log.create({ data: { accountId, level, message } }),
-            prisma.triggerRule.update({ where: { id: triggerId }, data: { fireCount: { increment: 1 }, stats: mergeStatsMap(cur?.stats ?? {}, incFired, incDone) as any } }),
-          ])
-          console.log(`[dm-worker] ${success ? '✓ выполнено' : '⚠ сработало без выполнения'} → @${followerUsername}`)
+          // Нет browserState — браузером действовать нечем (legacy/Python удалён, Фаза V).
+          // poll такие джобы не ставит; это страховка от «протёкшего» старого джоба.
+          console.warn(`[dm-worker] пропуск @${d.followerUsername}: нет browserState (нужен повторный вход браузером)`)
+          return
         }
       },
       {

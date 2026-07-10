@@ -5,18 +5,16 @@ export type AccountRole = 'RESPONDER' | 'HELPER' | 'BOTH'
 
 /**
  * Сохранить/обновить Instagram-аккаунт после успешного входа.
- * Единая точка для ВСЕХ путей входа (браузер/логин-пароль legacy/куки/ввод кода) —
+ * Единая точка для ВСЕХ путей входа (браузер/куки/ввод кода) —
  * чтобы поля проставлялись одинаково и не разъезжались.
  *
- * Сессия аккаунта может быть либо browserState (Playwright «эмуль», loginMethod 'browser'/'cookies'),
- * либо sessionData (legacy instagrapi). Передавайте то, что получили от воркера.
+ * Сессия аккаунта — всегда browserState (Playwright «эмуль», loginMethod 'browser'/'cookies').
  */
 export async function persistInstagramAccount(opts: {
   userId: string
   username: string
-  sessionData?: object | null
   browserState?: object | null
-  loginMethod?: 'browser' | 'cookies' | 'legacy'
+  loginMethod?: 'browser' | 'cookies'
   proxyUrl: string | null
   proxyId: string | null
   role: AccountRole
@@ -27,14 +25,12 @@ export async function persistInstagramAccount(opts: {
   timezoneId?: string | null
 }) {
   const {
-    userId, username, sessionData, browserState, loginMethod,
+    userId, username, browserState, loginMethod,
     proxyUrl, proxyId, role, sectionId, emailLogin, emailPassword, locale, timezoneId,
   } = opts
 
-  // Формируем набор изменяемых полей: не затираем существующую сессию null-ом,
-  // если передан только один тип (браузер ИЛИ legacy).
+  // Формируем набор изменяемых полей: не затираем существующую сессию null-ом.
   const sessionFields: Record<string, unknown> = {}
-  if (sessionData !== undefined && sessionData !== null) sessionFields.sessionData = sessionData
   if (browserState !== undefined && browserState !== null) sessionFields.browserState = browserState
   if (loginMethod) sessionFields.loginMethod = loginMethod
   if (emailLogin !== undefined) sessionFields.emailLogin = emailLogin
@@ -59,7 +55,7 @@ export async function persistInstagramAccount(opts: {
     : prisma.instagramAccount.create({
         data: {
           userId, username, role, proxy: proxyUrl, proxyId, status: 'ACTIVE', sectionId,
-          loginMethod: loginMethod ?? 'legacy',
+          loginMethod: loginMethod ?? 'browser',
           ...sessionFields,
         },
       })

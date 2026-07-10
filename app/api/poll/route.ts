@@ -1,14 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import {
-  sendDM, sendDMPhoto, replyComment, likeComment,
-  viewStories, followUser, likeLatestMedia, likeUserMedias,
-  getStoryEvents,
-} from '@/lib/instagram/client'
 // Парсинг подписчиков/комментариев/лайкнувших/подписок — через скрейпер-API (замена черновых).
 // Формы ответов 1:1 совпадают со старыми getFollowers/getComments/getLikers/getFollowing.
 import { scrapeFollowers, scrapeFollowing, scrapeComments, scrapeLikers, scraperConfigured, scrapeUserInfo } from '@/lib/scraper/hiker'
-import { resolveEngine } from '@/lib/browser/engine'
 import { runFollowerActionsBrowser } from '@/lib/browser/actions'
 import {
   browserComment, browserReply, browserFollow, browserLike, browserDM, browserStories,
@@ -284,51 +278,8 @@ async function runFollowerActionsInline(job: any) {
     if (r.brk) await prisma.instagramAccount.update({ where: { id: job.accountId }, data: { status: r.brk } }).catch(() => null)
     return
   }
-  // [A1] Страховка: engine=browser, но нет browserState — НЕ звать мёртвый legacy Python.
-  // Штатно poll уже отсеивает такие аккаунты (гард в цикле), сюда доходить не должно.
-  if (job.engine === 'browser') return
-
-  const session = job.sessionData as object          // основной: DM/фото/подписка/fallback
-  const proxy = job.proxy ?? undefined
-  // Лайк/сторис могут выполняться черновым (Настройки) — если сессия не передана, берём основного.
-  const likeSession = (job.likeSession as object) ?? session
-  const likeProxy   = job.likeProxy ?? proxy
-  const storySession = (job.storySession as object) ?? session
-  const storyProxy   = job.storyProxy ?? proxy
-  const errors: string[] = []
-  const incFired: Record<string, number> = {}
-  const incDone: Record<string, number> = {}
-  let dmFired = false, dmSucceeded = false
-
-  if (job.text) {
-    dmFired = true
-    try { await sendDM(session, job.followerPk, job.text, proxy); dmSucceeded = true }
-    catch (e: any) {
-      if (statusFromError(e.message)) throw e  // бан/челлендж/лимит → пусть внешний catch остановит основной
-      // Личка закрыта → мягкий контакт основным (follow+лайк, только если бюджет был выделен)
-      errors.push(`директ закрыт: ${e.message}`)
-      if (job.fallbackFollow) { incFired.follow = (incFired.follow || 0) + 1; try { await followUser(session, job.followerPk, proxy); incDone.follow = (incDone.follow || 0) + 1 } catch {} }
-      if (job.fallbackLike)   { incFired.like = (incFired.like || 0) + 1; try { await randDelay(2, 5); await likeLatestMedia(session, job.followerPk, proxy); incDone.like = (incDone.like || 0) + 1 } catch {} }
-    }
-  }
-  if (job.image) { dmFired = true; await randDelay(2, 5); try { await sendDMPhoto(session, job.followerPk, job.image, proxy); dmSucceeded = true } catch (e: any) { errors.push(`фото: ${e.message}`) } }
-  if (dmFired) { incFired.dm = (incFired.dm || 0) + 1; if (dmSucceeded) incDone.dm = (incDone.dm || 0) + 1 }
-  if (job.doFollow) { incFired.follow = (incFired.follow || 0) + 1; await randDelay(3, 7); try { await followUser(session, job.followerPk, proxy); incDone.follow = (incDone.follow || 0) + 1 } catch (e: any) { errors.push(`подписка: ${e.message}`) } }
-  if (job.doLike)   { incFired.like = (incFired.like || 0) + 1; await randDelay(3, 8); try { await likeLatestMedia(likeSession, job.followerPk, likeProxy); incDone.like = (incDone.like || 0) + 1 } catch (e: any) { errors.push(`лайк: ${e.message}`) } }
-  if (job.viewStories) { incFired.story = (incFired.story || 0) + 1; await randDelay(4, 10); try { await viewStories(storySession, job.followerPk, job.storyLike, storyProxy); incDone.story = (incDone.story || 0) + 1 } catch (e: any) { errors.push(`сторис: ${e.message}`) } }
-
-  const attempted = Object.keys(incFired).length > 0
-  const success = Object.keys(incDone).length > 0
-  if (attempted) {
-    const level = success ? (errors.length ? 'WARN' : 'SUCCESS') : 'ERROR'
-    const message = success
-      ? `Сработал триггер «${job.triggerName}» → @${job.followerUsername}${errors.length ? ` (частично: ${errors.join('; ')})` : ''}`
-      : `Триггер «${job.triggerName}» → @${job.followerUsername}: действия не выполнены${errors.length ? ` (${errors.join('; ')})` : ''}`
-    await Promise.all([
-      prisma.log.create({ data: { accountId: job.accountId, level, message } }),
-      prisma.triggerRule.update({ where: { id: job.triggerId }, data: { fireCount: { increment: 1 }, stats: await mergeStats(job.triggerId, incFired, incDone) } }),
-    ])
-  }
+  // Нет browserState — действовать браузером нечем. poll отсеивает такие аккаунты гардом [A1]
+  // (метит CHALLENGE «нужен повторный вход»), сюда доходить не должно; на всякий случай — no-op.
 }
 
 interface PollSummary {
@@ -414,7 +365,10 @@ export async function POST(req: NextRequest) {
   // Прокси обязателен, если владелец НЕ включил «Работать без прокси» (по умолчанию — обязателен).
   const proxyRequired = (userId: string) => !allowNoProxy.get(userId)
 
-  // Основные, которым реально есть что делать (есть сессия — legacy ИЛИ браузерная — и активные триггеры)
+  // Основные, у которых есть какая-либо сессия и активные триггеры. sessionData тут — только
+  // «мост» для старых legacy-аккаунтов (instagrapi удалён, Фаза V): они пройдут этот фильтр и
+  // ниже попадут под [A1]-гард, где честно пометятся CHALLENGE (нужен вход браузером), а не
+  // молча пропадут. Реально действовать может лишь аккаунт с browserState.
   const workingMains = accounts.filter((a) => (a.sessionData || a.browserState) && a.triggersAsResponder.length)
 
   // Скрейпер-API нужен владельцам с parsingSource 'api' или 'drafts_then_api' (там он фолбэк).
@@ -465,17 +419,11 @@ export async function POST(req: NextRequest) {
     const likeTriggers = triggers.filter((t) => t.triggerType === 'NEW_LIKE')
     const storyTriggers = triggers.filter((t) => t.triggerType === 'STORY_MENTION')
 
-    const session = account.sessionData as object
     const proxy = account.proxy ?? undefined
-    // Движок действий владельца: всегда браузер (кроме недеплоя воркера — см. lib/browser/engine.ts).
-    const engine = await resolveEngine(account.userId)
-    // [A1] Браузерный движок БЕЗ браузерной сессии → НЕ падать в мёртвый legacy Python.
-    // Без browserState аккаунт физически не может действовать браузером (DM/лайк/подписка/сторис).
-    // Раньше такие действия уходили в legacy-ветку → 404 к мёртвому Python → errorCount копился и
-    // аккаунт ложно метился PAUSED «как бан». Теперь честно: метим CHALLENGE (нужен повторный вход
-    // браузером) и пропускаем — без вызова Python и без инкремента ошибок. Аккаунт с browserState
-    // (нормальный браузерный вход) сюда не попадает. Все в этом цикле — status ACTIVE (where-фильтр).
-    if (engine === 'browser' && !account.browserState) {
+    // [A1] Браузерный аккаунт БЕЗ браузерной сессии не может действовать (DM/лайк/подписка/сторис).
+    // Честно метим CHALLENGE (нужен повторный вход браузером) и пропускаем — без инкремента ошибок.
+    // Аккаунт с browserState (нормальный браузерный вход) сюда не попадает; все тут — status ACTIVE.
+    if (!account.browserState) {
       await prisma.instagramAccount.update({ where: { id: account.id }, data: { status: 'CHALLENGE' } }).catch(() => null)
       await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: '⚠️ Нет браузерной сессии — переподключите аккаунт (вход браузером). Действия не выполняются, пока нет browserState.' } }).catch(() => null)
       summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, triggersFound: triggers.length, totalComments: 0, newComments: 0, commentActions: 0, skipped: 'no-browser-session' })
@@ -508,12 +456,6 @@ export async function POST(req: NextRequest) {
     let browserLockHeld = false   // §4.8 — держим ли per-account лок браузерной сессии (release в finally)
     let cursor = (isManual ? 8 + Math.random() * 14 : 45 + Math.random() * 75) * 1000
     const nextGap = () => (45 + Math.random() * 70) * 1000
-    // Черновых больше нет: парсинг идёт через скрейпер-API (по username основного), а ВСЕ
-    // действия (директ/лайк/подписка/сторис/коммент) выполняет сам ОСНОВНОЙ своей сессией.
-    const likeSess:  object = session
-    const likePx:    string | undefined = proxy
-    const storySess: object = session
-    const storyPx:   string | undefined = proxy
 
     // Прогрев: дневные лимиты ужимаются по возрасту основного аккаунта (свежий не срывается на полную).
     const warm = warmupFactor(account.createdAt)
@@ -609,8 +551,8 @@ export async function POST(req: NextRequest) {
           }
 
           const job = {
-            sessionData: account.sessionData, browserState: account.browserState,
-            engine, ownerUsername: account.username, accountId: account.id,
+            browserState: account.browserState,
+            engine: 'browser' as const, ownerUsername: account.username, accountId: account.id,
             locale: account.locale ?? undefined, timezoneId: account.timezoneId ?? undefined,
             triggerId: trigger.id, triggerName: trigger.name,
             followerPk: target.pk, followerUsername: target.username,
@@ -618,8 +560,7 @@ export async function POST(req: NextRequest) {
             doFollow: willFollow, doLike: willLike,
             viewStories: willStory, storyLike: Boolean(storiesAct?.like), proxy: account.proxy,
             fallbackFollow, fallbackLike,
-            // Все действия выполняет основной своей сессией (sessionData) — воркер/inline это и берут
-            // по умолчанию. Отдельные likeSession/storySession больше не нужны (черновых нет).
+            // Все действия выполняет основной своей браузерной сессией (browserState).
           }
 
           if (dmQueue) {
@@ -748,7 +689,7 @@ export async function POST(req: NextRequest) {
       // аккаунтов). Не удалось взять (сессию сейчас держит dm-воркер) → откладываем стори/комменты/
       // прогрев до следующего цикла (события останутся «новыми» — не потеряются), НЕ затирая сессию.
       let skipBrowserSection = false
-      if (engine === 'browser' && account.browserState) {
+      if (account.browserState) {
         browserLockHeld = await acquireBrowserLock(prisma, account.id)
         if (browserLockHeld) {
           const fresh = await prisma.instagramAccount.findUnique({ where: { id: account.id }, select: { browserState: true } }).catch(() => null)
@@ -758,25 +699,20 @@ export async function POST(req: NextRequest) {
           await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: 'Браузерная сессия занята отправкой (dm-воркер) — стори/комменты/прогрев отложены до следующего цикла (§4.8).' } }).catch(() => null)
         }
       }
-      const useBrowserForStories = engine === 'browser' && Boolean(account.browserState) && !skipBrowserSection
-      if (storyTriggers.length && (useBrowserForStories || account.sessionData) && (isManual || storyElapsed >= STORY_COOLDOWN_MS)) {
+      const useBrowserForStories = Boolean(account.browserState) && !skipBrowserSection
+      if (storyTriggers.length && useBrowserForStories && (isManual || storyElapsed >= STORY_COOLDOWN_MS)) {
         let events: Array<{ pk?: string | number; user_pk: string | number; username: string }> = []
-        if (useBrowserForStories) {
-          try {
-            const r = await browserStoryEvents(
-              { storageState: account.browserState as object, proxy: account.proxy ?? undefined, username: account.username, locale: account.locale ?? undefined, timezoneId: account.timezoneId ?? undefined },
-              STORY_EVENTS_AMOUNT,
-            )
-            events = r.events ?? []
-            // Сессия «дозрела» за чтение инбокса — сохраняем обновлённый storageState
-            // и переносим в liveState (§4.8), чтобы прогрев/финальный апдейт не откатили.
-            if (r.browserState) { liveState = r.browserState; await prisma.instagramAccount.update({ where: { id: account.id }, data: { browserState: r.browserState as any } }).catch(() => null) }
-          } catch (e: any) {
-            await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Стори-инбокс (браузер) не прочитан: ${String(e?.message ?? e).slice(0, 120)}` } }).catch(() => null)
-          }
-        } else {
-          const r = await getStoryEvents(session, proxy, STORY_EVENTS_AMOUNT)
-          events = r.events
+        try {
+          const r = await browserStoryEvents(
+            { storageState: account.browserState as object, proxy: account.proxy ?? undefined, username: account.username, locale: account.locale ?? undefined, timezoneId: account.timezoneId ?? undefined },
+            STORY_EVENTS_AMOUNT,
+          )
+          events = r.events ?? []
+          // Сессия «дозрела» за чтение инбокса — сохраняем обновлённый storageState
+          // и переносим в liveState (§4.8), чтобы прогрев/финальный апдейт не откатили.
+          if (r.browserState) { liveState = r.browserState; await prisma.instagramAccount.update({ where: { id: account.id }, data: { browserState: r.browserState as any } }).catch(() => null) }
+        } catch (e: any) {
+          await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Стори-инбокс (браузер) не прочитан: ${String(e?.message ?? e).slice(0, 120)}` } }).catch(() => null)
         }
         const hadBaseline = Boolean(snapStoryMeta)
         const knownS = extractKnownPks(snapStoryMeta?.data)
@@ -803,8 +739,8 @@ export async function POST(req: NextRequest) {
       // воркера — postUrl строится из media_id (shortcode, lib/instagram/shortcode.ts). Реплай
       // браузером сейчас = обычный коммент к посту, НЕ тред-ответ конкретному комменту (см.
       // workers/browser/lib/actions.js replyComment — тред отложен на Фазу 4).
-      const useBrowserForComments = engine === 'browser' && Boolean(account.browserState) && !skipBrowserSection
-      if (commentTriggers.length && (useBrowserForComments || account.sessionData) && (isManual || commentElapsed >= COMMENT_COOLDOWN_MS)) {
+      const useBrowserForComments = Boolean(account.browserState) && !skipBrowserSection
+      if (commentTriggers.length && useBrowserForComments && (isManual || commentElapsed >= COMMENT_COOLDOWN_MS)) {
         const scraped = await scrape(() => parseCommentsFor(account.username, parsingSource, getDraft, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA))
         if (scraped) {
         const { comments } = scraped
@@ -867,8 +803,7 @@ export async function POST(req: NextRequest) {
                 if (gateText && use('comment')) {
                   incFired.comment = (incFired.comment || 0) + 1
                   try {
-                    if (useBrowserForComments) { const r = await browserReply(bctx(), postUrl, gateText); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не отправлен') }
-                    else await replyComment(session, c.media_id, gateText, c.pk, proxy)
+                    { const r = await browserReply(bctx(), postUrl, gateText); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не отправлен') }
                     fired = true; incDone.comment = (incDone.comment || 0) + 1
                   }
                   catch (e: any) { errors.push(`коммент-приглашение: ${e.message}`) }
@@ -885,8 +820,7 @@ export async function POST(req: NextRequest) {
                   incFired.comment = (incFired.comment || 0) + 1
                   const pick = variants[Math.floor(Math.random() * variants.length)].replace(/\{\{username\}\}/gi, c.username)
                   try {
-                    if (useBrowserForComments) { const r = await browserReply(bctx(), postUrl, pick); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не отправлен') }
-                    else await replyComment(session, c.media_id, pick, c.pk, proxy)
+                    { const r = await browserReply(bctx(), postUrl, pick); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не отправлен') }
                     fired = true; incDone.comment = (incDone.comment || 0) + 1
                   }
                   catch (e: any) { errors.push(`ответ: ${e.message}`) }
@@ -896,8 +830,7 @@ export async function POST(req: NextRequest) {
                 incFired.like = (incFired.like || 0) + 1
                 await randDelay(2, 5)
                 try {
-                  if (useBrowserForComments) { const r = await browserLike(bctx(), c.username, COMMENT_LIKE_POSTS); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не лайкнуто') }
-                  else await likeUserMedias(likeSess, c.user_pk, COMMENT_LIKE_POSTS, likePx)
+                  { const r = await browserLike(bctx(), c.username, COMMENT_LIKE_POSTS); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не лайкнуто') }
                   fired = true; incDone.like = (incDone.like || 0) + 1
                 }
                 catch (e: any) { errors.push(`лайк постов: ${e.message}`) }
@@ -905,20 +838,15 @@ export async function POST(req: NextRequest) {
               if (likeCmt && use('like')) {
                 incFired.like = (incFired.like || 0) + 1
                 await randDelay(1, 3)
-                if (useBrowserForComments) {
-                  // Лайк конкретного коммента браузером не реализован (нужен клик по коммент-нити — Фаза 4)
-                  errors.push('лайк коммента: не поддерживается браузерным движком')
-                } else {
-                  try { await likeComment(likeSess, c.pk, likePx); fired = true; incDone.like = (incDone.like || 0) + 1 }
-                  catch (e: any) { errors.push(`лайк коммента: ${e.message}`) }
-                }
+                // LIKE_COMMENT — legacy-тип (лайк КОНКРЕТНОГО коммента): браузерным движком не
+                // реализован (нужен клик по коммент-нити, [A4]). Новые кампании его не создают.
+                errors.push('лайк коммента: не поддерживается (legacy-тип, используйте «Лайк постов»)')
               }
               if (doFollow && use('follow')) {
                 incFired.follow = (incFired.follow || 0) + 1
                 await randDelay(2, 5)
                 try {
-                  if (useBrowserForComments) { const r = await browserFollow(bctx(), c.username); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не подписан') }
-                  else await followUser(session, c.user_pk, proxy)
+                  { const r = await browserFollow(bctx(), c.username); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не подписан') }
                   fired = true; incDone.follow = (incDone.follow || 0) + 1
                 }
                 catch (e: any) { errors.push(`подписка: ${e.message}`) }
@@ -931,44 +859,27 @@ export async function POST(req: NextRequest) {
                   const lt = String(dm.link.text ?? '').replace(/\{\{username\}\}/gi, c.username)
                   text += `\n\n${lt ? lt + ': ' : ''}${dm.link.url}`
                 }
-                if (useBrowserForComments) {
-                  try {
-                    const r = await browserDM(bctx(), c.username, text.trim(), dm.image?.enabled ? dm.image.url : undefined)
-                    if (r.browserState) cState = r.browserState
-                    if (r.ok) { fired = true; incDone.dm = (incDone.dm || 0) + 1 }
-                    else if (r.closed) {
-                      errors.push(`директ закрыт: ${r.error ?? 'closed'}`)
-                      if (use('follow')) { incFired.follow = (incFired.follow || 0) + 1; try { const fr = await browserFollow(bctx(), c.username); if (fr.browserState) cState = fr.browserState; if (fr.ok) { fired = true; incDone.follow = (incDone.follow || 0) + 1 } } catch {} }
-                      if (use('like'))   { incFired.like = (incFired.like || 0) + 1; await randDelay(2, 5); try { const lr = await browserLike(bctx(), c.username, 1); if (lr.browserState) cState = lr.browserState; if (lr.ok) { fired = true; incDone.like = (incDone.like || 0) + 1 } } catch {} }
-                    } else {
-                      throw new Error(r.error ?? 'не отправлен')
-                    }
-                  } catch (e: any) {
-                    if (statusFromError(e.message)) throw e
-                    errors.push(`директ: ${e.message}`)
+                try {
+                  const r = await browserDM(bctx(), c.username, text.trim(), dm.image?.enabled ? dm.image.url : undefined)
+                  if (r.browserState) cState = r.browserState
+                  if (r.ok) { fired = true; incDone.dm = (incDone.dm || 0) + 1 }
+                  else if (r.closed) {
+                    errors.push(`директ закрыт: ${r.error ?? 'closed'}`)
+                    if (use('follow')) { incFired.follow = (incFired.follow || 0) + 1; try { const fr = await browserFollow(bctx(), c.username); if (fr.browserState) cState = fr.browserState; if (fr.ok) { fired = true; incDone.follow = (incDone.follow || 0) + 1 } } catch {} }
+                    if (use('like'))   { incFired.like = (incFired.like || 0) + 1; await randDelay(2, 5); try { const lr = await browserLike(bctx(), c.username, 1); if (lr.browserState) cState = lr.browserState; if (lr.ok) { fired = true; incDone.like = (incDone.like || 0) + 1 } } catch {} }
+                  } else {
+                    throw new Error(r.error ?? 'не отправлен')
                   }
-                } else {
-                  try {
-                    await sendDM(session, c.user_pk, text.trim(), proxy); fired = true; incDone.dm = (incDone.dm || 0) + 1
-                    if (dm.image?.enabled && dm.image.url) {
-                      await randDelay(2, 4)
-                      await sendDMPhoto(session, c.user_pk, dm.image.url, proxy)
-                    }
-                  } catch (e: any) {
-                    if (statusFromError(e.message)) throw e  // бан/челлендж/лимит → основной на паузу
-                    // Личка закрыта / не доставлено → мягкий контакт основным (follow + лайк)
-                    errors.push(`директ закрыт: ${e.message}`)
-                    if (use('follow')) { incFired.follow = (incFired.follow || 0) + 1; try { await followUser(session, c.user_pk, proxy); fired = true; incDone.follow = (incDone.follow || 0) + 1 } catch {} }
-                    if (use('like'))   { incFired.like = (incFired.like || 0) + 1; await randDelay(2, 5); try { await likeLatestMedia(session, c.user_pk, proxy); fired = true; incDone.like = (incDone.like || 0) + 1 } catch {} }
-                  }
+                } catch (e: any) {
+                  if (statusFromError(e.message)) throw e
+                  errors.push(`директ: ${e.message}`)
                 }
               }
               if (storiesAct && use('story')) {
                 incFired.story = (incFired.story || 0) + 1
                 await randDelay(3, 7)
                 try {
-                  if (useBrowserForComments) { const r = await browserStories(bctx(), c.username, Boolean(storiesAct.like)); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не просмотрено') }
-                  else await viewStories(storySess, c.user_pk, Boolean(storiesAct.like), storyPx)
+                  const r = await browserStories(bctx(), c.username, Boolean(storiesAct.like)); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не просмотрено')
                   fired = true; incDone.story = (incDone.story || 0) + 1
                 }
                 catch (e: any) { errors.push(`сторис: ${e.message}`) }
@@ -1008,7 +919,7 @@ export async function POST(req: NextRequest) {
       // Периодический живой заход с ТОГО ЖЕ прокси: сессия дозревает (свежий browserState),
       // аккаунт греется, Instagram видит активность и не «остужает» сессию. Гейт по кулдауну
       // (метка limits.lastWarmup) — не на каждый поллинг. Сбой прогрева НЕ роняет цикл.
-      if (engine === 'browser' && liveState && !skipBrowserSection) {
+      if (liveState && !skipBrowserSection) {
         const lastWarmup = Number((account.limits as any)?.lastWarmup || 0)
         if (isManual || Date.now() - lastWarmup >= WARMUP_KEEPALIVE_MS) {
           try {
@@ -1052,8 +963,7 @@ export async function POST(req: NextRequest) {
   // → частые ре-логины → выше риск бана черновых. Отдельный проход: активные HELPER с
   // browserState, прогрев которых устарел (WARMUP_KEEPALIVE_MS), в «дневном» окне их таймзоны.
   // [H2]: если сессия не подтвердилась при прогреве — метим CHALLENGE (нужен повторный вход).
-  const globalEngine = await resolveEngine('')
-  if (globalEngine === 'browser') {
+  {
     const helpers = await prisma.instagramAccount.findMany({
       where: { role: 'HELPER', status: 'ACTIVE', ...scope },
       select: { id: true, userId: true, username: true, browserState: true, proxy: true, locale: true, timezoneId: true, limits: true },

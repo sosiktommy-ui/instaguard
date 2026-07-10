@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { loginByCredentials, loginByCookies } from '@/lib/instagram/client'
 import { browserLogin, browserLoginByCookies } from '@/lib/browser/client'
-import { resolveEngine } from '@/lib/browser/engine'
 import { getCurrentUser } from '@/lib/auth'
-import { normalizeCookies } from '@/lib/cookies'
 import { pickPoolProxy, isInstagramBlacklist, isAccountNotFound, markProxyBlocked } from '@/lib/proxyPool'
 import { persistInstagramAccount } from '@/lib/accountPersist'
 import { localeForCountry } from '@/lib/browser/geo'
@@ -46,9 +43,6 @@ export async function POST(req: NextRequest) {
     const user = await getCurrentUser()
     if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 })
 
-    // Движок: браузер (эмуль), если воркер задеплоен и не выбран legacy; иначе legacy instagrapi.
-    const engine = await resolveEngine(user.id)
-
     let validSection: string | null = null
     if (section) {
       const sec = await prisma.section.findFirst({ where: { id: section, userId: user.id }, select: { id: true } })
@@ -88,9 +82,8 @@ export async function POST(req: NextRequest) {
     const geo = localeForCountry(proxyCountry)
     // ──────────────────────────────────────────────────────────────────────────
 
-    let sessionData: object | null = null
     let browserState: object | null = null
-    let loginMethod: 'browser' | 'cookies' | 'legacy' = 'legacy'
+    let loginMethod: 'browser' | 'cookies' = 'browser'
     let clean = ''
     // Почта из мобильной строки (для persist, если в теле запроса её не передали).
     let mobileEmail: string | null = null
@@ -102,26 +95,18 @@ export async function POST(req: NextRequest) {
       const creds = parseMobileSessionCreds(cookieStr)
       if (creds?.emailLogin) { mobileEmail = creds.emailLogin; mobileEmailPass = creds.emailPassword ?? null }
       try {
-        if (engine === 'browser') {
-          // Браузер: принимаем storageState/куки как есть — воркер соберёт и проверит сессию.
-          const result = await browserLoginByCookies(cookieStr, proxyUrl || undefined, geo?.locale, geo?.timezoneId)
-          browserState = result.browserState
-          clean = result.username
-          loginMethod = 'cookies'
-        } else {
-          const norm = normalizeCookies(cookieStr)
-          if (norm.error) return NextResponse.json({ error: norm.error }, { status: 400 })
-          const result = await loginByCookies(norm.cookies, proxyUrl || undefined)
-          sessionData = result.sessionData
-          clean = result.username
-        }
+        // Браузер: принимаем storageState/куки как есть — воркер соберёт и проверит сессию.
+        const result = await browserLoginByCookies(cookieStr, proxyUrl || undefined, geo?.locale, geo?.timezoneId)
+        browserState = result.browserState
+        clean = result.username
+        loginMethod = 'cookies'
       } catch (cookieErr: any) {
         const cookieRaw = String(cookieErr?.message ?? 'Ошибка авторизации через куки')
         // ── ФОЛБЭК: куки отклонены → пробуем вход ЛОГИНОМ/ПАРОЛЕМ из той же строки ──
         // (по запросу пользователя). Работает только на браузерном движке и если в мобильной
         // сессии есть логин:пароль. Гео-проблему это не лечит (тот же прокси), но покрывает
         // случай «сессия устарела, а пароль живой».
-        if (engine === 'browser' && creds?.login && creds?.password) {
+        if (creds?.login && creds?.password) {
           try {
             const result = await browserLogin(creds.login, creds.password, proxyUrl || undefined, creds.totp, geo?.locale, geo?.timezoneId)
             if (result.needsCheckpoint || result.needs2fa || !result.browserState) {
@@ -162,50 +147,25 @@ export async function POST(req: NextRequest) {
       clean = username.replace(/^@/, '').trim().toLowerCase()
       const totp = typeof totpSecret === 'string' && totpSecret.trim() ? totpSecret.trim() : undefined
       try {
-        if (engine === 'browser') {
-          const result = await browserLogin(clean, password, proxyUrl || undefined, totp, geo?.locale, geo?.timezoneId)
-          if (result.needsCheckpoint || result.needs2fa || !result.browserState) {
-            const is2fa = Boolean(result.needs2fa)
-            return NextResponse.json({
-              needsChallenge: is2fa ? undefined : true,
-              needs2fa: is2fa || undefined,
-              stepName: is2fa ? '2fa' : 'challenge',
-              sentTo: result.channel ?? null,
-              username: result.username ?? clean,
-              proxyId,
-              role: accountRole,
-              sectionId: validSection,
-              error: is2fa
-                ? 'Instagram запросил код двухфакторной аутентификации (2FA).'
-                : 'Instagram требует подтверждение (challenge). Введите код из письма/SMS.',
-            }, { status: 202 })
-          }
-          browserState = result.browserState
-          loginMethod = 'browser'
-        } else {
-          const result = await loginByCredentials(clean, password, proxyUrl || undefined, totp)
-          if (result.needsChallenge || result.needs2fa || !result.sessionData) {
-            const is2fa = Boolean(result.needs2fa)
-            return NextResponse.json({
-              needsChallenge: is2fa ? undefined : true,
-              needs2fa: is2fa || undefined,
-              stepName: result.stepName,
-              contact: result.contact,
-              methods: result.methods,
-              sentTo: result.sentTo,
-              method: result.method,
-              phone: result.phone,
-              username: result.username ?? clean,
-              proxyId,
-              role: accountRole,
-              sectionId: validSection,
-              error: is2fa
-                ? 'Instagram запросил код двухфакторной аутентификации (2FA).'
-                : 'Instagram требует подтверждение (challenge). Введите код из письма/SMS.',
-            }, { status: 202 })
-          }
-          sessionData = result.sessionData
+        const result = await browserLogin(clean, password, proxyUrl || undefined, totp, geo?.locale, geo?.timezoneId)
+        if (result.needsCheckpoint || result.needs2fa || !result.browserState) {
+          const is2fa = Boolean(result.needs2fa)
+          return NextResponse.json({
+            needsChallenge: is2fa ? undefined : true,
+            needs2fa: is2fa || undefined,
+            stepName: is2fa ? '2fa' : 'challenge',
+            sentTo: result.channel ?? null,
+            username: result.username ?? clean,
+            proxyId,
+            role: accountRole,
+            sectionId: validSection,
+            error: is2fa
+              ? 'Instagram запросил код двухфакторной аутентификации (2FA).'
+              : 'Instagram требует подтверждение (challenge). Введите код из письма/SMS.',
+          }, { status: 202 })
         }
+        browserState = result.browserState
+        loginMethod = 'browser'
       } catch (e: any) {
         const raw = String(e?.message ?? 'Неверный логин или пароль')
         const notFound = isAccountNotFound(raw)
@@ -225,7 +185,6 @@ export async function POST(req: NextRequest) {
     const account = await persistInstagramAccount({
       userId: user.id,
       username: clean,
-      sessionData,
       browserState,
       loginMethod,
       proxyUrl,

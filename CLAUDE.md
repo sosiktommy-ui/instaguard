@@ -11,10 +11,12 @@
 | Frontend + Backend | Next.js 15.5.19 (App Router) |
 | БД | PostgreSQL (Railway) + Prisma 5.22.0 |
 | Очереди | BullMQ + Redis (Railway) |
-| Instagram-автоматизация | Python FastAPI + instagrapi 2.18.3 (отдельный Railway-сервис) |
+| Instagram-автоматизация | Браузерный воркер (Node + Playwright + stealth, headful/Xvfb) — отдельный Railway-сервис `workers/browser/`. Вход и действия через реальный Chromium. Парсинг публичных данных — HikerAPI. |
 | Состояние клиента | Zustand с persist (`instaguard-store` v4) |
 | Стили | Tailwind CSS, Apple/iOS дизайн-система |
-| Деплой | Railway (Nixpacks для Next.js, Dockerfile для Python) |
+| Деплой | Railway (Nixpacks для Next.js, Dockerfile для браузерного воркера) |
+
+> **Legacy удалён (Фаза V, 2026-07-10):** Python FastAPI + instagrapi (`workers/python/`) полностью удалён — приватный API банил вход, ради ухода от него весь проект перешёл на браузерный движок. Ниже описана актуальная браузерная архитектура.
 
 ---
 
@@ -27,18 +29,19 @@
 - `app/page.tsx` — удалён, чтобы не конфликтовал с `(dashboard)/page.tsx`
 - `(dashboard)/page.tsx` делает `redirect('/triggers')`
 
-### Python воркер (`workers/python/`)
-- Отдельный Railway-сервис, Root Directory = `workers/python`
-- Запускается через Dockerfile
-- URL передаётся в Next.js через `PYTHON_WORKER_URL`
-- Секрет: переменная `WORKER_SECRET` в Python-сервисе; `PYTHON_WORKER_SECRET` в Next.js-сервисе
+### Браузерный воркер (`workers/browser/`)
+- Отдельный Railway-сервис, Root Directory = `workers/browser` (Node + Playwright + stealth, Docker)
+- Headful под Xvfb в проде (headless = бот-стена Instagram без формы входа)
+- URL передаётся в Next.js через `BROWSER_WORKER_URL` (обёртка — `lib/browser/client.ts`)
+- Секрет: `BROWSER_WORKER_SECRET` (Next.js) ↔ соответствующий секрет воркера
+- Эндпоинты: `/health`, `/login`, `/login/checkpoint`, `/login/resend`, `/login/cookies`, `/session/test`, `/session/warmup`, `/dm`, `/follow`, `/like`, `/stories`, `/comment`, `/reply-comment`, `/parse/*`, `/check-proxy`, `/pick-proxy`, `/story-inbox`
 
 ### API роуты (Next.js)
 | Роут | Метод | Назначение |
 |---|---|---|
 | `/api/auth/login` | POST | Логин пользователя (bcrypt + JWT-сессия) |
 | `/api/accounts` | GET | Список Instagram-аккаунтов из БД |
-| `/api/accounts/auth` | POST | Авторизация Instagram-аккаунта через Python-воркер |
+| `/api/accounts/auth` | POST | Авторизация Instagram-аккаунта через браузерный воркер |
 | `/api/accounts/[id]` | DELETE, PATCH | Удаление / обновление аккаунта |
 | `/api/poll` | POST | Проверить подписчиков, отправить DM по триггерам |
 | `/api/logs` | GET | Последние 80 логов из БД |
@@ -46,14 +49,6 @@
 | `/api/triggers` | POST | Создать триггеры (по одному на аккаунт) |
 | `/api/triggers/[id]` | DELETE | Удалить триггер |
 | `/api/triggers/[id]` | PATCH | Переключить isActive |
-
-### Python воркер — эндпоинты (`workers/python/worker.py`)
-| Эндпоинт | Назначение |
-|---|---|
-| `POST /login` | Логин instagrapi, возвращает `sessionData` |
-| `POST /test-session` | Проверка что сессия жива |
-| `POST /followers` | Получить подписчиков аккаунта |
-| `POST /send-dm` | Отправить DM пользователю |
 
 ---
 
@@ -64,13 +59,17 @@
 DATABASE_URL          # PostgreSQL (Railway)
 REDIS_URL             # Redis (Railway)
 JWT_SECRET            # Секрет для JWT-сессий
-PYTHON_WORKER_URL     # URL Python-воркера (публичный домен Railway)
-PYTHON_WORKER_SECRET  # Секрет для авторизации запросов к воркеру
+BROWSER_WORKER_URL    # URL браузерного воркера (публичный домен Railway)
+BROWSER_WORKER_SECRET # Секрет для авторизации запросов к воркеру
+HIKER_API_KEY         # Ключ HikerAPI (парсинг публичных данных)
+ENCRYPTION_KEY        # 32 байта — шифрование emailPassword at-rest (AES-256-GCM)
+# PYTHON_WORKER_URL / PYTHON_WORKER_SECRET — БОЛЬШЕ НЕ НУЖНЫ (legacy удалён, Фаза V)
 ```
 
-### Python-воркер
+### Браузерный воркер (`workers/browser/`)
 ```
-WORKER_SECRET         # Секрет (должен совпадать с PYTHON_WORKER_SECRET в Next.js)
+BROWSER_WORKER_SECRET # Секрет (должен совпадать с одноимённым в Next.js)
+BROWSER_CONCURRENCY   # Лимит параллельных браузерных контекстов
 PORT                  # Устанавливается Railway автоматически
 ```
 
@@ -91,7 +90,10 @@ app/
 
 lib/
   store.ts                       — Zustand-стор (типы Account, Trigger, LogEntry и др.)
-  instagram/client.ts            — обёртка над Python-воркером (workerFetch)
+  browser/client.ts              — обёртка над браузерным воркером (browserFetch)
+  browser/actions.ts             — исполнитель браузерных действий (DM/лайк/подписка/сторис)
+  scraper/hiker.ts               — клиент HikerAPI (парсинг публичных данных)
+  accountPersist.ts              — единая точка сохранения аккаунта после входа
   prisma.ts                      — singleton Prisma-клиент
 
 components/
@@ -100,12 +102,14 @@ components/
   ui/button.tsx                  — кнопка (variants: primary/secondary/ghost/danger)
   ui/Tilt.tsx                    — 3D-карточка
 
-workers/python/
-  worker.py                      — FastAPI-приложение
-  instagrapi_client.py           — обёртки над instagrapi
-  requirements.txt               — instagrapi==2.18.3, Pillow, fastapi, uvicorn
-  Dockerfile                     — python:3.11-slim, слушает $PORT
-  railway.json                   — builder: DOCKERFILE
+workers/browser/                 — браузерный воркер (Node + Playwright + stealth)
+  server.js                      — HTTP-эндпоинты (см. таблицу выше), runLimited/lifecycle
+  lib/browser.js                 — getBrowser (single-flight), контексты, headful/Xvfb
+  lib/login.js · lib/actions.js  — вход (форма/challenge/2FA/куки) · действия (DM/лайк/…)
+  lib/parse.js · lib/proxy.js    — парсинг DOM черновыми · проверка/подбор прокси
+  lib/fingerprint.js · human.js  — стабильный отпечаток устройства · человекоподобный ввод
+  Dockerfile · start.sh          — Playwright-образ + xvfb; start.sh поднимает Xvfb :99
+  railway.json                   — startCommand: sh start.sh
 
 prisma/schema.prisma             — схема БД
 nixpacks.toml                    — конфиг Railway для Next.js (Node 20, PORT=3000)
@@ -115,6 +119,21 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 ---
 
 ## История изменений
+
+### 2026-07-10 (✅ Фаза V — legacy instagrapi удалён полностью)
+
+#### refactor(эмуль Фаза V): полное удаление legacy-движка (Python instagrapi + все sessionData-ветки)
+
+⚠️ **Только Next.js + удаление Python-сервиса. Миграций НЕТ** (LEGACY-поля БД оставлены как no-op колонки — их удаление потребовало бы миграции, а логика их больше не читает). **Действие для пользователя:** Python-сервис (`impreza`/instagrapi) на Railway больше не вызывается ничем — его можно остановить/удалить в дашборде Railway; переменные `PYTHON_WORKER_URL`/`PYTHON_WORKER_SECRET` в Next.js-сервисе больше не нужны.
+
+По запросу «легаси мёртвый — снести полностью». `resolveEngine` в проде уже всегда возвращал `'browser'` (при заданном `BROWSER_WORKER_URL`) → legacy-код был мёртвым грузом И мнимой страховкой (instagrapi-действия сами по себе нерабочи — приватный API банит, ради ухода от которого весь переход и затевался). Удалено:
+
+- **Файлы:** `workers/python/*` (5 файлов — Dockerfile/worker.py/instagrapi_client.py/requirements.txt/railway.json), `lib/instagram/client.ts` (обёртка над Python), `app/api/worker-health/route.ts` (диагностика Python-воркера, в UI не использовалась), `lib/browser/engine.ts` (шим `resolveEngine`, ставший константой).
+- **Свёрнуты до браузера все `if (engine==='browser') {…} else {legacy}`:** `app/api/poll/route.ts` (поток подписчиков/стори/комментов + прогрев — убрана локальная `engine`-переменная, в job-payload оставлен литерал `engine:'browser' as const` для контракта с consumer'ами; consumer-проверки `job.engine==='browser'`/`d.engine==='browser'` оставлены как defensive на данные джоба), `instrumentation.ts` (dm-воркер), `app/api/accounts/auth/route.ts`, `.../auth/challenge/route.ts`, `.../auth/resend/route.ts`, `app/api/accounts/import/route.ts`, `lib/accountPersist.ts` (тип `loginMethod` без `'legacy'`, дефолт `'browser'`, убран параметр `sessionData`).
+- **Честный `hasSession`** (`app/api/accounts/route.ts`): теперь `Boolean(browserState)` — старый legacy `sessionData` больше НЕ даёт возможности действовать, поэтому такой аккаунт честно показывается «без сессии» (нужен вход браузером). `sessionData` убран из select.
+- **Мост миграции сохранён:** старый аккаунт с одним `sessionData` (без `browserState`) проходит фильтры poll (369/388 намеренно оставляют `a.sessionData || a.browserState`) и попадает под **[A1]-гард** — метится `CHALLENGE` + лог «переподключите аккаунт (вход браузером)», а НЕ пропадает молча. Это ровно тот единственный реальный риск удаления (аккаунты, входившие до перехода), закрытый gracefully.
+
+Проверено: `tsc --noEmit` чист по боевому коду (падают ТОЛЬКО паузные auth-файлы `app/api/auth/{google,register}/*` — ОЖИДАЕМО, schema-поля не закоммичены); живых ссылок на `worker-health`/`PYTHON_WORKER`/`lib/instagram/client` не осталось (`instagrapi` встречается лишь в комментариях-пояснениях форм ответов). Отмечено `[x]` в `PLAN-IDEAL.md` §7 [L1][L2] и Фаза V (11). **✅ ФАЗА V ЗАВЕРШЕНА.** Дальше — Фазы VI–VII (тесты §10 / приёмочный аудит §11), требующие живого резидентного прокси.
 
 ### 2026-07-10 (Фаза IV — масштаб текущего уровня)
 
@@ -1158,5 +1177,7 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 - **НИКОГДА** не писать `telegram/tg/тг/телеграм` в запросах воркеров
 - BullMQ: передавать `{ url: REDIS_URL }` строкой, не IORedis-инстансом
 - Next.js 15 async params: `params` — это `Promise<{ id: string }>`, нужен `await`
-- Railway Root Directory для Python-воркера: устанавливается через "Add Root Directory" в Source → Settings
-- После смены пароля Instagram: нужно подтвердить вход через приложение перед логином через instagrapi
+- Railway Root Directory для браузерного воркера: `workers/browser` (Source → Settings → Add Root Directory)
+- Браузерный воркер обязан быть **headful** (Xvfb в проде) — headless отдаёт бот-стену Instagram без формы входа
+- **Legacy instagrapi удалён (Фаза V):** движок входа/действий всегда браузерный (`resolveEngine` удалён). Не возвращать Python-путь. Аккаунт без `browserState` → нужен повторный вход браузером (метится CHALLENGE)
+- **tsc/сборку гнать в изолированном `git worktree` от HEAD:** рабочая директория содержит незакоммиченную паузную auth-работу (`app/api/auth/{google,register}/*`, `lib/email.ts`, `GoogleButton`), которая ссылается на schema-поля вне HEAD → локальный `tsc` в рабочей директории падает на этих файлах ОЖИДАЕМО (боевой код при этом чист)

@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { loginByCookies, loginByCredentials } from '@/lib/instagram/client'
 import { browserLogin, browserLoginByCookies } from '@/lib/browser/client'
-import { resolveEngine } from '@/lib/browser/engine'
 import { getCurrentUser } from '@/lib/auth'
-import { normalizeCookies } from '@/lib/cookies'
 import { pickPoolProxy, markProxyBlocked } from '@/lib/proxyPool'
 import { persistInstagramAccount } from '@/lib/accountPersist'
 import { localeForCountry } from '@/lib/browser/geo'
@@ -97,8 +94,6 @@ export async function POST(req: NextRequest) {
     const settings = await prisma.userSettings.findUnique({ where: { userId: user.id } })
     const allowNoProxy = settings?.allowNoProxy ?? false
     const cap = settings?.accountsPerProxy ?? 3
-    // Движок: браузер (эмуль), если воркер задеплоен и не выбран legacy; иначе legacy instagrapi.
-    const engine = await resolveEngine(user.id)
 
     let validSection: string | null = null
     if (typeof sectionId === 'string' && sectionId) {
@@ -133,9 +128,8 @@ export async function POST(req: NextRequest) {
         const geo = localeForCountry(px.country)
 
         try {
-          let sessionData: object | null = null
           let browserState: object | null = null
-          let loginMethod: 'browser' | 'cookies' | 'legacy' = 'legacy'
+          let loginMethod: 'browser' | 'cookies' = 'browser'
           let clean = ''
           let emLogin: string | null = null
           let emPass: string | null = null
@@ -161,48 +155,26 @@ export async function POST(req: NextRequest) {
             }
             clean = login.replace(/^@/, '').trim().toLowerCase()
 
-            if (engine === 'browser') {
-              const r = await withTimeout(browserLogin(login, password, px.url || undefined, totp, geo?.locale, geo?.timezoneId), LOGIN_TIMEOUT_MS, 'вход браузером')
-              // Код (checkpoint «новое устройство» или 2FA без ключа) — строку дожмёт модалка (роут /auth/challenge).
-              if (r.needsCheckpoint || r.needs2fa) {
-                results.push({
-                  line: i + 1, ok: false, needsCode: true, username: clean,
-                  codeMode: r.needs2fa ? '2fa' : 'challenge',
-                  proxyId: px.id, role: accountRole,
-                  sentTo: r.channel ?? null, method: null,
-                  reason: r.needs2fa
-                    ? 'Instagram запросил код 2FA — введите код ниже'
-                    : `Instagram отправил код подтверждения ${r.channel === 'sms' ? 'по SMS' : 'на почту'} — введите код ниже`,
-                })
-                break
-              }
-              if (!r.browserState) {
-                results.push({ line: i + 1, ok: false, reason: 'Вход не завершён (браузер не вернул сессию) — попробуйте добавить вручную' })
-                break
-              }
-              browserState = r.browserState
-              loginMethod = 'browser'
-            } else {
-              const r = await withTimeout(loginByCredentials(login, password, px.url || undefined, totp), LOGIN_TIMEOUT_MS, 'вход по паролю')
-              // Пароль/гео/прокси прошли — аккаунт валиден, воркер уже отправил код. Строку дожмёт модалка.
-              if (r.needs2fa || r.needsChallenge) {
-                results.push({
-                  line: i + 1, ok: false, needsCode: true, username: clean,
-                  codeMode: r.needs2fa ? '2fa' : 'challenge',
-                  proxyId: px.id, role: accountRole,
-                  sentTo: r.sentTo ?? null, method: r.method ?? null,
-                  reason: r.needs2fa
-                    ? `Instagram запросил код 2FA (${r.method === 'app' ? 'приложение-аутентификатор' : 'SMS'}) — введите код ниже`
-                    : `Instagram отправил код подтверждения ${r.sentTo === 'sms' ? 'по SMS' : 'на почту'} — введите код ниже`,
-                })
-                break
-              }
-              if (!r.sessionData) {
-                results.push({ line: i + 1, ok: false, reason: 'Вход не завершён (Instagram не вернул сессию) — попробуйте добавить вручную' })
-                break
-              }
-              sessionData = r.sessionData
+            const r = await withTimeout(browserLogin(login, password, px.url || undefined, totp, geo?.locale, geo?.timezoneId), LOGIN_TIMEOUT_MS, 'вход браузером')
+            // Код (checkpoint «новое устройство» или 2FA без ключа) — строку дожмёт модалка (роут /auth/challenge).
+            if (r.needsCheckpoint || r.needs2fa) {
+              results.push({
+                line: i + 1, ok: false, needsCode: true, username: clean,
+                codeMode: r.needs2fa ? '2fa' : 'challenge',
+                proxyId: px.id, role: accountRole,
+                sentTo: r.channel ?? null, method: null,
+                reason: r.needs2fa
+                  ? 'Instagram запросил код 2FA — введите код ниже'
+                  : `Instagram отправил код подтверждения ${r.channel === 'sms' ? 'по SMS' : 'на почту'} — введите код ниже`,
+              })
+              break
             }
+            if (!r.browserState) {
+              results.push({ line: i + 1, ok: false, reason: 'Вход не завершён (браузер не вернул сессию) — попробуйте добавить вручную' })
+              break
+            }
+            browserState = r.browserState
+            loginMethod = 'browser'
           } else {
             // Куки/сессия. Формат «логин|пароль|UA|куки»: куки — с 4-й части; иначе вся строка = куки.
             // Полная мобильная сессия с Bearer — передаём ВСЮ строку как есть.
@@ -213,24 +185,16 @@ export async function POST(req: NextRequest) {
               const parts = line.split('|')
               cookiesRaw = parts.length >= 4 ? parts.slice(3).join('|') : line
             }
-            if (engine === 'browser') {
-              // Браузер: отдаём строку как есть — воркер соберёт storageState/куки и проверит сессию.
-              const res = await withTimeout(browserLoginByCookies(cookiesRaw, px.url || undefined, geo?.locale, geo?.timezoneId), LOGIN_TIMEOUT_MS, 'вход по кукам (браузер)')
-              browserState = res.browserState
-              clean = res.username.replace(/^@/, '').trim().toLowerCase()
-              loginMethod = 'cookies'
-            } else {
-              const norm = normalizeCookies(cookiesRaw)
-              if (norm.error) { results.push({ line: i + 1, ok: false, reason: norm.error }); break }
-              const res = await withTimeout(loginByCookies(norm.cookies, px.url || undefined), LOGIN_TIMEOUT_MS, 'вход по кукам')
-              sessionData = res.sessionData
-              clean = res.username.replace(/^@/, '').trim().toLowerCase()
-            }
+            // Браузер: отдаём строку как есть — воркер соберёт storageState/куки и проверит сессию.
+            const res = await withTimeout(browserLoginByCookies(cookiesRaw, px.url || undefined, geo?.locale, geo?.timezoneId), LOGIN_TIMEOUT_MS, 'вход по кукам (браузер)')
+            browserState = res.browserState
+            clean = res.username.replace(/^@/, '').trim().toLowerCase()
+            loginMethod = 'cookies'
           }
 
           await persistInstagramAccount({
             userId: user.id, username: clean,
-            sessionData, browserState, loginMethod,
+            browserState, loginMethod,
             proxyUrl: px.url, proxyId: px.id, role: accountRole, sectionId: validSection,
             emailLogin: emLogin, emailPassword: emPass,
             locale: geo?.locale, timezoneId: geo?.timezoneId,
