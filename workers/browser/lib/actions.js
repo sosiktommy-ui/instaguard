@@ -2,10 +2,11 @@
 // storageState (сессия «дозревает»). Работают по username (навигация /{username}/).
 import { SEL } from './selectors.js'
 import { firstVisible, clickByText, pageHasText, hasSessionCookie, gotoResilient } from './browser.js'
-import { humanType, jitter, idleMouse } from './human.js'
+import { humanType, jitter, idleMouse, preActionBrowse } from './human.js'
 
 async function openProfile(context, username) {
   const page = await context.newPage()
+  await preActionBrowse(page) // §1.2: полистать ленту перед заходом к цели — действие не «вхолодную»
   await gotoResilient(page, `https://www.instagram.com/${username}/`, { timeout: 30000, retries: 1, backoffMs: [2000] })
   await jitter(1200, 2500)
   await idleMouse(page)
@@ -85,6 +86,7 @@ export async function likeUser(context, { targetUsername, count = 1 }) {
 export async function viewStories(context, { targetUsername, like = false }) {
   await requireSession(context)
   const page = await context.newPage()
+  await preActionBrowse(page) // §1.2: прогрев ленты перед просмотром сторис
   await gotoResilient(page, `https://www.instagram.com/stories/${targetUsername}/`, { timeout: 30000, retries: 1, backoffMs: [2000] })
   await jitter(1500, 2800)
 
@@ -113,6 +115,7 @@ export async function viewStories(context, { targetUsername, like = false }) {
 export async function commentPost(context, { postUrl, text }) {
   await requireSession(context)
   const page = await context.newPage()
+  await preActionBrowse(page) // §1.2: прогрев ленты перед комментарием
   await gotoResilient(page, postUrl, { timeout: 30000, retries: 1, backoffMs: [2000] })
   await jitter(1200, 2400)
 

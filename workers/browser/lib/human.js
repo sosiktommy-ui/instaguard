@@ -74,15 +74,57 @@ export async function idleMouse(page) {
   } catch {}
 }
 
-// «Прогрев»: зайти на главную и проскроллить пару экранов перед первым действием сессии.
-export async function warmupFeed(page) {
+// Пауза «чтения поста» — 1.5–6 с (plan.md §1.2).
+const readingPause = () => jitter(1500, 6000)
+
+/**
+ * Полистать ленту как человек (plan.md §1.2): зайти на `/`, N скроллов с паузами «чтения»,
+ * редкие движения мыши, иногда заглянуть в 1 случайный профиль из ленты и вернуться.
+ * Всё в try/catch и ограничено — прогрев НИКОГДА не должен ронять вход/действие.
+ * ⚠️ Лайки в ленте здесь НЕ делаем: у воркера нет доступа к дневным счётчикам, неучтённый
+ * лайк пробьёт лимит (урок ban-safety). Лайк/сторис-пик в ленте — на §1.1 (визит с бюджетом).
+ */
+async function browseFeed(page, { scrollsMin = 2, scrollsMax = 5, visitProfile = false } = {}) {
   try {
-    await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 45000 })
-    await jitter(1500, 3000)
+    const onFeed = /^https:\/\/www\.instagram\.com\/?(\?.*)?$/.test(page.url())
+    if (!onFeed) {
+      await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {})
+    }
+    await jitter(1200, 2600)
     await idleMouse(page)
-    for (let i = 0; i < 2; i++) {
-      await page.mouse.wheel(0, 500 + Math.random() * 700)
-      await jitter(800, 1800)
+    const n = scrollsMin + rnd(Math.max(1, scrollsMax - scrollsMin + 1))
+    for (let i = 0; i < n; i++) {
+      await page.mouse.wheel(0, 400 + rnd(700))
+      await readingPause()
+      if (Math.random() < 0.3) await idleMouse(page)
+    }
+    // Иногда заглянуть в случайный профиль из ленты и вернуться (органический браузинг).
+    if (visitProfile && Math.random() < 0.4) {
+      const hrefs = await page.locator('main a[href^="/"]').evaluateAll((els) =>
+        Array.from(new Set(els.map((e) => e.getAttribute('href'))))
+          .filter((h) => h && /^\/[^/]+\/$/.test(h) && !['/explore/', '/reels/', '/direct/', '/p/'].some((s) => h.startsWith(s)))
+      ).catch(() => [])
+      if (hrefs.length) {
+        const h = hrefs[rnd(Math.min(hrefs.length, 5))]
+        await page.goto(`https://www.instagram.com${h}`, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
+        await jitter(1500, 3500)
+        await page.mouse.wheel(0, 300 + rnd(500))
+        await readingPause()
+        await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
+        await jitter(1000, 2200)
+      }
     }
   } catch {}
+}
+
+// Богатый «прогрев» — при входе / в начале визита (§1.1) / keep-alive. Заходит в профиль из ленты.
+export async function warmupFeed(page) {
+  await browseFeed(page, { scrollsMin: 2, scrollsMax: 5, visitProfile: true })
+}
+
+// Лёгкий браузинг ПЕРЕД действием (plan.md §1.2): пара скроллов ленты, чтобы действие не шло
+// «вхолодную» (login→сразу директ = робот). Быстрее warmupFeed — вызывается перед каждым
+// действием, пока нет полноценных сессий-визитов (§1.1 их консолидирует в один прогрев).
+export async function preActionBrowse(page) {
+  await browseFeed(page, { scrollsMin: 1, scrollsMax: 3, visitProfile: false })
 }
