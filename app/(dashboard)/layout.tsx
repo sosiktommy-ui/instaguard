@@ -1,13 +1,11 @@
 import TopNav from '@/components/common/TopNav'
 import SimulationProvider from '@/components/common/SimulationProvider'
-import VantaBackground from '@/components/common/VantaBackground'
 import { BreadcrumbProvider } from '@/lib/breadcrumbs'
 import { OnboardingTour } from '@/components/common/OnboardingTour'
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="relative min-h-screen bg-canvas">
-      <VantaBackground />
       <SimulationProvider />
       <BreadcrumbProvider>
         <div className="relative z-10">
