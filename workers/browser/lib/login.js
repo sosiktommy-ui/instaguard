@@ -4,7 +4,7 @@
 import crypto from 'crypto'
 import { SEL, URLS } from './selectors.js'
 import { firstVisible, firstVisibleAnyFrame, clickByText, pageHasText, hasSessionCookie, gotoResilient } from './browser.js'
-import { humanType, jitter, idleMouse, warmupFeed } from './human.js'
+import { humanType, jitter, idleMouse, warmupFeed, humanClick } from './human.js'
 
 const LOGIN_URL = 'https://www.instagram.com/accounts/login/'
 
@@ -217,7 +217,7 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
   await jitter(500, 1100)
 
   const submit = await firstVisible(page, SEL.loginSubmit, 5000)
-  if (submit) await submit.click({ delay: 80 })
+  if (submit) await humanClick(page, submit)   // §1.3: человеческий подвод курсора к «Войти»
   else await passInput.press('Enter')
 
   // Ждём исход до ~28с.

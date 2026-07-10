@@ -62,6 +62,49 @@ export async function humanType(locator, text) {
   }
 }
 
+// ── Человеческая траектория мыши (plan.md §1.3) ──────────────────────────────
+// Подвести курсор к точке НЕ телепортом, а кривой: 2–4 промежуточные точки с лёгким
+// отклонением от прямой и разной скоростью (steps). Старт — из случайной позиции.
+export async function curveMoveTo(page, x, y) {
+  try {
+    const vp = page.viewportSize() || { width: 1280, height: 800 }
+    let cx = rnd(vp.width), cy = rnd(vp.height)
+    const pts = 2 + rnd(3)
+    for (let i = 1; i <= pts; i++) {
+      const t = i / pts
+      const nx = cx + (x - cx) * t + (Math.random() - 0.5) * 40   // дрожь/кривизна
+      const ny = cy + (y - cy) * t + (Math.random() - 0.5) * 40
+      await page.mouse.move(nx, ny, { steps: 6 + rnd(14) })
+      await jitter(30, 120)
+    }
+    await page.mouse.move(x, y, { steps: 4 + rnd(8) })            // финальное наведение точно к цели
+  } catch {}
+}
+
+// Клик по локатору по-человечески: доскроллить к элементу, навести курсор кривой к точке
+// СО СМЕЩЕНИЕМ от центра (человек не бьёт идеально в центр), затем клик мышью по координатам.
+// Фолбэк на обычный locator.click(), если bounding box недоступен. Возвращает true/false.
+export async function humanClick(page, locator, { timeout = 8000 } = {}) {
+  try {
+    const el = locator.first()
+    await el.waitFor({ state: 'visible', timeout }).catch(() => {})
+    await el.scrollIntoViewIfNeeded().catch(() => {})
+    const box = await el.boundingBox().catch(() => null)
+    if (box && box.width > 0 && box.height > 0) {
+      const x = box.x + box.width * (0.3 + Math.random() * 0.4)
+      const y = box.y + box.height * (0.3 + Math.random() * 0.4)
+      await curveMoveTo(page, x, y)
+      await jitter(60, 200)
+      await page.mouse.click(x, y, { delay: 40 + rnd(90) })
+      return true
+    }
+    await el.click({ delay: 50 + rnd(80) })
+    return true
+  } catch {
+    return false
+  }
+}
+
 // Лёгкие движения мыши + случайный скролл, чтобы не выглядеть как бот при старте.
 export async function idleMouse(page) {
   try {

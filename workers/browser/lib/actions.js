@@ -2,7 +2,7 @@
 // storageState (сессия «дозревает»). Работают по username (навигация /{username}/).
 import { SEL } from './selectors.js'
 import { firstVisible, clickByText, pageHasText, hasSessionCookie, gotoResilient } from './browser.js'
-import { humanType, jitter, idleMouse, preActionBrowse } from './human.js'
+import { humanType, jitter, idleMouse, preActionBrowse, humanClick } from './human.js'
 
 async function openProfile(context, username) {
   const page = await context.newPage()
@@ -73,7 +73,7 @@ export async function likeUser(context, { targetUsername, count = 1 }) {
       await jitter(1000, 2200)
       const likeBtn = page.locator('div[role="button"]:has(svg[aria-label="Like"]), div[role="button"]:has(svg[aria-label="Нравится"])').first()
       if (await likeBtn.isVisible().catch(() => false)) {
-        await likeBtn.click({ delay: 60 })
+        await humanClick(page, likeBtn)   // §1.3: кривой подвод курсора + смещение от центра
         liked++
         await jitter(1500, 3000)
       }
@@ -101,7 +101,7 @@ export async function viewStories(context, { targetUsername, like = false }) {
     if (like) {
       try {
         const likeBtn = page.locator('div[role="button"]:has(svg[aria-label="Like"]), div[role="button"]:has(svg[aria-label="Нравится"])').first()
-        if (await likeBtn.isVisible().catch(() => false)) { await likeBtn.click({ delay: 60 }); liked++ }
+        if (await likeBtn.isVisible().catch(() => false)) { await humanClick(page, likeBtn); liked++ }
       } catch {}
     }
     await jitter(2000, 4000)

@@ -3,6 +3,7 @@ import { chromium } from 'playwright-extra'
 import StealthPlugin from 'puppeteer-extra-plugin-stealth'
 import { resolveProxy } from './proxy.js'
 import { fingerprint } from './fingerprint.js'
+import { humanClick } from './human.js'   // человеческий клик (кривая траектория) — plan.md §1.3
 
 chromium.use(StealthPlugin())
 
@@ -179,17 +180,18 @@ export async function firstVisibleAnyFrame(page, selectors, timeout = 6000) {
 }
 
 // Клик по кнопке/ссылке с одним из текстов (getByText, точное совпадение, первый видимый).
+// Клик — человеческий (кривая траектория курсора + смещение от центра, plan.md §1.3).
 export async function clickByText(page, texts, { timeout = 6000 } = {}) {
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
     for (const t of texts) {
       try {
         const loc = page.getByRole('button', { name: t, exact: true }).first()
-        if (await loc.isVisible().catch(() => false)) { await loc.click({ delay: 60 }); return true }
+        if (await loc.isVisible().catch(() => false)) { await humanClick(page, loc); return true }
       } catch {}
       try {
         const loc2 = page.getByText(t, { exact: true }).first()
-        if (await loc2.isVisible().catch(() => false)) { await loc2.click({ delay: 60 }); return true }
+        if (await loc2.isVisible().catch(() => false)) { await humanClick(page, loc2); return true }
       } catch {}
     }
     await page.waitForTimeout(250)
