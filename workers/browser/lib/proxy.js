@@ -7,7 +7,7 @@
 // симптом, с которым столкнулся пользователь на реальном прокси.
 const _schemeCache = new Map() // hostPort → рабочая схема (кеш на процесс)
 
-function splitProxy(raw) {
+export function splitProxy(raw) {
   if (!raw || typeof raw !== 'string') return null
   let s = raw.trim()
   if (!s) return null

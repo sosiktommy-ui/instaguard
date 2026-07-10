@@ -133,7 +133,9 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 3. **§10.1 юнит-тесты (Фаза VI):** заведён **vitest** (`vitest.config.ts` с алиасом `@/*`, скрипт `npm test`, каталог `tests/`, изолирован от `next build` через `tsconfig.exclude`). **54 теста зелёные** для чистых функций: `lib/limits.ts` (remaining/consume/warmupFactor/scaleCaps — границы/кламп), `lib/cookies.ts` `normalizeCookies` (все форматы куки: сырой sessionid, `k=v`, Cookie-Editor JSON, JSON-объект, Netscape `#HttpOnly_`, мобильная Bearer, Facebook→ошибка, мусор→ошибка), `lib/browser/geo.ts` `localeForCountry`, `lib/stats.ts` `readStat`/`mergeStatsMap`, `lib/match.ts` `matchPhrase` (+norm/levenshtein/similarity), `lib/targets.ts` `selectTargets`.
    - **Рефактор для тестируемости:** `matchPhrase` и `selectTargets` **вынесены из `app/api/poll/route.ts`** в чистые модули `lib/match.ts` / `lib/targets.ts` (тянули prisma-модуль через route). Поведенчески-нейтрально: тела перенесены как есть, дифф poll = только удаление определений + импорты (`norm`/`levenshtein`/`similarity` использовались лишь в `matchPhrase`; `MAX_NEW_PER_POLL` убран из импорта poll, теперь в `targets.ts`). Отмечено `[x]` в `PLAN-IDEAL.md` §10.1 (осталось только `splitProxy` в JS-воркере). Коммит с тестами — отдельно от рефактора.
 
-Проверено: `npm test` (54 passed), `next build` чист с тестами (изоляция работает + `/api/poll` компилируется после выноса), `tsc --noEmit` полностью чист.
+   - **JS-воркер (`workers/browser/`):** `splitProxy` (разбор строки прокси, `lib/proxy.js`) экспортирован и покрыт — встроенный раннер `node --test` (Node 24, без зависимостей), `npm test` в воркере, `test/proxy.test.js` (8 тестов: `host:port:user:pass`, `user:pass@host:port`, схема socks5, схема+креды, пароль с `:`, без кредов, невалид→null). **§10.1 закрыт полностью** (Next.js 54 теста + воркер 8 тестов).
+
+Проверено: `npm test` (54 passed, Next.js) + `npm test` в воркере (8 passed), `next build` чист с тестами (изоляция работает + `/api/poll` компилируется после выноса), `tsc --noEmit` полностью чист, `node --check` воркера чист.
 
 ### 2026-07-10 (✅ Фаза V — legacy instagrapi удалён полностью)
 
