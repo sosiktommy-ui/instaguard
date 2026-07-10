@@ -148,8 +148,10 @@ export interface ActionResult { ok: boolean; browserState?: object; closed?: boo
 // должны использовать ОДИН и тот же отпечаток, поэтому Ctx их несёт наравне с proxy/username.
 type Ctx = { storageState: object; proxy?: string; username?: string; locale?: string; timezoneId?: string }
 
-export function browserDM(ctx: Ctx, toUsername: string, text: string) {
-  return browserFetch<ActionResult>('/dm', { ...ctx, toUsername, text })
+// image — data-URL (data:image/…;base64,…) из конструктора кампании; отправляется
+// best-effort ОТДЕЛЬНЫМ сообщением ПОСЛЕ подтверждённого текста (§4.6/§4.3 [A3]).
+export function browserDM(ctx: Ctx, toUsername: string, text: string, image?: string) {
+  return browserFetch<ActionResult>('/dm', { ...ctx, toUsername, text, image })
 }
 export function browserFollow(ctx: Ctx, targetUsername: string) {
   return browserFetch<ActionResult>('/follow', { ...ctx, targetUsername })
@@ -168,7 +170,7 @@ export function browserReply(ctx: Ctx, postUrl: string, text: string) {
 }
 
 // ── Сессия-визит (Фаза II §1.1): все задачи на цель в ОДНОМ контексте воркера. ──
-export interface VisitTask { type: 'dm' | 'follow' | 'like' | 'story'; target: string; text?: string; count?: number; storyLike?: boolean; fallbackFollow?: boolean; fallbackLike?: boolean }
+export interface VisitTask { type: 'dm' | 'follow' | 'like' | 'story'; target: string; text?: string; image?: string; count?: number; storyLike?: boolean; fallbackFollow?: boolean; fallbackLike?: boolean }
 export interface VisitResult { done: Record<string, number>; closed?: boolean; errors?: string[]; brk?: 'CHALLENGE' | 'PAUSED'; browserState?: object }
 export function browserRunVisit(ctx: Ctx, tasks: VisitTask[]) {
   return browserFetch<VisitResult>('/session/run', { ...ctx, tasks })

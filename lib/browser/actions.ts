@@ -12,6 +12,7 @@ export interface BrowserFollowerJob {
   timezoneId?: string
   followerUsername: string      // цель действия (браузер ходит на /{username}/)
   text?: string
+  image?: string                 // data-URL фото в директ (best-effort, §4.3 [A3])
   doFollow?: boolean
   doLike?: boolean
   viewStories?: boolean
@@ -52,7 +53,7 @@ export async function runFollowerActionsBrowser(job: BrowserFollowerJob): Promis
 async function runViaVisit(job: BrowserFollowerJob): Promise<BrowserActionsResult> {
   const ctx = { storageState: job.browserState, proxy: job.proxy, username: job.ownerUsername, locale: job.locale, timezoneId: job.timezoneId }
   const tasks: VisitTask[] = []
-  if (job.text) tasks.push({ type: 'dm', target: job.followerUsername, text: job.text, fallbackFollow: job.fallbackFollow, fallbackLike: job.fallbackLike })
+  if (job.text || job.image) tasks.push({ type: 'dm', target: job.followerUsername, text: job.text, image: job.image, fallbackFollow: job.fallbackFollow, fallbackLike: job.fallbackLike })
   if (job.doFollow) tasks.push({ type: 'follow', target: job.followerUsername })
   if (job.doLike) tasks.push({ type: 'like', target: job.followerUsername, count: 1 })
   if (job.viewStories) tasks.push({ type: 'story', target: job.followerUsername, storyLike: Boolean(job.storyLike) })
@@ -65,7 +66,7 @@ async function runViaVisit(job: BrowserFollowerJob): Promise<BrowserActionsResul
   const done = r.done ?? {}
   // «Сработало» (attempts) считаем по тому, что ЗАКАЗАЛИ (бюджет уже зарезервирован в poll);
   // «выполнено» — по фактическим успехам визита. Fallback follow/like учитываем при закрытой личке.
-  if (job.text) { bump(incFired, 'dm'); if (done.dm) bump(incDone, 'dm') }
+  if (job.text || job.image) { bump(incFired, 'dm'); if (done.dm) bump(incDone, 'dm') }
   if (job.doFollow) { bump(incFired, 'follow'); if (done.follow) bump(incDone, 'follow') }
   if (job.doLike) { bump(incFired, 'like'); if (done.like) bump(incDone, 'like') }
   if (job.viewStories) { bump(incFired, 'story'); if (done.story) bump(incDone, 'story') }
@@ -90,10 +91,10 @@ async function runViaIndividualCalls(job: BrowserFollowerJob): Promise<BrowserAc
   // follow/like не заказаны (поле fallback* уже так гейтится в poll), поэтому двойных нет.
   const steps: (() => Promise<void>)[] = []
 
-  if (job.text) steps.push(async () => {
+  if (job.text || job.image) steps.push(async () => {
     bump(incFired, 'dm'); await rd(2, 6)
     try {
-      const r = await browserDM(ctx(), job.followerUsername, job.text!)
+      const r = await browserDM(ctx(), job.followerUsername, job.text ?? '', job.image)
       if (r.browserState) state = r.browserState
       if (r.ok) bump(incDone, 'dm')
       else if (r.closed) {

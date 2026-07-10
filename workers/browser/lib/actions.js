@@ -50,8 +50,48 @@ async function confirmDelivered(page, box, text) {
   return { delivered: false, reason: 'unconfirmed: поле ввода не очистилось — отправка не подтверждена' }
 }
 
+// data:image/png;base64,AAAA… → { buffer, mimeType, name } для setInputFiles.
+function dataUrlToFile(dataUrl) {
+  const m = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(String(dataUrl || ''))
+  if (!m) return null
+  const mimeType = m[1] || 'image/jpeg'
+  const isB64 = Boolean(m[2])
+  const buffer = Buffer.from(m[3], isB64 ? 'base64' : 'utf8')
+  if (!buffer.length) return null
+  const ext = (mimeType.split('/')[1] || 'jpg').replace('jpeg', 'jpg')
+  return { buffer, mimeType, name: `photo.${ext}` }
+}
+
+// [A3] Фото в директ — BEST-EFFORT ОТДЕЛЬНЫМ сообщением ПОСЛЕ подтверждённого текста.
+// Загрузка фото в веб-директ хрупкая и не проверена на живом IG; при любом сбое молча
+// пропускаем — текст уже доставлен, регресс доставки исключён. Успех = превью прикрепилось
+// и отправилось (композер очистился/появилось в треде).
+async function tryAttachPhoto(context, page, dataUrl) {
+  const file = dataUrlToFile(dataUrl)
+  if (!file) return { sent: false, reason: 'bad_image' }
+  try {
+    // Скрытый input[type=file] в композере директа. IG не всегда держит его в DOM до клика
+    // по «Прикрепить фото», поэтому пробуем и напрямую, и через кнопку.
+    let input = page.locator('input[type="file"]').first()
+    if (!(await input.count().catch(() => 0))) {
+      await clickByText(page, ['Add Photo or Video', 'Add photo', 'Прикрепить фото', 'Фото или видео'], { timeout: 3000 }).catch(() => {})
+      input = page.locator('input[type="file"]').first()
+    }
+    if (!(await input.count().catch(() => 0))) return { sent: false, reason: 'no_file_input' }
+    await input.setInputFiles(file)
+    await jitter(1500, 3000) // превью загружается
+    // Отправка фото: кнопка «Send» или Enter в композере.
+    const sent = await clickByText(page, ['Send', 'Отправить'], { timeout: 4000 })
+    if (!sent) { const box = await firstVisible(page, SEL.dmTextbox, 2000); if (box) await box.press('Enter') }
+    await jitter(1500, 3000)
+    return { sent: true }
+  } catch (e) {
+    return { sent: false, reason: String(e?.message ?? e).slice(0, 120) }
+  }
+}
+
 // ── Директ ────────────────────────────────────────────────────────────────────
-export async function sendDM(context, { toUsername, text }) {
+export async function sendDM(context, { toUsername, text, image }) {
   await requireSession(context)
   const page = await openProfile(context, toUsername)
 
@@ -64,17 +104,32 @@ export async function sendDM(context, { toUsername, text }) {
   const box = await firstVisible(page, SEL.dmTextbox, 12000)
   if (!box) return { ok: false, closed: true, error: 'dm_closed: поле сообщения не открылось' }
 
-  await humanType(box, text)
-  await jitter(400, 900)
-  await box.press('Enter')
-  await jitter(1200, 2200)
+  let delivered = true
+  let deliverErr
+  if (text) {
+    await humanType(box, text)
+    await jitter(400, 900)
+    await box.press('Enter')
+    await jitter(1200, 2200)
+    // §4.6 — проверяем, что сообщение реально появилось в треде.
+    const conf = await confirmDelivered(page, box, text)
+    delivered = conf.delivered
+    deliverErr = conf.reason
+  }
 
-  // §4.6 — проверяем, что сообщение реально появилось в треде. Сессия «дозрела» в любом
-  // исходе — возвращаем storageState, чтобы не терять прогрев (недоставка = транзиент, ретрай).
-  const conf = await confirmDelivered(page, box, text)
+  // [A3] Фото — только если текст доставлен (или текста нет вовсе). Best-effort, не влияет
+  // на исход доставки текста: сбой фото не делает DM недоставленным.
+  let photo
+  if (image && (delivered || !text)) {
+    const r = await tryAttachPhoto(context, page, image)
+    photo = r.sent
+    if (!r.sent) deliverErr = deliverErr ? `${deliverErr}; фото: ${r.reason}` : `фото не отправлено: ${r.reason}`
+  }
+
+  // Сессия «дозрела» в любом исходе — возвращаем storageState (недоставка текста = транзиент, ретрай).
   const storageState = await context.storageState()
-  if (!conf.delivered) return { ok: false, delivered: false, error: conf.reason, storageState }
-  return { ok: true, delivered: true, storageState }
+  if (text && !delivered) return { ok: false, delivered: false, error: deliverErr, storageState }
+  return { ok: true, delivered: true, photo, error: deliverErr, storageState }
 }
 
 // ── Подписка ────────────────────────────────────────────────────────────────

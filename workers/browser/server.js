@@ -9,7 +9,7 @@ import { runVisit } from './lib/session.js'
 import { checkProxyBrowser } from './lib/proxy.js'
 import { toStorageState } from './lib/state.js'
 
-const BUILD = '2026-07-10-browser-27-dm-confirm'
+const BUILD = '2026-07-10-browser-28-dm-photo'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -235,7 +235,7 @@ function actionRoute(fn) {
   }
 }
 
-app.post('/dm', actionRoute((ctx, b) => sendDM(ctx, { toUsername: b.toUsername, text: b.text })))
+app.post('/dm', actionRoute((ctx, b) => sendDM(ctx, { toUsername: b.toUsername, text: b.text, image: b.image })))
 app.post('/follow', actionRoute((ctx, b) => followUser(ctx, { targetUsername: b.targetUsername })))
 app.post('/like', actionRoute((ctx, b) => likeUser(ctx, { targetUsername: b.targetUsername, count: b.count })))
 app.post('/stories', actionRoute((ctx, b) => viewStories(ctx, { targetUsername: b.targetUsername, like: b.like })))

@@ -260,7 +260,7 @@ async function runFollowerActionsInline(job: any) {
     const r = await runFollowerActionsBrowser({
       browserState: job.browserState, ownerUsername: job.ownerUsername, proxy: job.proxy,
       locale: job.locale, timezoneId: job.timezoneId,
-      followerUsername: job.followerUsername, text: job.text || undefined,
+      followerUsername: job.followerUsername, text: job.text || undefined, image: job.image || undefined,
       doFollow: job.doFollow, doLike: job.doLike, viewStories: job.viewStories, storyLike: job.storyLike,
       fallbackFollow: job.fallbackFollow, fallbackLike: job.fallbackLike,
     })
@@ -906,7 +906,7 @@ export async function POST(req: NextRequest) {
                 }
                 if (useBrowserForComments) {
                   try {
-                    const r = await browserDM(bctx(), c.username, text.trim())
+                    const r = await browserDM(bctx(), c.username, text.trim(), dm.image?.enabled ? dm.image.url : undefined)
                     if (r.browserState) cState = r.browserState
                     if (r.ok) { fired = true; incDone.dm = (incDone.dm || 0) + 1 }
                     else if (r.closed) {

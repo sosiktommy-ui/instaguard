@@ -40,7 +40,7 @@ export async function runVisit(context, { tasks = [], warmup = true } = {}) {
     if (brk) { errors.push(`${task.type}: пропущен (сессия остановлена)`); continue }
     try {
       if (task.type === 'dm') {
-        const r = await sendDM(context, { toUsername: task.target, text: task.text })
+        const r = await sendDM(context, { toUsername: task.target, text: task.text, image: task.image })
         if (r.ok) mark('dm')
         else if (r.closed) {
           closed = true

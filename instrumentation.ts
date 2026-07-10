@@ -37,7 +37,7 @@ export async function register() {
             const r = await runFollowerActionsBrowser({
               browserState: d.browserState, ownerUsername: d.ownerUsername, proxy: d.proxy,
               locale: d.locale, timezoneId: d.timezoneId,
-              followerUsername: d.followerUsername, text: d.text || undefined,
+              followerUsername: d.followerUsername, text: d.text || undefined, image: d.image || undefined,
               doFollow: d.doFollow, doLike: d.doLike, viewStories: d.viewStories, storyLike: d.storyLike,
               fallbackFollow: d.fallbackFollow, fallbackLike: d.fallbackLike,
             })

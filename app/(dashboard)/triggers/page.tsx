@@ -354,7 +354,7 @@ function TriggerCard({ trigger, onToggle, onDelete, index = 0 }: {
         {hasGate && badge('#663af1', UserCheck, 'проверка подписки', 'Если автор не подписан — бот пишет приглашение в комментарии и не шлёт DM')}
         {msg && badge('#663af1', Send, 'DM', 'Отправляет личное сообщение в директ')}
         {msg?.link?.enabled && badge('#663af1', Link2, 'ссылка', 'В конец сообщения добавляется кликабельная ссылка')}
-        {msg?.image?.enabled && badge('#663af1', ImageIcon, 'фото', 'Картинка прикреплена (отправка фото в директ — в разработке, пока уходит только текст)')}
+        {msg?.image?.enabled && badge('#663af1', ImageIcon, 'фото', 'Картинка прикрепляется к директу отдельным сообщением после текста (экспериментально — если не удастся, текст всё равно уходит)')}
         {reply && badge('#34c759', MessageCircle, `коммент ×${(reply.replies ?? []).filter(Boolean).length}`, 'Отвечает в комментариях случайным из вариантов')}
         {hasLikeComment && badge('#8e8e93', Heart, 'лайк коммента (legacy)', 'Устаревшее действие: браузерным движком не выполняется. В новых кампаниях «Лайк» лайкает посты автора.')}
         {hasLike && badge('#ff2d92', Heart, isComment ? 'лайк постов' : 'лайк', isComment ? 'Заходит к автору и лайкает его посты' : 'Лайкает последний пост подписчика')}
@@ -505,7 +505,7 @@ function MessageBlock({ d, set, fileRef, onPickImage }: {
         )}
         <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickImage} />
         <p className="text-[10.5px] text-warn/90 leading-snug mt-1.5">
-          ⚠️ Пока отправляется только текст — прикрепление фото к директу в разработке.
+          ⚠️ Фото уходит отдельным сообщением после текста (экспериментально). Если прикрепить не удастся — текст всё равно доставится.
         </p>
       </div>
 
