@@ -59,6 +59,12 @@ export async function register() {
             console.log(`[dm-worker/browser] ${success ? '✓ выполнено' : '⚠ без выполнения'} → @${d.followerUsername}`)
             return
           }
+          // [A1] engine=browser, но нет browserState — НЕ звать мёртвый legacy Python.
+          // Штатно poll не ставит такие джобы в очередь; это страховка от «протёкшего» джоба.
+          if (d.engine === 'browser') {
+            console.warn(`[dm-worker] пропуск @${d.followerUsername}: engine=browser без browserState (нужен вход браузером)`)
+            return
+          }
         }
         const {
           sessionData, accountId, triggerId, triggerName,

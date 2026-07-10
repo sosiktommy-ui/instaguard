@@ -279,6 +279,9 @@ async function runFollowerActionsInline(job: any) {
     if (r.brk) await prisma.instagramAccount.update({ where: { id: job.accountId }, data: { status: r.brk } }).catch(() => null)
     return
   }
+  // [A1] Страховка: engine=browser, но нет browserState — НЕ звать мёртвый legacy Python.
+  // Штатно poll уже отсеивает такие аккаунты (гард в цикле), сюда доходить не должно.
+  if (job.engine === 'browser') return
 
   const session = job.sessionData as object          // основной: DM/фото/подписка/fallback
   const proxy = job.proxy ?? undefined
@@ -461,6 +464,18 @@ export async function POST(req: NextRequest) {
     const proxy = account.proxy ?? undefined
     // Движок действий владельца: всегда браузер (кроме недеплоя воркера — см. lib/browser/engine.ts).
     const engine = await resolveEngine(account.userId)
+    // [A1] Браузерный движок БЕЗ браузерной сессии → НЕ падать в мёртвый legacy Python.
+    // Без browserState аккаунт физически не может действовать браузером (DM/лайк/подписка/сторис).
+    // Раньше такие действия уходили в legacy-ветку → 404 к мёртвому Python → errorCount копился и
+    // аккаунт ложно метился PAUSED «как бан». Теперь честно: метим CHALLENGE (нужен повторный вход
+    // браузером) и пропускаем — без вызова Python и без инкремента ошибок. Аккаунт с browserState
+    // (нормальный браузерный вход) сюда не попадает. Все в этом цикле — status ACTIVE (where-фильтр).
+    if (engine === 'browser' && !account.browserState) {
+      await prisma.instagramAccount.update({ where: { id: account.id }, data: { status: 'CHALLENGE' } }).catch(() => null)
+      await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: '⚠️ Нет браузерной сессии — переподключите аккаунт (вход браузером). Действия не выполняются, пока нет browserState.' } }).catch(() => null)
+      summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, triggersFound: triggers.length, totalComments: 0, newComments: 0, commentActions: 0, skipped: 'no-browser-session' })
+      continue
+    }
     // Источник парсинга владельца (plan.md §5): 'api' (по умолч.) | 'drafts' | 'drafts_then_api'.
     // getDraft лениво подбирает и КЕШИРУЕТ чернового на весь цикл этого аккаунта (не дёргаем
     // подбор на каждый поток отдельно — один черновой обслуживает все потоки одного основного).
