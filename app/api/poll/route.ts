@@ -995,6 +995,36 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ── §5.1 [H1] Прогрев ЧЕРНОВЫХ (HELPER) + [H2] health ───────────────────────
+  // Основной цикл греет только RESPONDER/BOTH; черновые в него не входят → их сессии стынут
+  // → частые ре-логины → выше риск бана черновых. Отдельный проход: активные HELPER с
+  // browserState, прогрев которых устарел (WARMUP_KEEPALIVE_MS), в «дневном» окне их таймзоны.
+  // [H2]: если сессия не подтвердилась при прогреве — метим CHALLENGE (нужен повторный вход).
+  const globalEngine = await resolveEngine('')
+  if (globalEngine === 'browser') {
+    const helpers = await prisma.instagramAccount.findMany({
+      where: { role: 'HELPER', status: 'ACTIVE', ...scope },
+      select: { id: true, userId: true, username: true, browserState: true, proxy: true, locale: true, timezoneId: true, limits: true },
+    })
+    for (const hlp of helpers) {
+      if (!hlp.browserState) continue
+      if (proxyRequired(hlp.userId) && !hlp.proxy) continue
+      const lastW = Number((hlp.limits as any)?.lastWarmup || 0)
+      if (!isManual && Date.now() - lastW < WARMUP_KEEPALIVE_MS) continue
+      if (!isManual && !activityWindow(hlp.timezoneId, hlp.username).active) continue
+      try {
+        const w = await browserWarmup(hlp.browserState as object, hlp.proxy ?? undefined, hlp.username, hlp.locale ?? undefined, hlp.timezoneId ?? undefined)
+        const lim = loadCounters(hlp.limits)
+        ;(lim as any).lastWarmup = Date.now()
+        await prisma.instagramAccount.update({
+          where: { id: hlp.id },
+          data: { limits: lim as any, ...(w.browserState ? { browserState: w.browserState as any } : {}), ...(w.alive ? {} : { status: 'CHALLENGE' as any }) },
+        }).catch(() => null)
+        if (!w.alive) await prisma.log.create({ data: { accountId: hlp.id, level: 'WARN', message: '⚠️ Черновой: сессия не подтвердилась при прогреве — нужен повторный вход (вход браузером).' } }).catch(() => null)
+      } catch { /* прогрев чернового не критичен для цикла */ }
+    }
+  }
+
   if (dmQueue) await dmQueue.close()
 
   return NextResponse.json({ ok: true, summary })
