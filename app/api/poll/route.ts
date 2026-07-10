@@ -17,6 +17,7 @@ import {
 } from '@/lib/browser/client'
 import { pickDraft, markDraftUsed } from '@/lib/browser/draftPool'
 import { acquireBrowserLock, releaseBrowserLock } from '@/lib/browserLock'
+import { loadDelivery, deliveryUnhealthy, recordDelivery, DELIVERY_SLOWDOWN_FACTOR } from '@/lib/delivery'
 import { mediaPostUrl } from '@/lib/instagram/shortcode'
 import { Queue } from 'bullmq'
 import { loadCounters, consume, warmupFactor, scaleCaps, MAX_NEW_PER_POLL, type Counters, type ActionKind } from '@/lib/limits'
@@ -266,6 +267,8 @@ async function runFollowerActionsInline(job: any) {
       fallbackFollow: job.fallbackFollow, fallbackLike: job.fallbackLike,
     })
     if (r.browserState) await prisma.instagramAccount.update({ where: { id: job.accountId }, data: { browserState: r.browserState as any } }).catch(() => null)
+    // §4.6 — исход доставки директа (inline-путь без очереди — один процесс, гонки нет).
+    if (r.incFired.dm) await recordDelivery(prisma, job.accountId, r.incFired.dm, r.incDone.dm || 0, Date.now())
     const attempted = Object.keys(r.incFired).length > 0
     const success = Object.keys(r.incDone).length > 0
     if (attempted) {
@@ -515,6 +518,12 @@ export async function POST(req: NextRequest) {
     // Прогрев: дневные лимиты ужимаются по возрасту основного аккаунта (свежий не срывается на полную).
     const warm = warmupFactor(account.createdAt)
     const caps = scaleCaps(warm)
+    // §4.6 автоснижение: если директы сегодня систематически НЕ доходят (лички закрыты массово /
+    // ограничение) — резко режем дневной лимит DM, чтобы не долбить аккаунт впустую (сам ban-сигнал).
+    // Сбрасывается на следующий день (счётчик дневной). Комменты/лайки/сторис не трогаем.
+    if (deliveryUnhealthy(loadDelivery(account.deliveryStats))) {
+      caps.dm = Math.max(1, Math.floor(caps.dm * DELIVERY_SLOWDOWN_FACTOR))
+    }
     const use = (k: ActionKind, n = 1) => consume(counters, k, n, caps)
 
     // ── Проверка подписки БЕЗ обращения к основному ──────────────────────────
@@ -817,6 +826,7 @@ export async function POST(req: NextRequest) {
         // после каждой обработанной пары (коммент × триггер), как в runFollowerActionsInline.
         let cState: object | undefined = liveState
         const bctx = () => ({ storageState: cState as object, proxy: account.proxy ?? undefined, username: account.username, locale: account.locale ?? undefined, timezoneId: account.timezoneId ?? undefined })
+        let cmtDmTried = 0, cmtDmOk = 0   // §4.6 — исход доставки директов коммент-потока (запишем разом под локом)
 
         for (const c of toProcess) {
           let firedForComment = false
@@ -965,6 +975,8 @@ export async function POST(req: NextRequest) {
               }
             }
 
+            cmtDmTried += incFired.dm || 0   // §4.6 — учёт доставки директов коммент-потока
+            cmtDmOk += incDone.dm || 0
             const attempted = Object.keys(incFired).length > 0
             if (attempted) {
               const level = fired ? (errors.length ? 'WARN' : 'SUCCESS') : 'ERROR'
@@ -987,6 +999,8 @@ export async function POST(req: NextRequest) {
         // §4.8 — накопленное дозревание сессии за поток комментов переносим в liveState
         // (его же прогреет и запишет финальный апдейт — без отката к «старому» стейту).
         liveState = cState
+        // §4.6 — исход доставки директов коммент-потока в дневной счётчик (под browserLock — гонки нет).
+        if (cmtDmTried) await recordDelivery(prisma, account.id, cmtDmTried, cmtDmOk, Date.now())
         }
       }
 

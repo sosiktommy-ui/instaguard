@@ -1,6 +1,7 @@
 import { mergeStatsMap } from './lib/stats'
 import { runFollowerActionsBrowser } from './lib/browser/actions'
 import { acquireBrowserLock, releaseBrowserLock } from './lib/browserLock'
+import { recordDelivery } from './lib/delivery'
 
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return
@@ -65,6 +66,8 @@ export async function register() {
                 fallbackFollow: d.fallbackFollow, fallbackLike: d.fallbackLike,
               })
               if (r.browserState) await prisma.instagramAccount.update({ where: { id: d.accountId }, data: { browserState: r.browserState as any } }).catch(() => null)
+              // §4.6 — исход доставки директа в дневной счётчик (под browserLock — гонки с poll нет).
+              if (r.incFired.dm) await recordDelivery(prisma, d.accountId, r.incFired.dm, r.incDone.dm || 0, Date.now())
               const attempted = Object.keys(r.incFired).length > 0
               const success = Object.keys(r.incDone).length > 0
               if (attempted) {

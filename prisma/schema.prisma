@@ -117,6 +117,7 @@ model InstagramAccount {
   lastChecked DateTime?
   errorCount  Int           @default(0)
   limits      Json?
+  deliveryStats Json?       // §4.6: дневная доставка директов {date,tried,ok,lastAlert} — алерт+автоснижение при массовой недоставке
   followers   Int?          // реальное число подписчиков (из account_info)
   followersHistory Json?    // история [{d:'YYYY-MM-DD', n}] для спарклайна прироста
   sectionId   String?       // раздел/подраздел (папка пользователя)
