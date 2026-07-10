@@ -120,6 +120,20 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-10 (пост-Фаза V: чистка дерева + юнит-тесты §10.1)
+
+#### chore+test: убрана паузная auth-работа и Vanta 3D-фон; заведён vitest + юнит-тесты чистых функций
+
+Три вещи по запросу пользователя (после Фазы V):
+
+1. **Удалена вся несохранённая auth-работа** (Google-вход + регистрация по коду на почту через Resend). Она была «готова, ждёт ключей», но пользователь решил снести. Tracked-файлы (`app/(auth)/{login,register}/page.tsx`, `app/api/auth/{login,register}/route.ts`, `lib/auth.ts`, `middleware.ts`, `package.json`, `package-lock.json`) откачены к HEAD (= то, что уже в проде); untracked (`app/api/auth/google/`, `.../register/{resend,verify}/`, `GoogleButton.tsx`, `lib/email.ts`, миграция `20260705000000_auth_email_verify_google`) удалены. **Следствие:** `tsc` теперь ПОЛНОСТЬЮ чист (раньше падал на этих файлах — «ожидаемо»; теперь их нет). Память [[auth-work-paused]] удалена как неактуальная.
+
+2. **Убран Vanta 3D-фон** (`components/common/VantaBackground.tsx`, `vanta.d.ts`, использование в `app/(dashboard)/layout.tsx`) — анимированная three.js-сетка. Зависимости `three`+`vanta` вычищены из `package.json` (использовались только этим компонентом; `ReactiveMascot` — SVG, three не тянет), npm убрал 7 пакетов. Остался статический `bg-canvas`. ⚠️ Это НЕ маскот: 3D-маскот (`Mascot3D`) убрали ещё 2026-07-04; маскот сейчас — лёгкий 2D-SVG `ReactiveMascot.tsx` (не тронут). Коммит `4370002`, задеплоен (Ready 845ms).
+
+3. **§10.1 юнит-тесты (Фаза VI, частично):** заведён **vitest** (`vitest.config.ts` с алиасом `@/*`, скрипт `npm test`, каталог `tests/`, изолирован от `next build` через `tsconfig.exclude`). **37 тестов зелёные** для чистых функций: `lib/limits.ts` (remaining/consume/warmupFactor/scaleCaps — границы/кламп), `lib/cookies.ts` `normalizeCookies` (все форматы куки: сырой sessionid, `k=v`, Cookie-Editor JSON, JSON-объект, Netscape `#HttpOnly_`, мобильная Bearer, Facebook→ошибка, мусор→ошибка), `lib/browser/geo.ts` `localeForCountry`, `lib/stats.ts` `readStat`/`mergeStatsMap`. Осталось: `matchPhrase`/`selectTargets` (внутри `poll/route.ts` — нужен вынос в чистый модуль). Отмечено `[x]` частично в `PLAN-IDEAL.md` §10.1.
+
+Проверено: `npm test` (37 passed), `next build` чист с тестами (изоляция работает), `tsc --noEmit` полностью чист.
+
 ### 2026-07-10 (✅ Фаза V — legacy instagrapi удалён полностью)
 
 #### refactor(эмуль Фаза V): полное удаление legacy-движка (Python instagrapi + все sessionData-ветки)

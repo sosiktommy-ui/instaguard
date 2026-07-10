@@ -297,8 +297,9 @@
 ## 10. ТЕСТЫ (идут вместе с разработкой, каждая фаза — со своими)
 
 ### 10.1 Юнит-тесты (без сети)
-- Чистые функции: `matchPhrase` (фразы/опечатки), `lib/cookies.ts` (все форматы куки), `lib/limits.ts` (лимиты/прогрев/scaleCaps), `lib/browser/geo.ts`, `selectTargets`, `mergeStats`, разбор прокси (`splitProxy`).
-- Набор реальных строк куки/импорта (Cookie-Editor JSON, `k=v`, таблица DevTools, netscape, sessionid, мобильная Android-сессия) → все парсятся, ошибки понятны.
+- **[x] ЧАСТИЧНО СДЕЛАНО 2026-07-10 (vitest, `tests/`, 37 тестов зелёные):** `lib/limits.ts` (remaining/consume/warmupFactor/scaleCaps — границы, кламп, дневной сброс), `lib/cookies.ts` `normalizeCookies` (сырой sessionid, `k=v`, Cookie-Editor JSON, JSON-объект, Netscape `#HttpOnly_`, мобильная Bearer-сессия, Facebook-куки → ошибка, мусор → ошибка), `lib/browser/geo.ts` `localeForCountry` (регистр/trim/синонимы/nullish/неизвестная), `lib/stats.ts` `readStat`/`mergeStatsMap` (легаси-число→{fired,done}, слияние ключей). Раннер: `npm test`; изолированы от `next build` (tsconfig exclude).
+- **⬜ ОСТАЛОСЬ:** `matchPhrase`/`selectTargets` — сидят внутри `app/api/poll/route.ts` (тянут prisma), нужен вынос в отдельный чистый модуль перед юнит-тестом; `splitProxy` (разбор прокси) — в JS-воркере.
+- Набор реальных строк куки/импорта покрыт (Cookie-Editor JSON, `k=v`, таблица DevTools, netscape, sessionid, мобильная Android-сессия) → все парсятся, ошибки понятны.
 
 ### 10.2 Fingerprint self-test (антидетект — главный)
 - Автопрогон детектора (bot.sannysoft / creepjs / fingerprint.com) ЧЕРЕЗ прокси реальным кодом воркара (`newAccountContext`), парсинг результата, **ассерт «0 красных сигналов»**: `webdriver=false`, UA-CH platform=ОС, WebGL≠SwiftShader, WebRTC не течёт (нет серверного IP в кандидатах), canvas стабилен per-account и различается меж аккаунтами, tz=locale=IP.

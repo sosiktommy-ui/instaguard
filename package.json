@@ -7,6 +7,7 @@
     "build": "prisma generate && next build",
     "start": "prisma migrate deploy && next start -p ${PORT:-3000}",
     "lint": "next lint",
+    "test": "vitest run",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
@@ -44,6 +45,7 @@
     "postcss": "^8",
     "prisma": "^5.20.0",
     "tailwindcss": "^3.4.1",
-    "ts-node": "^10.9.2"
+    "ts-node": "^10.9.2",
+    "vitest": "^4.1.10"
   }
 }
