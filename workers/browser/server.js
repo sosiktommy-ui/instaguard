@@ -8,8 +8,10 @@ import { parseFollowers, parseFollowing, parseComments, parseLikers } from './li
 import { runVisit } from './lib/session.js'
 import { checkProxyBrowser } from './lib/proxy.js'
 import { toStorageState } from './lib/state.js'
+import { fingerprint } from './lib/fingerprint.js'
+import { fingerprintSelfTest } from './lib/selftest.js'
 
-const BUILD = '2026-07-10-browser-29-singleflight'
+const BUILD = '2026-07-10-browser-30-selftest'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -178,6 +180,47 @@ app.post('/session/warmup', async (req, res) => {
     res.json({ alive: r.alive, browserState: r.storageState ?? undefined })
   } catch (e) {
     res.json({ alive: false, error: String(e?.message || 'ошибка').slice(0, 160) })
+  }
+})
+
+// ── §10.2 Fingerprint self-test (антидетект «0 сигналов бота») ──────────────────
+// Поднимает РЕАЛЬНЫЙ контекст через прокси и проверяет ключевые сигналы бота.
+// Тело: { proxy, username?, locale?, timezoneId? }. Не трогает Instagram (example.com).
+app.post('/selftest/fingerprint', async (req, res) => {
+  const { proxy, username, locale, timezoneId } = req.body || {}
+  if (!proxy) return res.json({ ok: false, error: 'нужен proxy' })
+  const uname = username || 'selftest'
+  try {
+    const fp = fingerprint(uname, { locale, timezoneId })
+    // Исходящий IP/страна прокси — чтобы отличить утечку WebRTC от самого прокси + гео-проверка.
+    let exit = null
+    try {
+      const chk = await runLimited(() => checkProxyBrowser(getBrowser, proxy))
+      if (chk?.ok) exit = { ip: chk.ip ?? null, country: chk.country ?? null }
+    } catch {}
+
+    const result = await runLimited(async () => {
+      const context = await newAccountContext({ username: uname, proxy, locale, timezoneId })
+      try { return await fingerprintSelfTest(context, fp, exit?.ip ?? null) }
+      finally { await closeContextSafe(context) }
+    })
+
+    // Гео-консистентность (tz=locale=IP): совпадает ли страна exit-IP с локалью отпечатка.
+    const warnings = [...result.warnings]
+    if (exit?.country && fp.locale) {
+      const localeRegion = (fp.locale.split('-')[1] || '').toLowerCase()
+      if (!localeRegion) warnings.push('locale без региона — гео-сверку с IP пропускаем')
+    }
+
+    res.json({
+      ok: true, build: BUILD, redCount: result.redCount,
+      red: result.red, warnings,
+      exit, webrtcLeaks: result.webrtcLeaks,
+      expected: { platform: fp.platform, uaPlatform: fp.uaPlatform, timezoneId: fp.timezoneId, locale: fp.locale, glRenderer: fp.glRenderer },
+      signals: result.signals,
+    })
+  } catch (e) {
+    res.json({ ok: false, error: String(e?.message || 'ошибка selftest').slice(0, 300) })
   }
 })
 
