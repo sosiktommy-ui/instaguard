@@ -19,6 +19,7 @@ import { pickDraft, markDraftUsed } from '@/lib/browser/draftPool'
 import { mediaPostUrl } from '@/lib/instagram/shortcode'
 import { Queue } from 'bullmq'
 import { loadCounters, consume, warmupFactor, scaleCaps, MAX_NEW_PER_POLL, type Counters, type ActionKind } from '@/lib/limits'
+import { activityWindow } from '@/lib/activity'
 import { getCurrentUser } from '@/lib/auth'
 import { mergeStatsMap } from '@/lib/stats'
 
@@ -475,6 +476,17 @@ export async function POST(req: NextRequest) {
       await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: '⚠️ Нет браузерной сессии — переподключите аккаунт (вход браузером). Действия не выполняются, пока нет browserState.' } }).catch(() => null)
       summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, triggersFound: triggers.length, totalComments: 0, newComments: 0, commentActions: 0, skipped: 'no-browser-session' })
       continue
+    }
+    // §1.6/1.7 Суточный ритм: ночью / в «выходной» аккаунта по его таймзоне — ТИШИНА (живой
+    // человек не активничает в 4 утра; бот 24/7 палится). Пропускаем весь аккаунт (в т.ч. парсинг
+    // — не тратим API ночью; события останутся «новыми» и добьются утром). Ручная проверка
+    // (isManual) ритм игнорирует — пользователь явно нажал «Проверить».
+    if (!isManual) {
+      const aw = activityWindow(account.timezoneId, account.username)
+      if (!aw.active) {
+        summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, triggersFound: triggers.length, totalComments: 0, newComments: 0, commentActions: 0, skipped: aw.reason ?? 'quiet-hours' })
+        continue
+      }
     }
     // Источник парсинга владельца (plan.md §5): 'api' (по умолч.) | 'drafts' | 'drafts_then_api'.
     // getDraft лениво подбирает и КЕШИРУЕТ чернового на весь цикл этого аккаунта (не дёргаем
