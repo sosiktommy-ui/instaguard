@@ -5,10 +5,11 @@ import { getBrowser, newAccountContext, closeContextSafe } from './lib/browser.j
 import { attemptLogin, resumeCode, resendCode, loginByState, testSession, warmupSession } from './lib/login.js'
 import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment, readStoryEvents } from './lib/actions.js'
 import { parseFollowers, parseFollowing, parseComments, parseLikers } from './lib/parse.js'
+import { runVisit } from './lib/session.js'
 import { checkProxyBrowser } from './lib/proxy.js'
 import { toStorageState } from './lib/state.js'
 
-const BUILD = '2026-07-09-browser-24-mouse'
+const BUILD = '2026-07-09-browser-25-visit'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -248,5 +249,25 @@ app.post('/parse/followers', actionRoute((ctx, b) => parseFollowers(ctx, { targe
 app.post('/parse/following', actionRoute((ctx, b) => parseFollowing(ctx, { targetUsername: b.targetUsername, limit: b.limit })))
 app.post('/parse/comments', actionRoute((ctx, b) => parseComments(ctx, { targetUsername: b.targetUsername, mediaCount: b.mediaCount, perMedia: b.perMedia })))
 app.post('/parse/likers', actionRoute((ctx, b) => parseLikers(ctx, { targetUsername: b.targetUsername, mediaCount: b.mediaCount, perMedia: b.perMedia })))
+
+// ── Сессия-визит (Фаза II §1.1): все задачи на цель в ОДНОМ контексте (прогрев → задачи
+// в случайном порядке с микро-браузингом → выход). Тело: {storageState, proxy, username,
+// locale, timezoneId, tasks:[...]}. Ответ: {done, closed, errors, brk, storageState}. ──
+app.post('/session/run', async (req, res) => {
+  const { username, storageState, proxy, locale, timezoneId, tasks } = req.body || {}
+  if (!storageState) return res.status(400).json({ error: 'bad_request', message: 'storageState обязателен' })
+  if (!Array.isArray(tasks) || !tasks.length) return res.status(400).json({ error: 'bad_request', message: 'tasks пуст' })
+  try {
+    const result = await runLimited(async () => {
+      const context = await newAccountContext({ username: username || 'owner', proxy, storageState, locale, timezoneId })
+      try { return await runVisit(context, { tasks }) }
+      finally { await closeContextSafe(context) }
+    })
+    res.json(result)
+  } catch (e) {
+    const { kind, message } = errStatus(e.message)
+    res.status(400).json({ error: kind, message })
+  }
+})
 
 app.listen(PORT, () => console.log(`🌐 browser-worker ${BUILD} на :${PORT} (concurrency=${MAX})`))

@@ -2,7 +2,7 @@
 // ЧИСТЫЙ (без БД): возвращает счётчики + финальный browserState + признак остановки (brk),
 // чтобы обе точки вызова (poll-route и dm-воркер instrumentation) сохраняли сессию своим prisma.
 // Зеркалит legacy runFollowerActionsInline, но по username и через браузерный воркер (plan §4.6).
-import { browserDM, browserFollow, browserLike, browserStories } from './client'
+import { browserDM, browserFollow, browserLike, browserStories, browserRunVisit, type VisitTask } from './client'
 
 export interface BrowserFollowerJob {
   browserState: object
@@ -36,6 +36,47 @@ const isSessionDead = (m: string) => /login_required|сессия недейст
 function shuffle<T>(a: T[]): T[] { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]] } return a }
 
 export async function runFollowerActionsBrowser(job: BrowserFollowerJob): Promise<BrowserActionsResult> {
+  // §1.1: сначала пробуем ОДИН визит (все задачи цели в одном контексте воркера). Если воркер
+  // ещё не задеплоен с /session/run (404) — откатываемся на пооперационные вызовы (ниже), чтобы
+  // поведение не ломалось до редеплоя. Логические ошибки визита НЕ вызывают фолбэк.
+  try {
+    return await runViaVisit(job)
+  } catch (e: any) {
+    if (e?.status !== 404) throw e
+    // /session/run отсутствует — старый воркер; идём пооперационно.
+  }
+  return runViaIndividualCalls(job)
+}
+
+// Один визит: собрать задачи, отдать воркеру /session/run, разложить результат в счётчики.
+async function runViaVisit(job: BrowserFollowerJob): Promise<BrowserActionsResult> {
+  const ctx = { storageState: job.browserState, proxy: job.proxy, username: job.ownerUsername, locale: job.locale, timezoneId: job.timezoneId }
+  const tasks: VisitTask[] = []
+  if (job.text) tasks.push({ type: 'dm', target: job.followerUsername, text: job.text, fallbackFollow: job.fallbackFollow, fallbackLike: job.fallbackLike })
+  if (job.doFollow) tasks.push({ type: 'follow', target: job.followerUsername })
+  if (job.doLike) tasks.push({ type: 'like', target: job.followerUsername, count: 1 })
+  if (job.viewStories) tasks.push({ type: 'story', target: job.followerUsername, storyLike: Boolean(job.storyLike) })
+
+  const incFired: Record<string, number> = {}
+  const incDone: Record<string, number> = {}
+  if (!tasks.length) return { incFired, incDone, errors: [], browserState: job.browserState }
+
+  const r = await browserRunVisit(ctx, tasks)
+  const done = r.done ?? {}
+  // «Сработало» (attempts) считаем по тому, что ЗАКАЗАЛИ (бюджет уже зарезервирован в poll);
+  // «выполнено» — по фактическим успехам визита. Fallback follow/like учитываем при закрытой личке.
+  if (job.text) { bump(incFired, 'dm'); if (done.dm) bump(incDone, 'dm') }
+  if (job.doFollow) { bump(incFired, 'follow'); if (done.follow) bump(incDone, 'follow') }
+  if (job.doLike) { bump(incFired, 'like'); if (done.like) bump(incDone, 'like') }
+  if (job.viewStories) { bump(incFired, 'story'); if (done.story) bump(incDone, 'story') }
+  if (r.closed && job.fallbackFollow) { bump(incFired, 'follow'); if (done.follow) bump(incDone, 'follow') }
+  if (r.closed && job.fallbackLike) { bump(incFired, 'like'); if (done.like) bump(incDone, 'like') }
+
+  return { incFired, incDone, errors: r.errors ?? [], browserState: r.browserState ?? job.browserState, brk: r.brk }
+}
+
+// Фолбэк: пооперационные вызовы (старый путь) — на случай воркера без /session/run.
+async function runViaIndividualCalls(job: BrowserFollowerJob): Promise<BrowserActionsResult> {
   let state: object = job.browserState
   const ctx = () => ({ storageState: state, proxy: job.proxy, username: job.ownerUsername, locale: job.locale, timezoneId: job.timezoneId })
   const incFired: Record<string, number> = {}

@@ -39,8 +39,9 @@ async function browserFetch<T = any>(path: string, body: object): Promise<T> {
     let diag: any = undefined
     try { const d = await res.json(); msg = d.message ?? d.error ?? JSON.stringify(d); diag = d.diag }
     catch { msg = await res.text() }
-    const err = new Error(msg) as Error & { diag?: any }
+    const err = new Error(msg) as Error & { diag?: any; status?: number }
     if (diag) err.diag = diag   // скрин страницы при провале входа — прокидываем в вызывающий код (UI покажет)
+    err.status = res.status     // статус — чтобы вызывающий отличил 404 (эндпоинта нет) от логической ошибки
     throw err
   }
   return res.json()
@@ -164,6 +165,13 @@ export function browserComment(ctx: Ctx, postUrl: string, text: string) {
 }
 export function browserReply(ctx: Ctx, postUrl: string, text: string) {
   return browserFetch<ActionResult>('/reply-comment', { ...ctx, postUrl, text })
+}
+
+// ── Сессия-визит (Фаза II §1.1): все задачи на цель в ОДНОМ контексте воркера. ──
+export interface VisitTask { type: 'dm' | 'follow' | 'like' | 'story'; target: string; text?: string; count?: number; storyLike?: boolean; fallbackFollow?: boolean; fallbackLike?: boolean }
+export interface VisitResult { done: Record<string, number>; closed?: boolean; errors?: string[]; brk?: 'CHALLENGE' | 'PAUSED'; browserState?: object }
+export function browserRunVisit(ctx: Ctx, tasks: VisitTask[]) {
+  return browserFetch<VisitResult>('/session/run', { ...ctx, tasks })
 }
 
 // Стори-события основного (ответы на сторис + упоминания) — читает директ своим браузером.
