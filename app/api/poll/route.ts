@@ -724,6 +724,14 @@ export async function POST(req: NextRequest) {
       const storyElapsed = snapStoryMeta ? Date.now() - new Date(snapStoryMeta.createdAt).getTime() : Infinity
       // Стори-события видит только ОСНОВНОЙ (это его личка). Браузерные аккаунты читают
       // инбокс своим Chromium (`/story-inbox`, веб-приватный API), legacy — instagrapi.
+      // §4.8 — ЕДИНОЕ «живое» состояние браузерной сессии на весь цикл аккаунта.
+      // Каждый шаг (стори-инбокс → комменты → прогрев) читает и обновляет ЕГО, а не
+      // исходный account.browserState. Иначе прогрев, стартующий со «старого» стейта,
+      // затирал бы дозревание сессии, уже накопленное потоками стори/комментов в ЭТОМ же
+      // цикле (гонка записи browserState внутри одного поллинга). Финальный апдейт пишет
+      // самый свежий liveState один раз.
+      const originalState = account.browserState
+      let liveState: object | undefined = (account.browserState as object) ?? undefined
       const useBrowserForStories = engine === 'browser' && Boolean(account.browserState)
       if (storyTriggers.length && (useBrowserForStories || account.sessionData) && (isManual || storyElapsed >= STORY_COOLDOWN_MS)) {
         let events: Array<{ pk?: string | number; user_pk: string | number; username: string }> = []
@@ -734,8 +742,9 @@ export async function POST(req: NextRequest) {
               STORY_EVENTS_AMOUNT,
             )
             events = r.events ?? []
-            // Сессия «дозрела» за чтение инбокса — сохраняем обновлённый storageState.
-            if (r.browserState) await prisma.instagramAccount.update({ where: { id: account.id }, data: { browserState: r.browserState as any } }).catch(() => null)
+            // Сессия «дозрела» за чтение инбокса — сохраняем обновлённый storageState
+            // и переносим в liveState (§4.8), чтобы прогрев/финальный апдейт не откатили.
+            if (r.browserState) { liveState = r.browserState; await prisma.instagramAccount.update({ where: { id: account.id }, data: { browserState: r.browserState as any } }).catch(() => null) }
           } catch (e: any) {
             await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Стори-инбокс (браузер) не прочитан: ${String(e?.message ?? e).slice(0, 120)}` } }).catch(() => null)
           }
@@ -789,10 +798,11 @@ export async function POST(req: NextRequest) {
 
         // Браузерная сессия «дозревает» между действиями — трекаем локально, пишем в БД
         // после каждой обработанной пары (коммент × триггер), как в runFollowerActionsInline.
-        let cState: object | undefined = account.browserState as object | undefined
+        let cState: object | undefined = liveState
         const bctx = () => ({ storageState: cState as object, proxy: account.proxy ?? undefined, username: account.username, locale: account.locale ?? undefined, timezoneId: account.timezoneId ?? undefined })
 
         for (const c of toProcess) {
+          let firedForComment = false
           for (const trigger of commentTriggers) {
             const actions = (trigger.actions ?? []) as any[]
             const isOn = (a: any) => a && a.enabled !== false
@@ -949,10 +959,17 @@ export async function POST(req: NextRequest) {
                 prisma.triggerRule.update({ where: { id: trigger.id }, data: { fireCount: { increment: 1 }, stats: await mergeStats(trigger.id, incFired, incDone) } }),
                 ...(useBrowserForComments && cState ? [prisma.instagramAccount.update({ where: { id: account.id }, data: { browserState: cState as any } })] : []),
               ])
-              if (fired) s.commentActions++
+              if (fired) { s.commentActions++; firedForComment = true }
             }
           }
+          // [A2] Пауза МЕЖДУ комментами (как inline-путь потока подписчиков, randDelay 40–90с):
+          // не выпускать серию директов/подписок/лайков залпом на весь батч авторов за один
+          // поллинг — это топ-сигнал бана. Пауза только если по комменту реально что-то сработало.
+          if (firedForComment) await randDelay(isManual ? 8 : 40, isManual ? 20 : 90)
         }
+        // §4.8 — накопленное дозревание сессии за поток комментов переносим в liveState
+        // (его же прогреет и запишет финальный апдейт — без отката к «старому» стейту).
+        liveState = cState
         }
       }
 
@@ -960,13 +977,14 @@ export async function POST(req: NextRequest) {
       // Периодический живой заход с ТОГО ЖЕ прокси: сессия дозревает (свежий browserState),
       // аккаунт греется, Instagram видит активность и не «остужает» сессию. Гейт по кулдауну
       // (метка limits.lastWarmup) — не на каждый поллинг. Сбой прогрева НЕ роняет цикл.
-      let warmedState: object | undefined
-      if (engine === 'browser' && account.browserState) {
+      if (engine === 'browser' && liveState) {
         const lastWarmup = Number((account.limits as any)?.lastWarmup || 0)
         if (isManual || Date.now() - lastWarmup >= WARMUP_KEEPALIVE_MS) {
           try {
-            const w = await browserWarmup(account.browserState as object, proxy, account.username, account.locale ?? undefined, account.timezoneId ?? undefined)
-            if (w.browserState) warmedState = w.browserState
+            // §4.8 — прогрев стартует с САМОГО свежего liveState (после стори/комментов),
+            // а не со «старого» account.browserState → не откатывает дозревание сессии.
+            const w = await browserWarmup(liveState, proxy, account.username, account.locale ?? undefined, account.timezoneId ?? undefined)
+            if (w.browserState) liveState = w.browserState
             ;(counters as any).lastWarmup = Date.now()
             if (!w.alive) {
               await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: '⚠️ Прогрев: сессия не подтвердилась (возможно, остыла/отклонена IP). Если повторяется — нужен повторный вход.' } }).catch(() => null)
@@ -977,7 +995,7 @@ export async function POST(req: NextRequest) {
 
       await prisma.instagramAccount.update({
         where: { id: account.id },
-        data: { lastChecked: new Date(), errorCount: 0, limits: counters as any, ...(warmedState ? { browserState: warmedState as any } : {}), ...(realFollowers !== undefined ? { followers: realFollowers, followersHistory } : {}) },
+        data: { lastChecked: new Date(), errorCount: 0, limits: counters as any, ...(liveState && liveState !== originalState ? { browserState: liveState as any } : {}), ...(realFollowers !== undefined ? { followers: realFollowers, followersHistory } : {}) },
       })
       summary.push(s)
     } catch (e: any) {
