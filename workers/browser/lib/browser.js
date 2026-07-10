@@ -8,6 +8,7 @@ import { humanClick } from './human.js'   // человеческий клик (
 chromium.use(StealthPlugin())
 
 let _browser = null
+let _launching = null   // §6.1 single-flight: промис текущего запуска (защита от гонки старта)
 
 // Аргументы запуска Chromium (общие для headful/headless).
 const LAUNCH_ARGS = [
@@ -34,20 +35,31 @@ const LAUNCH_ARGS = [
  */
 export async function getBrowser() {
   if (_browser && _browser.isConnected()) return _browser
+  // §6.1 single-flight: при холодном старте ИЛИ после краша браузера несколько одновременных
+  // запросов (concurrency MAX) все увидят !isConnected и запустят СВОЙ Chromium — лишние процессы
+  // осиротеют (в `_browser` попадёт только последний) = утечка процессов/RAM под нагрузкой.
+  // Держим один промис запуска: параллельные вызовы ждут его, а не плодят браузеры.
+  if (_launching) return _launching
   const forceHeadless = process.env.BROWSER_HEADLESS === '1'
   const wantHeadful = !forceHeadless
-  try {
-    _browser = await chromium.launch({ headless: !wantHeadful, args: LAUNCH_ARGS })
-  } catch (e) {
-    if (wantHeadful) {
-      // Скорее всего «Missing X server or $DISPLAY» — Xvfb не запущен. Не падаем.
-      console.warn('[browser] headful-запуск не удался, откат в headless:', String(e?.message || e).slice(0, 160))
-      _browser = await chromium.launch({ headless: true, args: LAUNCH_ARGS })
-    } else {
+  _launching = (async () => {
+    try {
+      return await chromium.launch({ headless: !wantHeadful, args: LAUNCH_ARGS })
+    } catch (e) {
+      if (wantHeadful) {
+        // Скорее всего «Missing X server or $DISPLAY» — Xvfb не запущен. Не падаем.
+        console.warn('[browser] headful-запуск не удался, откат в headless:', String(e?.message || e).slice(0, 160))
+        return await chromium.launch({ headless: true, args: LAUNCH_ARGS })
+      }
       throw e
     }
+  })()
+  try {
+    _browser = await _launching
+    return _browser
+  } finally {
+    _launching = null   // сбрасываем и на успехе, и на ошибке (следующий вызов повторит запуск)
   }
-  return _browser
 }
 
 /**
