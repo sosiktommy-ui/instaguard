@@ -10,6 +10,8 @@
  *  4) Просто сырой sessionid (один токен)
  *  5) Мобильная Android-сессия (pipe-формат с "Authorization=Bearer …") — уходит воркеру как есть
  *  6) «Грязная» строка, где JSON-массив/объект куки просто где-то внутри текста
+ *  7) Netscape cookies.txt (домен<TAB>flag<TAB>path<TAB>secure<TAB>expiry<TAB>name<TAB>value),
+ *     включая строки с префиксом "#HttpOnly_" (это НЕ комментарий — там и живёт sessionid)
  */
 
 export type CookieKind = 'instagram' | 'facebook' | 'mobile' | 'unknown'
@@ -75,6 +77,29 @@ function fromWhitespaceTable(s: string): Record<string, string> {
   return out
 }
 
+/**
+ * Netscape cookies.txt (экспорт EditThisCookie/«Get cookies.txt»/curl):
+ *   domain <TAB> includeSubdomains <TAB> path <TAB> secure <TAB> expiry <TAB> name <TAB> value
+ * Строки-комментарии начинаются с '#', НО префикс '#HttpOnly_' — это НЕ комментарий, а флаг
+ * HttpOnly-куки (именно такой у sessionid) — их пропускать нельзя. Табличный парсер
+ * (fromWhitespaceTable) такой формат ломает (берёт домен как имя куки) — поэтому отдельно.
+ */
+function fromNetscape(s: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const line of s.split(/[\n\r]+/)) {
+    const t = line.trim()
+    if (!t) continue
+    if (t.startsWith('#') && !/^#HttpOnly_/i.test(t)) continue   // настоящий комментарий
+    const cells = t.split('\t')
+    if (cells.length >= 7) {
+      const name = cells[5].trim()
+      const value = cells[6].trim()
+      if (name) out[name] = value
+    }
+  }
+  return out
+}
+
 /** Регистронезависимый поиск значения куки по имени. */
 function pick(dict: Record<string, string>, name: string): string {
   const lower = name.toLowerCase()
@@ -103,9 +128,13 @@ export function normalizeCookies(raw: string): NormalizedCookies {
       for (const [k, v] of Object.entries(obj)) if (v != null && typeof v !== 'object') dict[k] = String(v)
     }
   } else {
-    // Не JSON. Пробуем табличный экспорт (DevTools/браузер: name<TAB>value<TAB>domain…)
+    // Не JSON. Netscape cookies.txt пробуем ПЕРВЫМ (иначе табличный парсер возьмёт домен
+    // как имя куки), затем DevTools-таблицу (name<TAB>value<TAB>domain…), затем k=v, затем токен.
+    const netscape = fromNetscape(s)
     const table = fromWhitespaceTable(s)
-    if (pick(table, 'sessionid')) {
+    if (pick(netscape, 'sessionid')) {
+      dict = netscape
+    } else if (pick(table, 'sessionid')) {
       dict = table
     } else if (s.includes('=')) {
       // cookie-заголовок / строка k=v

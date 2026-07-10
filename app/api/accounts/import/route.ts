@@ -67,6 +67,18 @@ async function resolveProxy(userId: string, allowNoProxy: boolean, cap: number, 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const randMs = (minMs: number, maxMs: number) => Math.round(minMs + Math.random() * (maxMs - minMs))
 
+// §4.7 — пер-строчный таймаут-БЭКСТОП. Клиенты входа уже имеют свои таймауты (браузер 180с,
+// legacy 75с), но если fetch/воркер зависнет мимо них, одна строка заморозит ВЕСЬ импорт.
+// Ставим выше клиентских (210с), чтобы не обрывать легитимно медленный вход, но гарантировать
+// разрешение строки. Таймаут → строка падает с понятной причиной, батч продолжается (без ретрая).
+const LOGIN_TIMEOUT_MS = Number(process.env.IMPORT_LOGIN_TIMEOUT_MS) || 210_000
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`Таймаут ${Math.round(ms / 1000)}с: ${label} завис — строка пропущена`)), ms)),
+  ])
+}
+
 // «Instagram просит сменить IP» — сигнал по конкретному IP, а не по паролю/куки.
 // Стоит попробовать ЭТУ ЖЕ строку ещё раз с другим прокси, прежде чем сдаться.
 const isIpBlacklistError = (msg: string) => /чёрном списке|blacklist|change your ip/i.test(msg)
@@ -150,7 +162,7 @@ export async function POST(req: NextRequest) {
             clean = login.replace(/^@/, '').trim().toLowerCase()
 
             if (engine === 'browser') {
-              const r = await browserLogin(login, password, px.url || undefined, totp, geo?.locale, geo?.timezoneId)
+              const r = await withTimeout(browserLogin(login, password, px.url || undefined, totp, geo?.locale, geo?.timezoneId), LOGIN_TIMEOUT_MS, 'вход браузером')
               // Код (checkpoint «новое устройство» или 2FA без ключа) — строку дожмёт модалка (роут /auth/challenge).
               if (r.needsCheckpoint || r.needs2fa) {
                 results.push({
@@ -171,7 +183,7 @@ export async function POST(req: NextRequest) {
               browserState = r.browserState
               loginMethod = 'browser'
             } else {
-              const r = await loginByCredentials(login, password, px.url || undefined, totp)
+              const r = await withTimeout(loginByCredentials(login, password, px.url || undefined, totp), LOGIN_TIMEOUT_MS, 'вход по паролю')
               // Пароль/гео/прокси прошли — аккаунт валиден, воркер уже отправил код. Строку дожмёт модалка.
               if (r.needs2fa || r.needsChallenge) {
                 results.push({
@@ -203,14 +215,14 @@ export async function POST(req: NextRequest) {
             }
             if (engine === 'browser') {
               // Браузер: отдаём строку как есть — воркер соберёт storageState/куки и проверит сессию.
-              const res = await browserLoginByCookies(cookiesRaw, px.url || undefined, geo?.locale, geo?.timezoneId)
+              const res = await withTimeout(browserLoginByCookies(cookiesRaw, px.url || undefined, geo?.locale, geo?.timezoneId), LOGIN_TIMEOUT_MS, 'вход по кукам (браузер)')
               browserState = res.browserState
               clean = res.username.replace(/^@/, '').trim().toLowerCase()
               loginMethod = 'cookies'
             } else {
               const norm = normalizeCookies(cookiesRaw)
               if (norm.error) { results.push({ line: i + 1, ok: false, reason: norm.error }); break }
-              const res = await loginByCookies(norm.cookies, px.url || undefined)
+              const res = await withTimeout(loginByCookies(norm.cookies, px.url || undefined), LOGIN_TIMEOUT_MS, 'вход по кукам')
               sessionData = res.sessionData
               clean = res.username.replace(/^@/, '').trim().toLowerCase()
             }

@@ -116,6 +116,18 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-10 (Фаза III — §4.7)
+
+#### fix(эмуль Фаза III): §4.7 куки/импорт — формат Netscape cookies.txt + пер-строчный таймаут
+
+⚠️ **Только Next.js.** Воркер НЕ трогал, миграций нет.
+
+**Netscape cookies.txt** (`lib/cookies.ts` `fromNetscape`). Экспорт «Get cookies.txt»/EditThisCookie/curl (`домен<TAB>includeSubdomains<TAB>path<TAB>secure<TAB>expiry<TAB>name<TAB>value`) РАНЬШЕ ломался: не-JSON ветка отдавала его в `fromWhitespaceTable`, который берёт первый столбец (домен `.instagram.com`) за имя куки → sessionid терялся → «не распознан». Новый `fromNetscape` разбирает 7 таб-колонок, берёт `name`=col5/`value`=col6, и — ключевое — НЕ пропускает строки с префиксом `#HttpOnly_` (у Instagram sessionid именно HttpOnly; это флаг, а не комментарий), пропуская только настоящие `#`-комментарии. Пробуется ПЕРВЫМ в не-JSON ветке `normalizeCookies`. Проверено node-прогоном на реалистичном экспорте (sessionid/ds_user_id/csrftoken извлечены верно).
+
+**Пер-строчный таймаут-бэкстоп** (`app/api/accounts/import/route.ts` `withTimeout`/`LOGIN_TIMEOUT_MS`=210с, env `IMPORT_LOGIN_TIMEOUT_MS`). Клиенты входа уже имеют таймауты (браузер 180с, legacy 75с), но если fetch/воркер зависнет мимо них, одна строка заморозила бы ВЕСЬ импорт. Бэкстоп выше клиентских (не рвёт легитимно медленный резидентный вход), обёрнут вокруг всех 4 путей входа (browserLogin / loginByCredentials / browserLoginByCookies / loginByCookies). Таймаут → строка падает с понятной причиной, батч продолжается (без ретрая — это не IP-blacklist). Ретрай на IP-blacklist (3 попытки, разные прокси) и паузы между строками (20–45с password / 5–15с cookies) уже были из прошлых записей.
+
+Проверено: `tsc --noEmit` чист по боевому коду (падает только паузная auth — ОЖИДАЕМО). Отмечено `[x]` в `PLAN-IDEAL.md` §4.7 + журнал `plan.md` (27). **Прогресс Фазы III:** ✅ §4.4 · ✅ §5.2 · ✅ §4.9 · ✅ [A2] · ✅ §4.8 внутриполлинговая · ✅ §4.6 подтверждение · ✅ [A3] фото · ✅ [A4/A5] честны · ✅ §4.7 куки/импорт. ⬜ §4.6 ретрай/алерт · ⬜ §4.8 межпроцессная гонка (Redis-lock).
+
 ### 2026-07-10 (Фаза III — [A3/A4/A5])
 
 #### feat(эмуль Фаза III): [A3] фото-в-директ (браузер, graceful) + [A4/A5] проверены честными
