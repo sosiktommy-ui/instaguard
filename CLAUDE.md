@@ -120,6 +120,21 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-11 (§10.2 — fingerprint self-test построен + 2 сигнала бота устранены)
+
+#### feat+fix(§10.2 антидетект): self-test поднимает боевой контекст через прокси и режет red-сигналы
+
+⚠️ **Нужен редеплой браузерного воркера** (build → `2026-07-11-browser-31-antidetect`, подтверждён живым на `/health`). Next.js не трогал, миграций нет.
+
+Разблокировался живой прокси → достроена главная антидетект-метрика §10.2 «0 сигналов бота». Прошлый агент завёл `workers/browser/lib/selftest.js` + эндпоинт `POST /selftest/fingerprint` (`server.js`): поднимает **боевой** `newAccountContext` (тот же отпечаток, что у реальных аккаунтов) через переданный прокси, ходит на нейтральный `example.com` (НЕ Instagram), собирает сигналы и считает red-список. Живой прогон (`browser-30`) через свободный прокси `77.47.143.77` поймал **2 реальных сигнала бота** — оба исправлены в этой записи:
+
+1. **WebGL renderer — нестыковка ОС/GPU.** Self-test прочитал `"Intel Iris OpenGL Engine"` (macOS-строка) при Windows-отпечатке. Корень: дефолт **stealth-плагина** `webgl.vendor` перебивал наш `addInitScript`-патч. Фикс (`lib/browser.js`): `_stealth.enabledEvasions.delete('webgl.vendor')` (+ `'navigator.hardwareConcurrency'`) — теперь единственный источник WebGL vendor/renderer наш патч из `fingerprint()`, консистентный с ОС (Windows → `ANGLE (…D3D11)`).
+2. **WebRTC утечка датацентр-IP.** Self-test поймал `152.55.177.127` (реальный egress Railway) мимо резидентного прокси = сильнейший сигнал прокси-детекта. Launch-флаг `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` **не удержал**. Фикс (`lib/browser.js addInitScript`): JS-редакция ICE-кандидатов — оборачиваем `RTCPeerConnection`, режем публичные IP из `icecandidate` (и `onicecandidate`, и `addEventListener`), приватные/mDNS оставляем; `toString`/`name` подделаны под нативные. HTTP/SOCKS-прокси не носят UDP → легитимный исход за таким прокси = вообще нет публичных srflx, так что редакция консистентна.
+
+Плюс self-test теперь тянет egress-IP **сам** через контекст (ipify), не завися от деградировавшего гео-сервиса (раньше `exitIp=null` → любой WebRTC-IP ложно считался утечкой).
+
+Проверено: `node --check` (browser.js/selftest.js/server.js) чист; тесты воркера 8/8 зелёные; воркер задеплоен, `/health` → `browser-31-antidetect`. ⚠️ **Финальный живой `redCount=0` НЕ снят:** оба тестовых прокси пользователя отвалились (`TCP_INVALID`) в ходе работы, а локальная проверка через Playwright заблокирована AV-карантином `chrome.exe` (скачивается 165 МБ, `chrome.dll` есть — `chrome.exe` кварантинится Defender). Оба фикса **детерминированы** (от прокси не зависят: WebGL-патч перебивает любой рендерер, WebRTC-редакция режет любой публичный IP). Пере-тест — один curl на `/selftest/fingerprint`, когда прокси оживёт. Отмечено `[x]` в `PLAN-IDEAL.md` §10.2.
+
 ### 2026-07-10 (пост-Фаза V: чистка дерева + юнит-тесты §10.1)
 
 #### chore+test: убрана паузная auth-работа и Vanta 3D-фон; заведён vitest + юнит-тесты чистых функций
