@@ -19,6 +19,37 @@ function requireSession(context) {
   })
 }
 
+// Явные индикаторы Instagram, что сообщение НЕ ушло (сеть/ограничение/сбой отправки).
+const DM_FAIL_TEXT = [
+  'Not delivered', 'Не доставлено', "Couldn't send", 'Failed to send',
+  'Message failed', 'Не удалось отправить', 'Tap to retry', 'Нажмите, чтобы повторить',
+  'Try again', 'Попробуйте снова',
+]
+
+// §4.6 — ПОДТВЕРЖДЕНИЕ доставки, а не «нажал Enter = доставлено».
+// Успех = (нет индикатора сбоя) И (сообщение видно в треде ИЛИ композер очистился).
+// Композер (contenteditable) очищается ТОЛЬКО когда IG принял отправку; если текст завис
+// в поле или появился «Not delivered» — считаем недоставленным (транзиент → ретрай).
+async function confirmDelivered(page, box, text) {
+  const probe = String(text).split('\n').map((s) => s.trim()).find(Boolean) || ''
+  const snippet = probe.slice(0, 40)
+  const deadline = Date.now() + 8000
+  let composerCleared = false
+  while (Date.now() < deadline) {
+    if (await pageHasText(page, DM_FAIL_TEXT)) return { delivered: false, reason: 'not_delivered: Instagram пометил сообщение недоставленным' }
+    if (!composerCleared) {
+      composerCleared = await box.evaluate((el) => ((el.innerText ?? el.value ?? '').trim().length === 0)).catch(() => false)
+    }
+    // Сильное подтверждение: наш текст виден в треде (композер к этому моменту пуст).
+    if (composerCleared && snippet && await pageHasText(page, [snippet])) return { delivered: true }
+    await jitter(500, 900)
+  }
+  // Композер очистился, явного сбоя нет — сообщение ушло (мягкое подтверждение), даже если
+  // точный текст в треде не сматчился (эмодзи/ссылка/нормализация вёрстки).
+  if (composerCleared) return { delivered: true }
+  return { delivered: false, reason: 'unconfirmed: поле ввода не очистилось — отправка не подтверждена' }
+}
+
 // ── Директ ────────────────────────────────────────────────────────────────────
 export async function sendDM(context, { toUsername, text }) {
   await requireSession(context)
@@ -38,7 +69,12 @@ export async function sendDM(context, { toUsername, text }) {
   await box.press('Enter')
   await jitter(1200, 2200)
 
-  return { ok: true, storageState: await context.storageState() }
+  // §4.6 — проверяем, что сообщение реально появилось в треде. Сессия «дозрела» в любом
+  // исходе — возвращаем storageState, чтобы не терять прогрев (недоставка = транзиент, ретрай).
+  const conf = await confirmDelivered(page, box, text)
+  const storageState = await context.storageState()
+  if (!conf.delivered) return { ok: false, delivered: false, error: conf.reason, storageState }
+  return { ok: true, delivered: true, storageState }
 }
 
 // ── Подписка ────────────────────────────────────────────────────────────────
