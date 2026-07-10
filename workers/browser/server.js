@@ -9,7 +9,7 @@ import { runVisit } from './lib/session.js'
 import { checkProxyBrowser } from './lib/proxy.js'
 import { toStorageState } from './lib/state.js'
 
-const BUILD = '2026-07-09-browser-25-visit'
+const BUILD = '2026-07-09-browser-26-reliability'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -269,5 +269,10 @@ app.post('/session/run', async (req, res) => {
     res.status(400).json({ error: kind, message })
   }
 })
+
+// §4.9: одиночная асинхронная ошибка/reject НЕ должна ронять весь воркер (иначе падают ВСЕ
+// аккаунты). Логируем и продолжаем — конкретная операция уже обёрнута в try/catch выше.
+process.on('unhandledRejection', (reason) => console.error('[unhandledRejection]', reason))
+process.on('uncaughtException', (err) => console.error('[uncaughtException]', err))
 
 app.listen(PORT, () => console.log(`🌐 browser-worker ${BUILD} на :${PORT} (concurrency=${MAX})`))

@@ -23,31 +23,54 @@ export function scraperConfigured(): boolean {
 }
 
 // ── Низкоуровневый запрос ────────────────────────────────────────────────────
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+// Ретрай ТОЛЬКО транзиентных сбоев (429 лимит / 5xx / сеть-таймаут), plan.md §4.4 [P5]:
+// один блип не должен терять событие триггера. НЕ ретраим 400/401/403/404 — это осмысленные
+// ответы (403/404 у HikerAPI ещё и ТАРИФИЦИРУЮТСЯ, повтор = лишние деньги).
+const RETRY_BACKOFF = [0, 800, 2500]
+
+async function reqOnce(path: string, qs: string): Promise<{ status: number; ok: boolean; body: string }> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
+  try {
+    const res = await fetch(`${BASE}${path}?${qs}`, {
+      headers: { 'x-access-key': KEY, accept: 'application/json' },
+      cache: 'no-store',
+      signal: ctrl.signal,
+    })
+    const body = await res.text()
+    return { status: res.status, ok: res.ok, body }
+  } catch (e: any) {
+    if (e?.name === 'AbortError') { const err = new Error(`HikerAPI таймаут ${Math.round(TIMEOUT_MS / 1000)}с (${path})`) as any; err.transient = true; throw err }
+    const err = e as any; err.transient = true; throw err // сетевой сбой — транзиентный
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function req(path: string, params: Record<string, string | number | undefined>): Promise<any> {
   if (!KEY) throw new Error('HIKER_API_KEY не задан — парсинг через скрейпер-API невозможен')
   const qs = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== '') qs.set(k, String(v))
   }
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
-  try {
-    const res = await fetch(`${BASE}${path}?${qs.toString()}`, {
-      headers: { 'x-access-key': KEY, accept: 'application/json' },
-      cache: 'no-store',
-      signal: ctrl.signal,
-    })
-    if (!res.ok) {
-      const body = await res.text().catch(() => '')
-      throw new Error(`HikerAPI ${res.status} (${path}): ${body.slice(0, 160)}`)
+  let lastErr: any
+  for (let i = 0; i < RETRY_BACKOFF.length; i++) {
+    if (RETRY_BACKOFF[i]) await sleep(RETRY_BACKOFF[i])
+    try {
+      const { status, ok, body } = await reqOnce(path, qs.toString())
+      if (ok) return body ? JSON.parse(body) : null
+      // Транзиентный HTTP → ретрай; осмысленный (4xx кроме 429) → сразу наверх.
+      const transient = status === 429 || status >= 500
+      const err = new Error(`HikerAPI ${status} (${path}): ${body.slice(0, 160)}`)
+      if (!transient) throw err
+      lastErr = err
+    } catch (e: any) {
+      if (!e?.transient) throw e   // не-транзиентная ошибка (в т.ч. осмысленный HTTP) — не ретраим
+      lastErr = e
     }
-    return await res.json()
-  } catch (e: any) {
-    if (e?.name === 'AbortError') throw new Error(`HikerAPI таймаут ${Math.round(TIMEOUT_MS / 1000)}с (${path})`)
-    throw e
-  } finally {
-    clearTimeout(timer)
   }
+  throw lastErr
 }
 
 // Разбор ответа: chunk-эндпоинты отдают кортеж [items, next_cursor]; часть эндпоинтов —
