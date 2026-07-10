@@ -5,7 +5,15 @@ import { resolveProxy } from './proxy.js'
 import { fingerprint } from './fingerprint.js'
 import { humanClick } from './human.js'   // человеческий клик (кривая траектория) — plan.md §1.3
 
-chromium.use(StealthPlugin())
+// §10.2: отключаем два дефолта stealth, которые ПЕРЕБИВАЮТ наш консистентный с ОС отпечаток:
+//  • 'webgl.vendor' — ставит macOS-строку "Intel Inc./Intel Iris OpenGL Engine" ПОВЕРХ нашего
+//    Windows-профиля (ANGLE ...D3D11) → нестыковка ОС/GPU = сигнал бота (self-test поймал это).
+//  • 'navigator.hardwareConcurrency' — жёсткие 4 ядра поверх нашего стабильного-на-аккаунт HW.
+// Оба значения мы ставим сами в newAccountContext (addInitScript из fingerprint()).
+const _stealth = StealthPlugin()
+_stealth.enabledEvasions.delete('webgl.vendor')
+_stealth.enabledEvasions.delete('navigator.hardwareConcurrency')
+chromium.use(_stealth)
 
 let _browser = null
 let _launching = null   // §6.1 single-flight: промис текущего запуска (защита от гонки старта)
@@ -118,6 +126,50 @@ export async function newAccountContext(opts) {
       }
       patch(window.WebGLRenderingContext && window.WebGLRenderingContext.prototype)
       patch(window.WebGL2RenderingContext && window.WebGL2RenderingContext.prototype)
+    } catch {}
+    // WebRTC IP-leak guard (§2.9 [D11] / §10.2): launch-флаг disable_non_proxied_udp не всегда
+    // держит — self-test поймал утечку реального датацентр-egress (Railway) мимо резидентного
+    // HTTP-прокси = сильнейший сигнал прокси-детекта. HTTP/SOCKS-прокси не носят UDP, поэтому
+    // легитимный исход за таким прокси — вообще НЕТ публичных srflx-кандидатов; режем публичные
+    // IP из ICE-кандидатов на уровне JS (детерминированно, независимо от Chromium). Приватные/
+    // mDNS-кандидаты оставляем (их даёт и обычный Chrome). toString подделан под нативный.
+    try {
+      const NativeRTC = window.RTCPeerConnection || window.webkitRTCPeerConnection
+      if (NativeRTC) {
+        const isPublic = (cand) => {
+          const m = /(\d{1,3}(?:\.\d{1,3}){3})/.exec(cand || '')
+          if (!m) return false
+          const ip = m[1]
+          return !(/^10\./.test(ip) || /^192\.168\./.test(ip) || /^172\.(1[6-9]|2\d|3[01])\./.test(ip) ||
+                   /^127\./.test(ip) || /^169\.254\./.test(ip) || /^0\./.test(ip))
+        }
+        const drop = (e) => e && e.candidate && isPublic(e.candidate.candidate)
+        function RTCPeerConnection(...args) {
+          const pc = new NativeRTC(...args)
+          const origAEL = pc.addEventListener.bind(pc)
+          let oncb = null
+          try {
+            Object.defineProperty(pc, 'onicecandidate', {
+              configurable: true, get() { return oncb }, set(fn) { oncb = fn },
+            })
+          } catch {}
+          origAEL('icecandidate', (e) => { if (oncb && !drop(e)) oncb.call(pc, e) })
+          pc.addEventListener = function (type, listener, opts) {
+            if (type === 'icecandidate' && typeof listener === 'function') {
+              return origAEL(type, (e) => { if (!drop(e)) listener.call(pc, e) }, opts)
+            }
+            return origAEL(type, listener, opts)
+          }
+          return pc
+        }
+        RTCPeerConnection.prototype = NativeRTC.prototype
+        try {
+          Object.defineProperty(RTCPeerConnection, 'name', { value: 'RTCPeerConnection' })
+          RTCPeerConnection.toString = () => 'function RTCPeerConnection() { [native code] }'
+        } catch {}
+        window.RTCPeerConnection = RTCPeerConnection
+        if (window.webkitRTCPeerConnection) window.webkitRTCPeerConnection = RTCPeerConnection
+      }
     } catch {}
   }, fp)
   context.setDefaultTimeout(45000)

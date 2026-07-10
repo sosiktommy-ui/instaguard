@@ -11,7 +11,7 @@ import { toStorageState } from './lib/state.js'
 import { fingerprint } from './lib/fingerprint.js'
 import { fingerprintSelfTest } from './lib/selftest.js'
 
-const BUILD = '2026-07-10-browser-30-selftest'
+const BUILD = '2026-07-11-browser-31-antidetect'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2

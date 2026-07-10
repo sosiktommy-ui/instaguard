@@ -47,6 +47,14 @@ async function collectInPage() {
     out.canvasHash = String(h >>> 0)
   } catch { out.canvasHash = null }
 
+  // Реальный egress этого контекста (через прокси) — тянем сами, чтобы не зависеть от
+  // деградировавшего гео-сервиса (ipapi.is иногда не отдаёт IP → exitIp был null и любой
+  // WebRTC-IP ложно считался утечкой). ipify отдаёт голый IP, нейтрален к Instagram.
+  try {
+    const r = await fetch('https://api.ipify.org?format=text', { cache: 'no-store' })
+    out.egressIp = (await r.text()).trim()
+  } catch { out.egressIp = null }
+
   // WebRTC: собрать IP-кандидаты. Утечка = чужой ПУБЛИЧНЫЙ IP (реальный IP воркера мимо прокси).
   out.webrtcIps = await new Promise((resolve) => {
     const ips = new Set()
@@ -101,8 +109,10 @@ export async function fingerprintSelfTest(context, expected, exitIp) {
   if (signals.timezone !== expected.timezoneId)
     red.push(`timezone="${signals.timezone}" ≠ ожидаемой "${expected.timezoneId}"`)
 
-  // WebRTC-утечка: любой ПУБЛИЧНЫЙ IP, не равный exit-IP прокси
-  const leaks = (signals.webrtcIps || []).filter((ip) => !isPrivateIp(ip) && ip !== exitIp)
+  // WebRTC-утечка: любой ПУБЛИЧНЫЙ IP, не равный egress прокси. Приоритет — IP, вытянутый
+  // самим контекстом (egressIp, надёжнее переданного exitIp из гео-сервиса).
+  const knownEgress = signals.egressIp || exitIp
+  const leaks = (signals.webrtcIps || []).filter((ip) => !isPrivateIp(ip) && ip !== knownEgress)
   if (leaks.length) red.push(`WebRTC утечка публичного IP: ${leaks.join(', ')} (не через прокси)`)
 
   return { signals, red, warnings, redCount: red.length, webrtcLeaks: leaks }
