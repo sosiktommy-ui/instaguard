@@ -14,10 +14,12 @@ import { acquireBrowserLock, releaseBrowserLock } from '@/lib/browserLock'
 import { loadDelivery, deliveryUnhealthy, recordDelivery, DELIVERY_SLOWDOWN_FACTOR } from '@/lib/delivery'
 import { mediaPostUrl } from '@/lib/instagram/shortcode'
 import { Queue } from 'bullmq'
-import { loadCounters, consume, warmupFactor, scaleCaps, MAX_NEW_PER_POLL, type Counters, type ActionKind } from '@/lib/limits'
+import { loadCounters, consume, warmupFactor, scaleCaps, type Counters, type ActionKind } from '@/lib/limits'
 import { activityWindow } from '@/lib/activity'
 import { getCurrentUser } from '@/lib/auth'
 import { mergeStatsMap } from '@/lib/stats'
+import { matchPhrase } from '@/lib/match'
+import { selectTargets } from '@/lib/targets'
 
 // Сколько последних постов автора комментария лайкать (действие «Лайк» в триггере «Комментарий»)
 const COMMENT_LIKE_POSTS = 3
@@ -118,17 +120,6 @@ async function parseLikersFor(username: string, parsingSource: string, getDraft:
   return scrapeLikers(username, mediaCount, perMedia)
 }
 
-// Выбирает НОВЫЕ цели и помечает «известными» ТОЛЬКО обработанные (+ всю базу на
-// первом проходе). Раньше все найденные разом падали в снапшот → всё сверх
-// MAX_NEW_PER_POLL молча терялось (помечалось «видели», но действие не выполнялось).
-// Теперь лишние остаются «новыми» и добираются в следующих циклах (в пределах лимитов).
-function selectTargets<T>(all: T[], known: Set<string>, hadBaseline: boolean, pkOf: (x: T) => string): { fresh: T[]; process: T[] } {
-  if (!hadBaseline) { all.forEach((x) => { const k = pkOf(x); if (k) known.add(k) }); return { fresh: [], process: [] } }
-  const fresh = all.filter((x) => { const k = pkOf(x); return Boolean(k) && !known.has(k) })
-  const process = fresh.slice(0, MAX_NEW_PER_POLL)
-  process.forEach((x) => known.add(pkOf(x)))
-  return { fresh, process }
-}
 // Определяет по тексту ошибки, нужно ли остановить аккаунт (challenge/бан/ограничение)
 function statusFromError(msg: string): 'CHALLENGE' | 'PAUSED' | null {
   const m = (msg || '').toLowerCase()
@@ -186,58 +177,6 @@ async function notifyOwner(accountIds: string[], message: string) {
   }
 }
 
-// ── Сопоставление фраз (для триггеров на комментарии) ─────────────────────────
-function norm(s: string): string {
-  return (s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim()
-}
-function levenshtein(a: string, b: string): number {
-  const m = a.length, n = b.length
-  if (!m) return n
-  if (!n) return m
-  const prev = new Array(n + 1)
-  for (let j = 0; j <= n; j++) prev[j] = j
-  for (let i = 1; i <= m; i++) {
-    let diag = prev[0]
-    prev[0] = i
-    for (let j = 1; j <= n; j++) {
-      const tmp = prev[j]
-      prev[j] = a[i - 1] === b[j - 1] ? diag : 1 + Math.min(diag, prev[j], prev[j - 1])
-      diag = tmp
-    }
-  }
-  return prev[n]
-}
-function similarity(a: string, b: string): number {
-  const max = Math.max(a.length, b.length)
-  return max === 0 ? 1 : 1 - levenshtein(a, b) / max
-}
-/**
- * match = { mode: 'all' | 'specific', phrases: string[], exact: boolean }
- * exact=true  → строгое совпадение нормализованной фразы (регистр/пунктуация игнорируются)
- * exact=false → подстрока ИЛИ близость по опечаткам ("suees liss" ≈ "guest list")
- */
-function matchPhrase(text: string, match: any): boolean {
-  if (!match || match.mode === 'all') return true
-  const phrases: string[] = (match.phrases ?? []).map(norm).filter(Boolean)
-  if (!phrases.length) return true // фраз не задано — реагируем всегда
-  const t = norm(text)
-  if (!t) return false
-  if (match.exact) return phrases.some((p) => t === p)
-
-  return phrases.some((p) => {
-    if (t.includes(p)) return true
-    if (similarity(t, p) >= 0.6) return true
-    // фраза внутри длинного комментария с опечатками — скользящее окно по словам
-    const words = t.split(' ')
-    const pWords = p.split(' ').length
-    for (let i = 0; i < words.length; i++) {
-      for (let j = i + 1; j <= words.length && j <= i + pWords + 1; j++) {
-        if (similarity(words.slice(i, j).join(' '), p) >= 0.7) return true
-      }
-    }
-    return false
-  })
-}
 
 // Читает текущие счётчики действий триггера и сливает прибавки «сработало» (fired)
 // и «выполнено» (done). undefined (пустой инкремент) → Prisma пропустит поле stats.
