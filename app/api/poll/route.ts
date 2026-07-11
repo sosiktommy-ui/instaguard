@@ -212,7 +212,10 @@ async function runFollowerActionsInline(job: any) {
         : `Триггер «${job.triggerName}» → @${job.followerUsername}: действия не выполнены${r.errors.length ? ` (${r.errors.join('; ')})` : ''}`
       await Promise.all([
         prisma.log.create({ data: { accountId: job.accountId, level, message } }),
-        prisma.triggerRule.update({ where: { id: job.triggerId }, data: { fireCount: { increment: 1 }, stats: await mergeStats(job.triggerId, r.incFired, r.incDone) } }),
+        // «Срабатывание» (fireCount) считаем ТОЛЬКО когда реально что-то ВЫПОЛНЕНО (success),
+        // а не по факту попытки — иначе провал (директ не ушёл) ложно читался как «сработал».
+        // stats пишем всегда (там раздельно попытки/выполнено), чтобы провал был виден.
+        prisma.triggerRule.update({ where: { id: job.triggerId }, data: { ...(success ? { fireCount: { increment: 1 } } : {}), stats: await mergeStats(job.triggerId, r.incFired, r.incDone) } }),
       ])
     }
     if (r.brk) await prisma.instagramAccount.update({ where: { id: job.accountId }, data: { status: r.brk } }).catch(() => null)
@@ -848,7 +851,8 @@ export async function POST(req: NextRequest) {
                 : `Коммент @${c.username} → «${trigger.name}»: действия не выполнены${errors.length ? ` (${errors.join('; ')})` : ''}`
               await Promise.all([
                 prisma.log.create({ data: { accountId: account.id, level, message } }),
-                prisma.triggerRule.update({ where: { id: trigger.id }, data: { fireCount: { increment: 1 }, stats: await mergeStats(trigger.id, incFired, incDone) } }),
+                // fireCount — только при РЕАЛЬНО выполненном действии (fired), не по попытке.
+                prisma.triggerRule.update({ where: { id: trigger.id }, data: { ...(fired ? { fireCount: { increment: 1 } } : {}), stats: await mergeStats(trigger.id, incFired, incDone) } }),
                 ...(useBrowserForComments && cState ? [prisma.instagramAccount.update({ where: { id: account.id }, data: { browserState: cState as any } })] : []),
               ])
               if (fired) { s.commentActions++; firedForComment = true }

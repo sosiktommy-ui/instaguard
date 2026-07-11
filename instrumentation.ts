@@ -78,7 +78,9 @@ export async function register() {
                   : `Триггер «${d.triggerName}» → @${d.followerUsername}: действия не выполнены${r.errors.length ? ` (${r.errors.join('; ')})` : ''}`
                 await Promise.all([
                   prisma.log.create({ data: { accountId: d.accountId, level, message } }),
-                  prisma.triggerRule.update({ where: { id: d.triggerId }, data: { fireCount: { increment: 1 }, stats: mergeStatsMap(cur?.stats ?? {}, r.incFired, r.incDone) as any } }),
+                  // fireCount («срабатывание») — ТОЛЬКО при реально выполненном действии (success),
+                  // не по факту попытки: иначе провал (директ не ушёл) ложно читался как «сработал».
+                  prisma.triggerRule.update({ where: { id: d.triggerId }, data: { ...(success ? { fireCount: { increment: 1 } } : {}), stats: mergeStatsMap(cur?.stats ?? {}, r.incFired, r.incDone) as any } }),
                 ])
               }
               if (r.brk) await prisma.instagramAccount.update({ where: { id: d.accountId }, data: { status: r.brk as any } }).catch(() => null)
