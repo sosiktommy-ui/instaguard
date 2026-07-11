@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Users, Zap, Send, AlertCircle, Eye, CheckCircle2, Info, RefreshCw, BarChart3, Cpu, Radar } from 'lucide-react'
+import { Users, Zap, Send, AlertCircle, Eye, CheckCircle2, Info, RefreshCw, BarChart3, Cpu, Radar, ShieldCheck } from 'lucide-react'
 import { formatFollowers } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { cn } from '@/lib/utils'
@@ -37,6 +37,19 @@ function Stats() {
   const [loading, setLoading] = useState(true)
   const [bh, setBh] = useState<any>(null)   // здоровье браузерного воркера
   const [sh, setSh] = useState<any>(null)   // здоровье скрейпер-API
+  const [st, setSt] = useState<any>(null)   // антидетект self-test (§11.2)
+  const [stRun, setStRun] = useState(false)
+
+  const runSelfTest = useCallback(async () => {
+    setStRun(true); setSt(null)
+    try {
+      const r = await fetch('/api/selftest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      setSt(await r.json())
+    } catch (e: any) {
+      setSt({ error: e?.message ?? 'ошибка сети' })
+    }
+    setStRun(false)
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -124,6 +137,58 @@ function Stats() {
                 if (sh.configured) return <div className="text-[12px] text-bad mt-0.5 leading-snug">🔴 ошибка связи{sh.error ? `: ${sh.error}` : ''}</div>
                 return <div className="text-[12px] text-subt mt-0.5">статус неизвестен</div>
               })()}
+            </div>
+          </div>
+        </div>
+
+        {/* Антидетект self-test (§11.2): «0 сигналов бота» через рабочий прокси */}
+        <div className="mt-3 rounded-2xl border border-line/50 p-4">
+          <div className="flex items-start gap-3">
+            <IconTile icon={ShieldCheck} color={TONE.ok} size={36} />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="text-[13.5px] font-medium">Антидетект-приёмка (сигналы бота)</div>
+                <button onClick={runSelfTest} disabled={stRun}
+                  className="text-[12px] font-medium px-2.5 py-1 rounded-lg bg-brand/10 text-brand hover:bg-brand/20 transition-colors disabled:opacity-50">
+                  {stRun ? 'Проверяю… (до ~30с)' : 'Запустить тест'}
+                </button>
+              </div>
+              <div className="text-[12px] text-subt mt-0.5 leading-snug">
+                Поднимает браузер через рабочий прокси из пула и считает сигналы бота (WebGL, UA-платформа, WebRTC-утечка). Instagram не трогается — безопасно.
+              </div>
+
+              {st && (
+                <div className="mt-3 text-[12px] leading-relaxed">
+                  {st.error ? (
+                    <div className="text-bad">🔴 {st.error}</div>
+                  ) : (
+                    <>
+                      <div className={cn('text-[15px] font-semibold', (st.redCount ?? 1) === 0 ? 'text-ok' : 'text-bad')}>
+                        {(st.redCount ?? 1) === 0 ? '✅ 0 сигналов бота — чисто' : `🔴 ${st.redCount} сигнал(ов) бота`}
+                      </div>
+                      {Array.isArray(st.red) && st.red.length > 0 && (
+                        <ul className="mt-1 list-disc list-inside text-bad space-y-0.5">
+                          {st.red.map((r: string, i: number) => <li key={i}>{r}</li>)}
+                        </ul>
+                      )}
+                      {Array.isArray(st.warnings) && st.warnings.length > 0 && (
+                        <ul className="mt-1 list-disc list-inside text-warn space-y-0.5">
+                          {st.warnings.map((w: string, i: number) => <li key={i}>{w}</li>)}
+                        </ul>
+                      )}
+                      <div className="mt-2 grid sm:grid-cols-2 gap-x-4 gap-y-0.5 text-subt font-mono text-[11px]">
+                        {st.exit && <div>exit-IP: {st.exit.ip ?? '?'} · {st.exit.country ?? '?'}</div>}
+                        <div>прокси: {st.proxyUsed}{st.proxyAuto ? ' (авто)' : ''}</div>
+                        {st.expected?.platform && <div>platform: {st.expected.platform} / UA: {st.expected.uaPlatform}</div>}
+                        {st.expected?.locale && <div>locale/tz: {st.expected.locale} · {st.expected.timezoneId}</div>}
+                        {st.expected?.glRenderer && <div className="sm:col-span-2 truncate">WebGL: {st.expected.glRenderer}</div>}
+                        {Array.isArray(st.webrtcLeaks) && <div>WebRTC утечки: {st.webrtcLeaks.length === 0 ? 'нет ✅' : st.webrtcLeaks.join(', ')}</div>}
+                        {st.build && <div>build: {st.build}</div>}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>

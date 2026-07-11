@@ -110,6 +110,24 @@ export async function browserHealth() {
   }
 }
 
+// ── Антидетект self-test (§10.2/§11.2): «0 сигналов бота» через прокси ──────────
+export interface SelfTestResult {
+  ok: boolean
+  build?: string
+  redCount?: number
+  red?: string[]
+  warnings?: string[]
+  exit?: { ip: string | null; country: string | null } | null
+  webrtcLeaks?: string[]
+  expected?: { platform?: string; uaPlatform?: string; timezoneId?: string; locale?: string; glRenderer?: string }
+  signals?: Record<string, any>
+  error?: string
+}
+export function browserSelfTest(proxy: string, username?: string, locale?: string, timezoneId?: string) {
+  // Долгий тест (поднимает контекст + ходит на detector) — но воркер сам ограничивает; TIMEOUT_MS покрывает.
+  return browserFetch<SelfTestResult>('/selftest/fingerprint', { proxy, username, locale, timezoneId })
+}
+
 // ── Прокси (заменяет мёртвый Python-воркер) ─────────────────────────────────────
 export interface BrowserProxyCheck {
   ok: boolean
