@@ -120,6 +120,16 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-11 (plan4 Фаза C — нормализатор news/inbox + юнит-тесты)
+
+#### test(plan4 Фаза C): чистый разбор ленты уведомлений вынесен и покрыт тестами
+
+⚠️ **Только воркер (чистый JS, без Playwright) + тесты. Ни Next.js, ни редеплой не требуются** для этой записи (эндпоинт `/self-events` уже был в Фазе B / build browser-34).
+
+Чтобы разбор `news/inbox` был юнит-тестируемым (правило пользователя «тест после каждой фазы»), чистая логика вынесена из `selfevents.js` в **`workers/browser/lib/newsparse.js`** (нет импортов Playwright): `classify`/`normalizeNews`/`pickUser` + `NEWS_TYPE_CODES` (карта `story_type`→тип — заполняется реальными кодами с живого без правки кода). Классификация трёхуровневая: известный код → эвристика по структуре (`inline_follow`→follow; `media` ± коммент-признак → like/comment) → текст (мультиязычно). `selfevents.js` теперь импортирует `normalizeNews` оттуда.
+
+**Тесты** `workers/browser/test/selfevents.test.js` (`node --test`, 9 шт.): follow (inline_follow), like (media→media_id левая часть), comment (текст+media), агрегированный лайк (верхний актор), укр-локализация «почав стежити»→follow, story_type-код перекрывает эвристику, `normalizeNews` (new+old_stories, битые пропускаются), мусор→[], `pickUser`-приоритеты. **Воркер: 17/17 зелёных** (8 proxy + 9 self-events); `node --check` + `tsc` чисто. Отмечено `[x]` Фаза C в `plan4.md`. **Осталось до Фазы D:** живой JSON от кнопки 🔔 → подставить точные `story_type`-коды (тогда тип не зависит от текста).
+
 ### 2026-07-11 (plan4 Фаза B — self-events: эндпоинт + проба формата news/inbox)
 
 #### feat(plan4 Фаза B): читать СВОИ уведомления (news/inbox) + debug-проба формата на живом

@@ -308,15 +308,16 @@ async function getEventsFor(type, account, source):
 - **Источник:** дефолт `parsingSource='self'`; неизвестные/старые значения → трактуем как `self` (с фолбэком). Черновые/API-режимы остаются в enum, но в UI не выбираются.
 - **ТЕСТ A:** `tsc` чисто; в UI (все вкладки + бургер + онбординг + настройки) НЕТ ни слова про черновые/API; `/drafts` пункта в меню нет, прямой заход редиректит на `/`; детект НЕ упал (parsingSource в БД не тронут — черновой парсит как прежде). **[x] СДЕЛАНО 2026-07-11** (кроме миграции аккаунта — перенесена на флип, см. выше).
 
-### Фаза B — self-events: снять реальный формат `news/inbox` на живом
+### Фаза B — self-events: снять реальный формат `news/inbox` на живом — [~] ИНСТРУМЕНТ ГОТОВ, ЖДЁТ JSON
+- **[x] 2026-07-11:** построен инструмент снятия формата — воркер `/self-events` (`readSelfEvents`, `raw:true`) + owner-scoped `/api/selfevents-probe` + кнопка 🔔 в деталях аккаунта (отдаёт сырой `news/inbox`). Осталось: пользователю нажать 🔔 на живом → прислать JSON → подставить точные `story_type`-коды в `NEWS_TYPE_CODES` (`newsparse.js`).
 - Dev-эндпоинт воркера `POST /debug/news-inbox` (под секретом) ИЛИ временный лог в `/self-events`: залогиненной сессией основного дёрнуть `GET /api/v1/news/inbox/`, вернуть СЫРОЙ JSON.
 - Снять: коды типов (follow / like / comment / mention), где `username`/`pk`/`ts`, есть ли `media_id`, есть ли ТЕКСТ коммента, как выглядит агрегированный лайк («X и ещё N»), отличие follow vs follow-request.
 - **ТЕСТ B:** получить реальный JSON с @aheidy.hec (или канареечного) через рабочий прокси; сохранить как фикстуры в `tests/fixtures/news-inbox/*.json`. Без этого Фазу C не начинаем.
 
-### Фаза C — self-events: нормализатор + эндпоинт воркера
-- `workers/browser/lib/selfevents.js` (по образцу `parse.js`/`readStoryEvents`): `apiGet('/api/v1/news/inbox/')` → `normalizeNews(json)` → `[{type,pk,username,text?,media_id?,ts}]`. Полностью дефенсивно (сбой → `{events:[],error}`, незнакомый тип → пропуск+debug). Курсор `max_id` для добора за окно.
-- Эндпоинт `POST /self-events` (server.js), клиент `browserSelfEvents` (`lib/browser/client.ts`). Возвращает `browserState` (сессия дозрела).
-- **ТЕСТ C:** юнит-тесты (vitest §10.1) `normalizeNews` на фикстурах Фазы B: follow → username; like-агрегат → топ-актор + флаг «ещё N»; comment с текстом → text; comment без текста → media_id для добора; мусор → пусто, не падает. `node --check` воркера. build-tag воркера ↑.
+### Фаза C — self-events: нормализатор + эндпоинт воркера — [x] СДЕЛАНО (коды типов доуточнятся с живого)
+- `workers/browser/lib/selfevents.js`: `/api/v1/news/inbox/` изнутри залогиненной страницы → `normalizeNews` → `[{type,pk,username,text?,media_id?,ts,code}]`. Дефенсивно (сбой → `{events:[],error}`). Эндпоинт `POST /self-events`, клиент `browserSelfEvents` — сделаны в Фазе B.
+- **[x] 2026-07-11:** чистый разбор вынесен в `workers/browser/lib/newsparse.js` (без Playwright — тестируемо): `classify`/`normalizeNews`/`pickUser` + `NEWS_TYPE_CODES` (карта story_type→тип, заполняется с живого без правки логики). Классификация по СТРУКТУРЕ (inline_follow→follow; media±коммент-признак→like/comment) + тексту (мультиязычно) + кодам (перекрывают эвристику).
+- **[x] ТЕСТ C:** `workers/browser/test/selfevents.test.js` (`node --test`) — 9 тестов: follow/like/comment/агрегат/укр-локализация/код-перекрывает-эвристику/normalizeNews(new+old,битые)/мусор→[]/pickUser. Все зелёные (воркер 17/17: 8 proxy + 9 self-events). `node --check` + `tsc` чисто. **Осталось:** подставить реальные `story_type`-коды из JSON Фазы B (тогда классификация не зависит от текста вовсе).
 
 ### Фаза D — интеграция self в poll (детект через свои уведомления) — БЕЗ ФОЛБЭКА
 - `parseSelfEventsFor(account, types)` в poll — ЕДИНСТВЕННЫЙ источник детекта. Ветки drafts/api из потоков детекта убираются (код в `lib/scraper/hiker.ts`/`parse.js`/`draftPool.ts` остаётся, но `poll` их для детекта не зовёт). На флипе — одновременно миграция `role HELPER→RESPONDER`.

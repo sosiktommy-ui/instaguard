@@ -10,54 +10,9 @@
 //     (Фаза B плана). Любой сбой → {events:[], error} — НИКОГДА не роняем цикл поллинга.
 import { jitter } from './human.js'
 import { gotoResilient, hasSessionCookie } from './browser.js'
+import { normalizeNews } from './newsparse.js'   // чистый разбор (юнит-тестится отдельно)
 
 const IG_APP_ID = '936619743392459'
-
-function pickUser(a) {
-  // Актор события: разные поля в разных типах историй.
-  const inline = a?.inline_follow?.user_info
-  const pk = String(a?.profile_id ?? inline?.pk ?? a?.user_id ?? '')
-  const username = a?.profile_name ?? inline?.username ?? a?.username ?? ''
-  return { pk, username }
-}
-
-// BEST-EFFORT классификация одной «истории» ленты в наше событие.
-function classify(st) {
-  const a = st?.args ?? {}
-  const { pk, username } = pickUser(a)
-  const text = String(a.text ?? '')
-  const media = Array.isArray(a.media) && a.media[0] ? a.media[0] : null
-  // media.id обычно "<mediaPk>_<ownerPk>" — берём левую часть.
-  const media_id = media ? String(media.id ?? '').split('_')[0] : undefined
-  const ts = a.timestamp != null ? Math.round(Number(a.timestamp)) : null
-  const code = st?.story_type ?? st?.type ?? null
-
-  // Определяем тип. inline_follow → подписка. media без явного «коммент»-признака → лайк;
-  // с признаком коммента (в тексте/полях) → коммент. Всё это уточним по реальному payload.
-  let type = 'unknown'
-  if (a.inline_follow || /\bfollow|стеж|подпис|подпіс|siguió|empezó a seguirte|mengikuti/i.test(text)) {
-    type = 'follow'
-  } else if (media_id || media) {
-    const looksComment = /comment|коммент|коментар|comentó|prokoment|ответ/i.test(text) || a.comment_id != null
-    type = looksComment ? 'comment' : 'like'
-  }
-  return { type, pk, username, text, media_id, ts, code }
-}
-
-function normalizeNews(json) {
-  const stories = [
-    ...(Array.isArray(json?.new_stories) ? json.new_stories : []),
-    ...(Array.isArray(json?.old_stories) ? json.old_stories : []),
-  ]
-  const events = []
-  for (const st of stories) {
-    try {
-      const e = classify(st)
-      if (e.username || e.pk) events.push(e)
-    } catch { /* пропускаем битую историю */ }
-  }
-  return events
-}
 
 /**
  * Читает свою ленту уведомлений. { amount, raw }.
