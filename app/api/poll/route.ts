@@ -505,7 +505,8 @@ export async function POST(req: NextRequest) {
 
           if (dmQueue) {
             await dmQueue.add('send', job, {
-              jobId: `dm:${account.id}:${trigger.id}:${target.pk}`,
+              // BullMQ запрещает ':' в custom jobId → разделитель '_' (id — cuid/число, без '_').
+              jobId: `dm_${account.id}_${trigger.id}_${target.pk}`,
               delay: Math.round(cursor), attempts: 1,
               removeOnComplete: true, removeOnFail: 100,
             })
