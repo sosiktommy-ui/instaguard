@@ -494,7 +494,7 @@ function Accounts() {
   const handleResetSnapshot = async (id: string) => {
     const res = await fetch(`/api/accounts/${id}/reset-snapshot`, { method: 'DELETE' }).catch(() => null)
     setPollMsg(res && res.ok
-      ? 'Снапшот сброшен — при следующей проверке все подписчики будут считаться новыми'
+      ? 'Сброшено ✓ При следующей «Проверить подписчиков» текущие подписчики будут обработаны как новые (сработают триггеры, в пределах дневных лимитов).'
       : 'Не удалось сбросить снапшот')
   }
 
@@ -719,8 +719,8 @@ function Accounts() {
                       </Button>
                     )}
                     {ra && (
-                      <Button variant="secondary" size="icon" title="Сбросить снапшот подписчиков"
-                        onClick={() => handleResetSnapshot(ra.id)}>
+                      <Button variant="secondary" size="icon" title="Сбросить историю: текущие подписчики снова станут «новыми» и сработают триггеры при следующей проверке (в пределах дневных лимитов)"
+                        onClick={(e) => { e.stopPropagation(); handleResetSnapshot(ra.id) }}>
                         <RotateCcw className="w-4 h-4" />
                       </Button>
                     )}
