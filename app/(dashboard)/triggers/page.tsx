@@ -14,7 +14,6 @@ import { TriggerType } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
 import { SectionBar, type SectionItem } from '@/components/accounts/SectionBar'
-import { DraftsStatus } from '@/components/accounts/DraftsStatus'
 import { SecurityBadge } from '@/components/accounts/SecurityBadge'
 import { useBreadcrumbs } from '@/lib/breadcrumbs'
 import { cn } from '@/lib/utils'
@@ -1765,8 +1764,7 @@ function TriggersScreen() {
         </div>
       </div>
 
-      {/* Статистика черновых (без баннера — предупреждение живёт на вкладке «Аккаунты») */}
-      <DraftsStatus showBanner={false} />
+      {/* plan4: статус черновых/парсинга скрыт — переход на self-events. */}
 
       {/* Разделы/подразделы (папки) + фильтр — план §C2 */}
       <div data-tour="sections">

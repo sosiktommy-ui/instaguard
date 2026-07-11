@@ -3,16 +3,16 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LogOut, Menu, X, List, Users, Radar, UsersRound, BarChart3, Globe, Settings } from 'lucide-react'
+import { LogOut, Menu, X, List, Users, BarChart3, Globe, Settings } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AppLogo } from '@/components/common/AppLogo'
 import { ReactiveMascot } from '@/components/common/ReactiveMascot'
 import { useBreadcrumbs } from '@/lib/breadcrumbs'
 
 // Единственный уровень навигации — разделы приложения (супертаб-переключатель «режимов» убран)
-// Пункт «Парсинг/Черновые» (href /drafts) динамический — зависит от Настроек→«Источник
-// парсинга» (parsingSource), см. buildSubtabs() и plan.md §7.3.
-const BASE_SUBTABS = [
+// plan4: черновые/API-парсинг скрыты из интерфейса (переход на self-events — свои уведомления
+// основного аккаунта). Пункт «Черновые/Парсинг» убран из навигации; код /drafts остаётся в репо.
+const SUBTABS = [
   { href: '/triggers', label: 'Рекламные кампании', icon: List },
   { href: '/accounts', label: 'Аккаунты', icon: Users },
   { href: '/proxy', label: 'Прокси', icon: Globe },
@@ -20,23 +20,10 @@ const BASE_SUBTABS = [
   { href: '/settings', label: 'Настройки', icon: Settings },
 ]
 
-function draftsTab(parsingSource: string) {
-  return parsingSource === 'api' || !parsingSource
-    ? { href: '/drafts', label: 'Парсинг (API)', icon: Radar }
-    : { href: '/drafts', label: 'Черновые аккаунты', icon: UsersRound }
-}
-
-function buildSubtabs(parsingSource: string) {
-  const tabs = [...BASE_SUBTABS]
-  tabs.splice(2, 0, draftsTab(parsingSource))
-  return tabs
-}
-
 export default function TopNav() {
   const pathname = usePathname()
   const router = useRouter()
   const [open, setOpen] = useState(false)
-  const [parsingSource, setParsingSource] = useState('api')
   // Реальный статус браузерного воркера (вход + действия). Раньше индикатор «Активно» был
   // захардкожен зелёным всегда — врал, даже когда воркер мёртв. Теперь отражает /health.
   const [health, setHealth] = useState<'loading' | 'online' | 'offline' | 'unconfigured'>('loading')
@@ -45,14 +32,11 @@ export default function TopNav() {
   useEffect(() => { setOpen(false) }, [pathname])
 
   useEffect(() => {
-    fetch('/api/settings').then((r) => r.json()).then((d) => { if (d?.parsingSource) setParsingSource(d.parsingSource) }).catch(() => {})
     fetch('/api/browser-health?test=1')
       .then((r) => r.json())
       .then((d) => setHealth(!d?.configured ? 'unconfigured' : d?.ok ? 'online' : 'offline'))
       .catch(() => setHealth('offline'))
   }, [])
-
-  const SUBTABS = buildSubtabs(parsingSource)
 
   // Пройти обучение заново: сбрасываем флаг и открываем главную (тур покажется снова)
   const replayTour = () => {

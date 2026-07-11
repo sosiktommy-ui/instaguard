@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   Radar, CheckCircle2, AlertTriangle, ExternalLink, RefreshCw, Users, MessageCircle, Heart, Sparkles,
   Plus, Trash2, Globe, Zap, RotateCcw, Pencil, Check, X, UsersRound, Cookie,
@@ -326,6 +327,13 @@ function Drafts() {
   return <ParsingStatus />
 }
 
+// plan4: раздел «Черновые/Парсинг» скрыт (переход на self-events). Прямой заход на /drafts
+// редиректит на главную; компонент Drafts (и ParsingStatus/DraftsManager выше) СОХРАНЁН в
+// коде на случай возврата — просто не роутится и не показывается в навигации.
 export default function Page() {
-  return <ClientOnly><Drafts /></ClientOnly>
+  const router = useRouter()
+  useEffect(() => { router.replace('/triggers') }, [router])
+  return null
 }
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _KeepDraftsInBundle = Drafts   // ссылка, чтобы сохранённый компонент не считался мёртвым

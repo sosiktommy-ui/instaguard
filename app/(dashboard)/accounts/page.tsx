@@ -5,7 +5,6 @@ import { Plus, Play, Pause, Trash2, X, Globe, Users, Zap, Send, UserPlus, Refres
 import { Button } from '@/components/ui/button'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
 import { ImportCookiesModal } from '@/components/accounts/ImportCookiesModal'
-import { DraftsStatus } from '@/components/accounts/DraftsStatus'
 import { SecurityBadge } from '@/components/accounts/SecurityBadge'
 import { SectionBar, type SectionItem } from '@/components/accounts/SectionBar'
 import { FolderTree } from 'lucide-react'
@@ -563,7 +562,7 @@ function Accounts() {
         <div className="text-[13px] text-subt bg-canvas rounded-2xl px-4 py-3">{pollMsg}</div>
       )}
 
-      <DraftsStatus />
+      {/* plan4: DraftsStatus (статус парсинга/черновых) скрыт — переход на self-events. */}
 
       {/* Разделы/подразделы (папки) + фильтр. Создание — кнопкой «+ Раздел». */}
       {mergedAccounts.length > 0 && (
@@ -573,7 +572,7 @@ function Accounts() {
 
       {realAccounts.length > 0 && mergedAccounts.length === 0 && (
         <div className="card p-5 text-[14px] text-subt">
-          Все подключённые аккаунты ({realAccounts.length}) — черновые (парсеры). Они находятся на вкладке «Черновые аккаунты».
+          Аккаунты не попали в текущий раздел/фильтр — выберите «Все» выше.
         </div>
       )}
 

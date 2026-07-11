@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { ShieldAlert, Globe, ChevronDown, List, Users, BarChart3, Settings as SettingsIcon, HelpCircle, Radar } from 'lucide-react'
+import { ShieldAlert, Globe, ChevronDown, List, Users, BarChart3, Settings as SettingsIcon, HelpCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import ClientOnly from '@/components/common/ClientOnly'
 import { PageHeader } from '@/components/common/PageHeader'
@@ -36,17 +36,6 @@ const HELP: { icon: any; color: string; title: string; text: string; features: s
     ],
   },
   {
-    icon: Radar, color: TONE.pink, title: 'Парсинг (API)',
-    text: 'Подписчиков, комментарии и лайки собирает скрейпер-API — черновые аккаунты больше не нужны.',
-    features: [
-      'Статус подключения API и кнопка «Проверить связь».',
-      'Триггеры «Подписка», «Комментарий», «Лайк» получают данные через API (без ваших аккаунтов и прокси).',
-      'Ответы на сторис читает сам основной аккаунт (это его личка).',
-      'Ключ задаётся переменной окружения HIKER_API_KEY (оформить: hikerapi.com).',
-      'Прокси нужны только основным аккаунтам — они шлют директ/лайк/подписку.',
-    ],
-  },
-  {
     icon: Globe, color: TONE.ok, title: 'Прокси',
     text: 'Управление прокси и их привязкой к аккаунтам.',
     features: [
@@ -71,7 +60,6 @@ const HELP: { icon: any; color: string; title: string; text: string; features: s
     text: 'Правила безопасности и автоматизации.',
     features: [
       '«Работать без прокси» — разрешить аккаунты без прокси (повышает риск бана).',
-      '«Источник парсинга» — переключатель: API (по умолчанию, черновые не нужны) / только черновые / черновые + API запасной.',
       '«Аккаунтов на один прокси» — лимит авто-привязки к пуловому прокси.',
       'Эта справка «Что где находится».',
     ],
@@ -158,30 +146,9 @@ function SettingsScreen() {
         <Toggle on={s.allowNoProxy} onChange={(v) => patch({ allowNoProxy: v })} />
       </div>
 
-      {/* Источник парсинга: API / черновые / микс — plan.md §7.6 */}
-      <div className="card card-3d gloss p-5">
-        <div className="flex items-start gap-4">
-          <IconTile icon={Radar} color={TONE.pink} size={40} />
-          <div className="flex-1 min-w-0">
-            <div className="font-semibold text-[15px]">Источник парсинга</div>
-            <div className="text-[13px] text-subt mt-1 leading-relaxed">
-              Откуда брать подписчиков/комментарии/лайки для триггеров.
-            </div>
-          </div>
-        </div>
-        <div className="mt-3">
-          <Radio value={s.parsingSource} onChange={(v) => patch({ parsingSource: v })} options={[
-            { v: 'api', label: 'Только API (HikerAPI) — по умолчанию', desc: 'Данные читает скрейпер-API — свои аккаунты и прокси для парсинга не нужны. Требует ключ HIKER_API_KEY.' },
-            { v: 'drafts', label: 'Только черновые', desc: 'Парсят черновые (HELPER) аккаунты браузером. API не используется. Черновым нужны свои прокси (риск бана).' },
-            { v: 'drafts_then_api', label: 'Черновые + API запасной', desc: 'Основной источник — черновые; если живого чернового нет — автоматически HikerAPI.' },
-          ]} />
-          {(s.parsingSource === 'drafts' || s.parsingSource === 'drafts_then_api') && (
-            <div className="text-[12px] text-warn bg-warn/10 rounded-xl px-3 py-2 mt-2 leading-snug">
-              ⚠️ Режимы с черновыми ещё дорабатываются (Фаза 3): контур парсинга черновыми возвращается. Пока фактический источник — API; выбор сохраняется и включится, когда контур будет готов.
-            </div>
-          )}
-        </div>
-      </div>
+      {/* plan4: «Источник парсинга» (черновые/API) убран из UI — события берутся из СВОИХ
+          уведомлений основного аккаунта (self-events). Переключатель скрыт; parsingSource
+          остаётся в БД как no-op до полного перехода. */}
 
       <div className={rowCls}>
         <IconTile icon={Globe} color={TONE.ok} size={40} />
