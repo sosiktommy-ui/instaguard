@@ -150,23 +150,24 @@ type Ctx = { storageState: object; proxy?: string; username?: string; locale?: s
 
 // image — data-URL (data:image/…;base64,…) из конструктора кампании; отправляется
 // best-effort ОТДЕЛЬНЫМ сообщением ПОСЛЕ подтверждённого текста (§4.6/§4.3 [A3]).
-export function browserDM(ctx: Ctx, toUsername: string, text: string, image?: string) {
-  return browserFetch<ActionResult>('/dm', { ...ctx, toUsername, text, image })
+// dryRun (§10.3) — доходить до кнопки действия БЕЗ финального клика (безопасный тест на живых аккаунтах).
+export function browserDM(ctx: Ctx, toUsername: string, text: string, image?: string, dryRun?: boolean) {
+  return browserFetch<ActionResult>('/dm', { ...ctx, toUsername, text, image, dryRun })
 }
-export function browserFollow(ctx: Ctx, targetUsername: string) {
-  return browserFetch<ActionResult>('/follow', { ...ctx, targetUsername })
+export function browserFollow(ctx: Ctx, targetUsername: string, dryRun?: boolean) {
+  return browserFetch<ActionResult>('/follow', { ...ctx, targetUsername, dryRun })
 }
-export function browserLike(ctx: Ctx, targetUsername: string, count = 1) {
-  return browserFetch<ActionResult>('/like', { ...ctx, targetUsername, count })
+export function browserLike(ctx: Ctx, targetUsername: string, count = 1, dryRun?: boolean) {
+  return browserFetch<ActionResult>('/like', { ...ctx, targetUsername, count, dryRun })
 }
-export function browserStories(ctx: Ctx, targetUsername: string, like = false) {
-  return browserFetch<ActionResult>('/stories', { ...ctx, targetUsername, like })
+export function browserStories(ctx: Ctx, targetUsername: string, like = false, dryRun?: boolean) {
+  return browserFetch<ActionResult>('/stories', { ...ctx, targetUsername, like, dryRun })
 }
-export function browserComment(ctx: Ctx, postUrl: string, text: string) {
-  return browserFetch<ActionResult>('/comment', { ...ctx, postUrl, text })
+export function browserComment(ctx: Ctx, postUrl: string, text: string, dryRun?: boolean) {
+  return browserFetch<ActionResult>('/comment', { ...ctx, postUrl, text, dryRun })
 }
-export function browserReply(ctx: Ctx, postUrl: string, text: string) {
-  return browserFetch<ActionResult>('/reply-comment', { ...ctx, postUrl, text })
+export function browserReply(ctx: Ctx, postUrl: string, text: string, dryRun?: boolean) {
+  return browserFetch<ActionResult>('/reply-comment', { ...ctx, postUrl, text, dryRun })
 }
 
 // ── Сессия-визит (Фаза II §1.1): все задачи на цель в ОДНОМ контексте воркера. ──

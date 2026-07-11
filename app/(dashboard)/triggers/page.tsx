@@ -22,6 +22,7 @@ import { readStat } from '@/lib/stats'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { Hint } from '@/components/common/Hint'
 import { LogModal } from '@/components/common/LogModal'
+import { DryRunButton } from '@/components/accounts/DryRunButton'
 
 // ── Метаданные типов триггеров (цвет, иконка, подпись) ────────────────────────
 const TRIG_META = [
@@ -1385,6 +1386,7 @@ function AccountCard({ acc, campaigns, activeTypes, onOpen, onOpenLog, index = 0
             </Tooltip>
           </div>
         </div>
+        <div onClick={(e) => e.stopPropagation()} className="shrink-0"><DryRunButton accountId={acc.id} /></div>
         <button onClick={(e) => { e.stopPropagation(); onOpenLog() }} title="Открыть лог"
           className="p-1.5 -m-1.5 rounded-lg text-subt hover:text-brand hover:bg-brand/[0.08] transition-colors shrink-0">
           <ScrollText className="w-4 h-4" />

@@ -1,7 +1,7 @@
 // Действия аккаунта через браузер. См. plan.md §4.6. Каждое возвращает обновлённый
 // storageState (сессия «дозревает»). Работают по username (навигация /{username}/).
 import { SEL } from './selectors.js'
-import { firstVisible, clickByText, pageHasText, hasSessionCookie, gotoResilient } from './browser.js'
+import { firstVisible, clickByText, findByText, pageHasText, hasSessionCookie, gotoResilient } from './browser.js'
 import { humanType, jitter, idleMouse, preActionBrowse, humanClick } from './human.js'
 
 async function openProfile(context, username) {
@@ -91,9 +91,22 @@ async function tryAttachPhoto(context, page, dataUrl) {
 }
 
 // ── Директ ────────────────────────────────────────────────────────────────────
-export async function sendDM(context, { toUsername, text, image }) {
+export async function sendDM(context, { toUsername, text, image, dryRun }) {
   await requireSession(context)
   const page = await openProfile(context, toUsername)
+
+  // §10.3 dry-run: доходим до композера директа, но НИЧЕГО не печатаем и не отправляем.
+  // Открытие окна чата само по себе НЕ создаёт тред у получателя (тред возникает только при
+  // отправке), поэтому безопасно — проверяем селекторы кнопки «Написать» и поля ввода.
+  if (dryRun) {
+    const btn = await findByText(page, SEL.messageButton, { timeout: 8000 })
+    let composer = false
+    if (btn) {
+      await clickByText(page, SEL.messageButton, { timeout: 6000 })
+      composer = Boolean(await firstVisible(page, SEL.dmTextbox, 8000))
+    }
+    return { ok: btn, dryRun: true, closed: !btn, reached: { messageButton: btn, composer }, storageState: await context.storageState() }
+  }
 
   // Кнопка «Message» на профиле. Нет → личка закрыта/ограничена.
   const opened = await clickByText(page, SEL.messageButton, { timeout: 8000 })
@@ -133,12 +146,17 @@ export async function sendDM(context, { toUsername, text, image }) {
 }
 
 // ── Подписка ────────────────────────────────────────────────────────────────
-export async function followUser(context, { targetUsername }) {
+export async function followUser(context, { targetUsername, dryRun }) {
   await requireSession(context)
   const page = await openProfile(context, targetUsername)
 
   if (await pageHasText(page, SEL.followingState)) {
-    return { ok: true, already: true, storageState: await context.storageState() }
+    return { ok: true, already: true, dryRun: dryRun || undefined, storageState: await context.storageState() }
+  }
+  // §10.3 dry-run: проверяем присутствие кнопки «Подписаться», НЕ кликаем.
+  if (dryRun) {
+    const btn = await findByText(page, SEL.followButton, { timeout: 8000 })
+    return { ok: btn, dryRun: true, reached: { followButton: btn }, storageState: await context.storageState() }
   }
   const clicked = await clickByText(page, SEL.followButton, { timeout: 8000 })
   if (!clicked) return { ok: false, error: 'follow_button_not_found: кнопка «Подписаться» не найдена' }
@@ -147,7 +165,7 @@ export async function followUser(context, { targetUsername }) {
 }
 
 // ── Лайк последних постов ─────────────────────────────────────────────────────
-export async function likeUser(context, { targetUsername, count = 1 }) {
+export async function likeUser(context, { targetUsername, count = 1, dryRun }) {
   await requireSession(context)
   const page = await openProfile(context, targetUsername)
 
@@ -155,7 +173,19 @@ export async function likeUser(context, { targetUsername, count = 1 }) {
   const postLinks = await page.locator('a[href*="/p/"]').evaluateAll(
     (els) => Array.from(new Set(els.map((e) => e.getAttribute('href')).filter(Boolean))).slice(0, 6)
   ).catch(() => [])
-  if (!postLinks.length) return { ok: false, liked: 0, error: 'no_posts: у аккаунта нет постов для лайка' }
+  if (!postLinks.length) return { ok: false, liked: 0, dryRun: dryRun || undefined, error: 'no_posts: у аккаунта нет постов для лайка' }
+
+  // §10.3 dry-run: открываем первый пост, проверяем, что кнопка «Нравится» на месте, НЕ лайкаем.
+  if (dryRun) {
+    let likeBtn = false
+    try {
+      await page.goto(`https://www.instagram.com${postLinks[0]}`, { waitUntil: 'domcontentloaded', timeout: 45000 })
+      await jitter(1000, 2000)
+      const b = page.locator('div[role="button"]:has(svg[aria-label="Like"]), div[role="button"]:has(svg[aria-label="Нравится"])').first()
+      likeBtn = await b.isVisible().catch(() => false)
+    } catch {}
+    return { ok: likeBtn, dryRun: true, reached: { posts: postLinks.length, likeButton: likeBtn }, storageState: await context.storageState() }
+  }
 
   let liked = 0
   for (const href of postLinks.slice(0, Math.max(1, count))) {
@@ -174,7 +204,7 @@ export async function likeUser(context, { targetUsername, count = 1 }) {
 }
 
 // ── Сторис: просмотр (+опц. лайк) ─────────────────────────────────────────────
-export async function viewStories(context, { targetUsername, like = false }) {
+export async function viewStories(context, { targetUsername, like = false, dryRun }) {
   await requireSession(context)
   const page = await context.newPage()
   await preActionBrowse(page) // §1.2: прогрев ленты перед просмотром сторис
@@ -184,7 +214,10 @@ export async function viewStories(context, { targetUsername, like = false }) {
   // Если сторис нет — редирект на профиль/пусто.
   let viewed = 0, liked = 0
   const isViewer = page.url().includes('/stories/')
-  if (!isViewer) return { ok: false, viewed, liked, error: 'no_stories: активных сторис нет' }
+  if (!isViewer) return { ok: false, viewed, liked, dryRun: dryRun || undefined, error: 'no_stories: активных сторис нет' }
+
+  // §10.3 dry-run: убеждаемся, что вьюер сторис открылся, но НЕ лайкаем и не пролистываем дальше.
+  if (dryRun) return { ok: true, dryRun: true, reached: { storyViewer: true }, viewed: 1, liked: 0, storageState: await context.storageState() }
 
   // Пролистать несколько кадров.
   for (let i = 0; i < 4; i++) {
@@ -203,7 +236,7 @@ export async function viewStories(context, { targetUsername, like = false }) {
 }
 
 // ── Комментарий к посту ───────────────────────────────────────────────────────
-export async function commentPost(context, { postUrl, text }) {
+export async function commentPost(context, { postUrl, text, dryRun }) {
   await requireSession(context)
   const page = await context.newPage()
   await preActionBrowse(page) // §1.2: прогрев ленты перед комментарием
@@ -211,7 +244,9 @@ export async function commentPost(context, { postUrl, text }) {
   await jitter(1200, 2400)
 
   const box = await firstVisible(page, SEL.commentBox, 10000)
-  if (!box) return { ok: false, error: 'comment_box_not_found: поле комментария недоступно' }
+  if (!box) return { ok: false, dryRun: dryRun || undefined, error: 'comment_box_not_found: поле комментария недоступно' }
+  // §10.3 dry-run: поле комментария найдено — НЕ печатаем и не публикуем.
+  if (dryRun) return { ok: true, dryRun: true, reached: { commentBox: true }, storageState: await context.storageState() }
   await box.click({ delay: 50 })
   await humanType(box, text)
   await jitter(500, 1100)
@@ -223,8 +258,8 @@ export async function commentPost(context, { postUrl, text }) {
 
 // Ответ в комментариях — для Фазы 2 трактуем как обычный коммент к посту
 // (нить-reply требует клика по «Ответить» под конкретным комментом — Фаза 4).
-export async function replyComment(context, { postUrl, text }) {
-  return commentPost(context, { postUrl, text })
+export async function replyComment(context, { postUrl, text, dryRun }) {
+  return commentPost(context, { postUrl, text, dryRun })
 }
 
 // ── Стори-события из директа (ответы на мои сторис + упоминания) ─────────────────

@@ -11,7 +11,7 @@ import { toStorageState } from './lib/state.js'
 import { fingerprint } from './lib/fingerprint.js'
 import { fingerprintSelfTest } from './lib/selftest.js'
 
-const BUILD = '2026-07-11-browser-31-antidetect'
+const BUILD = '2026-07-11-browser-32-dryrun'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -278,12 +278,12 @@ function actionRoute(fn) {
   }
 }
 
-app.post('/dm', actionRoute((ctx, b) => sendDM(ctx, { toUsername: b.toUsername, text: b.text, image: b.image })))
-app.post('/follow', actionRoute((ctx, b) => followUser(ctx, { targetUsername: b.targetUsername })))
-app.post('/like', actionRoute((ctx, b) => likeUser(ctx, { targetUsername: b.targetUsername, count: b.count })))
-app.post('/stories', actionRoute((ctx, b) => viewStories(ctx, { targetUsername: b.targetUsername, like: b.like })))
-app.post('/comment', actionRoute((ctx, b) => commentPost(ctx, { postUrl: b.postUrl, text: b.text })))
-app.post('/reply-comment', actionRoute((ctx, b) => replyComment(ctx, { postUrl: b.postUrl, text: b.text })))
+app.post('/dm', actionRoute((ctx, b) => sendDM(ctx, { toUsername: b.toUsername, text: b.text, image: b.image, dryRun: b.dryRun })))
+app.post('/follow', actionRoute((ctx, b) => followUser(ctx, { targetUsername: b.targetUsername, dryRun: b.dryRun })))
+app.post('/like', actionRoute((ctx, b) => likeUser(ctx, { targetUsername: b.targetUsername, count: b.count, dryRun: b.dryRun })))
+app.post('/stories', actionRoute((ctx, b) => viewStories(ctx, { targetUsername: b.targetUsername, like: b.like, dryRun: b.dryRun })))
+app.post('/comment', actionRoute((ctx, b) => commentPost(ctx, { postUrl: b.postUrl, text: b.text, dryRun: b.dryRun })))
+app.post('/reply-comment', actionRoute((ctx, b) => replyComment(ctx, { postUrl: b.postUrl, text: b.text, dryRun: b.dryRun })))
 // Стори-события основного (ответы на сторис + упоминания) — чтение директа своим браузером.
 app.post('/story-inbox', actionRoute((ctx, b) => readStoryEvents(ctx, { amount: b.amount })))
 

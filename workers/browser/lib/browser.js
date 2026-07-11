@@ -263,6 +263,26 @@ export async function clickByText(page, texts, { timeout = 6000 } = {}) {
   return false
 }
 
+// Как clickByText, но НЕ кликает — только проверяет присутствие контрола (§10.3 dry-run:
+// «дошли до кнопки действия без финального клика»). Возвращает true, если найден.
+export async function findByText(page, texts, { timeout = 6000 } = {}) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    for (const t of texts) {
+      try {
+        const b = page.getByRole('button', { name: t, exact: true }).first()
+        if (await b.isVisible().catch(() => false)) return true
+      } catch {}
+      try {
+        const g = page.getByText(t, { exact: true }).first()
+        if (await g.isVisible().catch(() => false)) return true
+      } catch {}
+    }
+    await page.waitForTimeout(250)
+  }
+  return false
+}
+
 // Есть ли на странице любой из текстов (для детекции состояний).
 export async function pageHasText(page, texts) {
   for (const t of texts) {
