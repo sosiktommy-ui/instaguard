@@ -202,6 +202,13 @@ export function browserStoryEvents(ctx: Ctx, amount = 10) {
   return browserFetch<{ events: BrowserStoryEvent[]; browserState?: object }>('/story-inbox', { ...ctx, amount })
 }
 
+// plan4 — свои уведомления (лента активности) основного аккаунта: детект follow/like/comment.
+// raw=true → сырой payload news/inbox (Фаза B: снять формат на живом).
+export interface SelfEvent { type: 'follow' | 'like' | 'comment' | 'unknown'; pk: string; username: string; text?: string; media_id?: string; ts?: number | null; code?: number | string | null }
+export function browserSelfEvents(ctx: Ctx, opts: { amount?: number; raw?: boolean } = {}) {
+  return browserFetch<{ events: SelfEvent[]; raw?: any; error?: string; browserState?: object }>('/self-events', { ...ctx, amount: opts.amount, raw: opts.raw })
+}
+
 // ── Парсинг черновыми (Фаза 3, plan.md §4.4/§5). Формы = lib/scraper/hiker.ts, чтобы
 // poll/route.ts мог переключаться между API/черновыми без переписывания потребителей.
 // ⚠️ ЭКСПЕРИМЕНТАЛЬНО — DOM-парсинг воркера не проверялся на живом Instagram, см.

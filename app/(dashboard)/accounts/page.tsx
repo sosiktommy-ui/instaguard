@@ -151,6 +151,23 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
   const [savingSec, setSavingSec] = useState(false)
   const subs = sections.filter((s) => s.parentId === secId)
 
+  // plan4 Фаза B — ПРОБА своих уведомлений (news/inbox): снять реальный формат на живом.
+  // Временный debug-инструмент; ban-safe (только чтение). Результат — в текстовое поле, скопировать.
+  const [probing, setProbing] = useState(false)
+  const [probeOut, setProbeOut] = useState<string>('')
+  const runProbe = async () => {
+    if (!ra?.id) { setProbeOut('нет id аккаунта'); return }
+    setProbing(true); setProbeOut('')
+    try {
+      const r = await fetch('/api/selfevents-probe', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: ra.id, raw: true }),
+      })
+      setProbeOut(JSON.stringify(await r.json(), null, 2))
+    } catch (e: any) { setProbeOut('ошибка: ' + String(e?.message ?? e)) }
+    finally { setProbing(false) }
+  }
+
   const saveSection = async (nextSec: string, nextSub: string) => {
     if (!ra?.id) return
     setSavingSec(true)
@@ -205,6 +222,7 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
         <div className="relative p-6 pb-5 overflow-hidden border-b border-black/[0.05]">
           <div className="absolute inset-0 bg-gradient-to-br from-[#feda75]/15 via-[#d62976]/12 to-[#4f5bd5]/15 pointer-events-none" />
           <div className="absolute top-4 right-4 z-10 flex items-center gap-1">
+            <button onClick={runProbe} disabled={probing} title="Проба уведомлений (debug: news/inbox)" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">🔔</button>
             {onOpenLog && (
               <button onClick={onOpenLog} title="Открыть лог" className="p-1.5 text-subt hover:text-brand transition-colors"><ScrollText size={18} /></button>
             )}
@@ -233,11 +251,22 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
         </div>
 
         <div className="p-6 space-y-5">
+          {/* plan4 Фаза B — вывод пробы news/inbox (debug). Скопируй JSON и пришли — по нему строю парсер. */}
+          {probeOut && (
+            <div className="rounded-2xl bg-canvas px-4 py-3">
+              <div className="text-[12px] font-semibold text-subt mb-2 flex items-center justify-between">
+                <span>🔔 Проба уведомлений (news/inbox) — скопируй и пришли</span>
+                <button onClick={() => setProbeOut('')} className="text-subt hover:text-ink">✕</button>
+              </div>
+              <textarea readOnly value={probeOut} onFocus={(e) => e.currentTarget.select()}
+                className="w-full h-56 text-[11px] font-mono bg-black/[0.03] rounded-xl p-2 border border-line/60" />
+            </div>
+          )}
           {/* Ключевые цифры */}
           <div className="grid grid-cols-3 gap-3">
             {tile(Users, formatFollowers(ra?.followers ?? ra?.followerCount ?? acc.followers ?? 0), 'подписчики', '#8e8e93')}
             {tile(Zap, `${activeCount}/${campaigns.length}`, 'кампаний активно', '#663af1', 'Слева — сколько кампаний сейчас включено, справа — сколько всего создано на этом аккаунте (включая поставленные на паузу).')}
-            {tile(Send, totalFires.toLocaleString('ru'), 'срабатываний', '#34c759', 'Сколько раз кампании этого аккаунта поймали событие. Это попытки — не то же самое, что реально выполненные действия (см. ниже, «выполнено / сработало»).')}
+            {tile(Send, totalFires.toLocaleString('ru'), 'срабатываний', '#34c759', 'Сколько раз кампании этого аккаунта РЕАЛЬНО выполнили действие (директ доставлен / подписка / лайк). Неуспешные попытки сюда НЕ входят — они видны в логе как ошибки.')}
           </div>
 
           {/* Раздел / подраздел (папка) — редактирование, план §C2 */}

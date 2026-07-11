@@ -120,6 +120,20 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-11 (plan4 Фаза B — self-events: эндпоинт + проба формата news/inbox)
+
+#### feat(plan4 Фаза B): читать СВОИ уведомления (news/inbox) + debug-проба формата на живом
+
+⚠️ **Нужен редеплой браузерного воркера** (build → `2026-07-11-browser-34-self-events`) для эндпоинта `/self-events`. Next.js — обычный передеплой (новый роут + кнопка), миграций нет. Решение пользователя: **фолбэка НЕТ с самого начала** — self-events станет единственным путём детекта, старый код (черновые/API) остаётся в репо мёртвым заделом.
+
+- **`workers/browser/lib/selfevents.js` (новый):** `readSelfEvents(context,{amount,raw})` — fetch приватного `/api/v1/news/inbox/` ИЗНУТРИ залогиненной страницы (cookies + `x-ig-app-id`, как `readStoryEvents`/`parse.js`). `normalizeNews` — BEST-EFFORT классификация историй в `{type:follow|like|comment|unknown, pk, username, text, media_id, ts, code}`. `raw=true` → сырой payload (topKeys + первые N `new/old_stories`) для снятия РЕАЛЬНОГО формата на живом (коды типов, есть ли текст коммента, вид агрегированного лайка). Дефенсивно: сбой → `{events:[],error}`.
+- **`server.js`:** `POST /self-events` (actionRoute). build-tag `browser-34-self-events`.
+- **`lib/browser/client.ts`:** `browserSelfEvents(ctx,{amount,raw})` + тип `SelfEvent`.
+- **`app/api/selfevents-probe/route.ts` (новый):** owner-scoped проба — по accountId грузит browserState/proxy/locale/tz, зовёт `browserSelfEvents({raw:true})`, отдаёт `{events, raw, error}`. Ban-safe (только чтение своих уведомлений).
+- **UI (`accounts/page.tsx` AccountDetailModal):** кнопка 🔔 «Проба уведомлений (debug)» → вызывает пробу, кладёт JSON в текстовое поле (скопировать и прислать — по нему финализируем нормализатор). Плюс тултип «срабатываний» переписан под новую семантику fireCount (только РЕАЛЬНО выполненные, не попытки).
+
+Проверено: `node --check` (selfevents.js/server.js) чист; `tsc --noEmit` + `next build` чисто (роут `/api/selfevents-probe` собран). **Дальше:** пользователь жмёт 🔔 на живом аккаунте → присылает сырой JSON → финализирую `normalizeNews` (Фаза C) → интеграция в poll как ЕДИНСТВЕННЫЙ источник + миграция HELPER→RESPONDER на флипе (Фаза D).
+
 ### 2026-07-11 (plan4 Фаза A — черновые/API скрыты из интерфейса; переход на self-events)
 
 #### chore(plan4 Фаза A): убрать черновые и парсинг-API из UI/обучения (код НЕ удалён)
