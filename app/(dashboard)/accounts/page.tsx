@@ -35,6 +35,7 @@ interface RealAccount {
   limits?: Record<string, unknown> | null
   sectionId?: string | null
   hasSession?: boolean
+  parseBlocked?: boolean
 }
 
 // Мини-спарклайн прироста подписчиков (инлайн SVG, без библиотек)
@@ -627,6 +628,13 @@ function Accounts() {
                       {ra && <SecurityBadge acc={ra} ctx={{ ...secCtx, totalFires: st.runs }} />}
                     </div>
                   </div>
+
+                  {ra?.parseBlocked && (
+                    <div className="mt-3 flex items-start gap-2 text-[11.5px] text-warn bg-warn/[0.08] rounded-xl px-3 py-2 leading-snug relative" title="Instagram показывает полный список подписчиков только владельцу такого аккаунта. Комментарии и лайки постов парсятся нормально.">
+                      <span className="shrink-0">⚠️</span>
+                      <span>Парсинг подписчиков невозможен — аккаунт скрыл список (проверенный/приватный). Триггер «Новая подписка» не сработает; комментарии и лайки — работают.</span>
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-3 gap-2 mt-5 relative">
                     <div className="rounded-2xl bg-canvas p-3 text-center">

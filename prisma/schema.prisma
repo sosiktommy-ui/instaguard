@@ -120,6 +120,7 @@ model InstagramAccount {
   deliveryStats Json?       // §4.6: дневная доставка директов {date,tried,ok,lastAlert} — алерт+автоснижение при массовой недоставке
   followers   Int?          // реальное число подписчиков (из account_info)
   followersHistory Json?    // история [{d:'YYYY-MM-DD', n}] для спарклайна прироста
+  parseBlocked Boolean @default(false) // аккаунт скрыл список подписчиков от третьих сторон (verified/приватный) — «парсинг подписчиков невозможен»
   sectionId   String?       // раздел/подраздел (папка пользователя)
   proxyId     String?       // ссылка на прокси (пуловый/индивидуальный); строковый proxy оставлен для воркеров
   createdAt   DateTime      @default(now())  // когда аккаунт заведён — задел под «прогрев» (рампу дневных лимитов по возрасту)

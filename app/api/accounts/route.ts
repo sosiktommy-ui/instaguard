@@ -13,7 +13,7 @@ export async function GET() {
       select: {
         id: true, username: true, status: true, role: true,
         lastChecked: true, errorCount: true, proxy: true, followers: true, limits: true, followersHistory: true,
-        sectionId: true, proxyId: true, browserState: true, createdAt: true,
+        sectionId: true, proxyId: true, browserState: true, createdAt: true, parseBlocked: true,
         snapshots: { orderBy: { createdAt: 'desc' }, take: 1, select: { data: true } },
       },
     })
@@ -39,6 +39,7 @@ export async function GET() {
         // Сами объекты сессий наружу не отдаём.
         hasSession: Boolean(a.browserState),
         createdAt: a.createdAt,            // возраст аккаунта в системе — для прогрева/индекса безопасности
+        parseBlocked: a.parseBlocked,      // список подписчиков скрыт (verified/приватный) → «парсинг подписчиков невозможен»
       }
     }))
   } catch {

@@ -1,146 +1,133 @@
-// Парсинг черновыми (HELPER) аккаунтами через DOM браузера — plan.md §4.4/§5.
-// ⚠️ ЭКСПЕРИМЕНТАЛЬНО: не проверялось на живом Instagram (нет тестового HELPER-аккаунта
-// в этой сессии). Верстка модалок подписчиков/лайкнувших у Instagram виртуализирована и
-// часто меняется — код защищён try/catch на каждом шаге и НИКОГДА не должен ронять весь
-// цикл поллинга (см. scrape() в app/api/poll/route.ts — сбой парсинга = WARN, не ошибка
-// основного). В отличие от HikerAPI, DOM не отдаёт числовой pk — используем username как
-// стабильный суррогат идентификатора (он уникален и не меняется чаще pk на практике).
-import { jitter, idleMouse } from './human.js'
+// Парсинг черновыми (HELPER) аккаунтами через ПРИВАТНЫЙ web-API Instagram, вызываемый
+// ИЗНУТРИ залогиненной страницы чернового (fetch наследует cookies + x-ig-app-id) — так же,
+// как readStoryEvents (actions.js). Это НАДЁЖНЕЕ DOM-скрейпа модалок (виртуализованных и
+// часто меняющихся): один вызов web_profile_info даёт pk + число подписчиков + приватность +
+// недавние медиа, а friendships/media-эндпоинты — сами списки.
+//
+// Формы ответов совпадают с HikerAPI (lib/scraper/hiker.ts), чтобы poll не переписывать.
+// Доп. поля parseFollowers: followerCount (реальное число — для метрики в drafts-режиме) и
+// restricted (аккаунт скрыл список от третьих сторон: verified/приватный → «парсинг невозможен»).
+// Всё дефенсивно: любой сбой → пустой список + error, НИКОГДА не роняет цикл поллинга.
+import { jitter } from './human.js'
 import { gotoResilient } from './browser.js'
 
-async function openDialogAt(context, url) {
-  const page = await context.newPage()
-  await gotoResilient(page, url, { timeout: 30000, retries: 1, backoffMs: [2000] })
-  await jitter(1500, 2600)
-  await idleMouse(page)
-  const dialog = page.locator('div[role="dialog"]').first()
-  const ok = await dialog.isVisible({ timeout: 8000 }).catch(() => false)
-  return { page, dialog, ok }
-}
+const IG_APP_ID = '936619743392459'
 
-// Собирает уникальные @username из ссылок вида /username/ внутри диалога, докручивая его.
-async function scrollCollectUsernames(page, dialog, { limit = 50, maxScrolls = 20 } = {}) {
-  const seen = new Set()
-  let stagnant = 0
-  for (let i = 0; i < maxScrolls && seen.size < limit; i++) {
-    const batch = await dialog.locator('a[href^="/"]').evaluateAll((els) =>
-      Array.from(new Set(els
-        .map((e) => (e.getAttribute('href') || '').match(/^\/([a-zA-Z0-9._]{1,30})\/?$/)?.[1])
-        .filter(Boolean)))
-    ).catch(() => [])
-    const before = seen.size
-    for (const u of batch) { if (u && u !== 'explore' && u !== 'reels') seen.add(u) }
-    if (seen.size === before) stagnant++; else stagnant = 0
-    if (stagnant >= 3) break
+// Приватный web-API запрос изнутри залогиненной страницы (same-origin, cookies наследуются).
+async function apiGet(page, path) {
+  return page.evaluate(async ({ path, appId }) => {
     try {
-      await dialog.evaluate((el) => {
-        const scroller = el.querySelector('div[style*="overflow"]') || el
-        scroller.scrollTop = scroller.scrollHeight
-      })
-    } catch {}
-    await jitter(700, 1300)
-  }
-  return Array.from(seen).slice(0, limit)
+      const r = await fetch(path, { headers: { 'x-ig-app-id': appId }, credentials: 'include' })
+      if (!r.ok) return { __status: r.status }
+      return await r.json()
+    } catch (e) { return { __err: String((e && e.message) || e) } }
+  }, { path, appId: IG_APP_ID })
 }
 
-// ── Подписчики / подписки ──────────────────────────────────────────────────
-async function parseUserList(context, { targetUsername, limit = 50 }, kind) {
-  const { page, dialog, ok } = await openDialogAt(context, `https://www.instagram.com/${targetUsername}/${kind}/`)
+// Открыть страницу на origin instagram.com (чтобы fetch унаследовал cookies), выполнить fn, закрыть.
+async function withPage(context, fn) {
+  const page = await context.newPage()
   try {
-    if (!ok) return { items: [], error: 'dialog_not_found: список не открылся (приватный аккаунт / изменилась вёрстка)' }
-    const usernames = await scrollCollectUsernames(page, dialog, { limit })
-    return { items: usernames.map((username) => ({ pk: username, username })) }
+    await gotoResilient(page, 'https://www.instagram.com/', { timeout: 30000, retries: 1, backoffMs: [2000] })
+    await jitter(1000, 2000)
+    return await fn(page)
   } finally {
     await page.close().catch(() => {})
   }
 }
 
-export async function parseFollowers(context, opts) {
-  const r = await parseUserList(context, opts, 'followers')
-  return { followers: r.items, error: r.error }
+// Профиль: pk, число подписчиков, приватность/верификация, недавние медиа (id+shortcode).
+async function profileInfo(page, username) {
+  const j = await apiGet(page, `/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`)
+  const user = j && j.data && j.data.user
+  if (!user) return { error: `profile_unavailable${j && j.__status ? ':' + j.__status : ''}` }
+  const media = (((user.edge_owner_to_timeline_media && user.edge_owner_to_timeline_media.edges) || [])
+    .map((e) => e && e.node)
+    .filter(Boolean)
+    .map((n) => ({ id: String(n.id || '').split('_')[0], shortcode: n.shortcode })))
+  return {
+    pk: String(user.id),
+    followerCount: user.edge_followed_by ? Number(user.edge_followed_by.count) : null,
+    isPrivate: !!user.is_private,
+    isVerified: !!user.is_verified,
+    media,
+  }
 }
 
-export async function parseFollowing(context, opts) {
-  const r = await parseUserList(context, opts, 'following')
-  return { following: r.items, error: r.error }
+// ── Подписчики ───────────────────────────────────────────────────────────────
+export async function parseFollowers(context, { targetUsername, limit = 50 }) {
+  return withPage(context, async (page) => {
+    const prof = await profileInfo(page, targetUsername)
+    if (prof.error) return { followers: [], error: prof.error }
+    const fl = await apiGet(page, `/api/v1/friendships/${prof.pk}/followers/?count=${Math.min(limit, 100)}`)
+    if (fl && fl.__status) {
+      // 400/403 на списке подписчиков при наличии подписчиков = аккаунт ограничил список
+      // (проверенный/приватный — виден только владельцу). Это НЕ ошибка чернового.
+      return { followers: [], followerCount: prof.followerCount, restricted: true, error: `followers_restricted:${fl.__status}` }
+    }
+    const users = ((fl && fl.users) || []).map((u) => ({ pk: String(u.pk), username: u.username, full_name: u.full_name || '' }))
+    // Эвристика ограничения: подписчики ЕСТЬ, а список пуст (не приватный, где мы просто не подписаны).
+    const restricted = users.length === 0 && (prof.followerCount || 0) > 0 && !prof.isPrivate
+    return { followers: users, followerCount: prof.followerCount, isVerified: prof.isVerified, restricted }
+  })
 }
 
-// ── Последние посты владельца (для комментов/лайкнувших) ────────────────────
-async function recentPostUrls(page, targetUsername, count) {
-  await gotoResilient(page, `https://www.instagram.com/${targetUsername}/`, { timeout: 30000, retries: 1, backoffMs: [2000] })
-  await jitter(1200, 2200)
-  const hrefs = await page.locator('a[href*="/p/"]').evaluateAll((els) =>
-    Array.from(new Set(els.map((e) => e.getAttribute('href')).filter(Boolean)))
-  ).catch(() => [])
-  return hrefs.slice(0, count).map((h) => (h.startsWith('http') ? h : `https://www.instagram.com${h}`))
-}
-
-function shortcodeFromUrl(url) {
-  return url.match(/\/p\/([^/]+)\//)?.[1] ?? url
+// ── Подписки (для гейта «взаимная подписка») ─────────────────────────────────
+export async function parseFollowing(context, { targetUsername, limit = 200 }) {
+  return withPage(context, async (page) => {
+    const prof = await profileInfo(page, targetUsername)
+    if (prof.error) return { following: [], error: prof.error }
+    const fl = await apiGet(page, `/api/v1/friendships/${prof.pk}/following/?count=${Math.min(limit, 200)}`)
+    if (fl && fl.__status) return { following: [], restricted: true, error: `following_restricted:${fl.__status}` }
+    const users = ((fl && fl.users) || []).map((u) => ({ pk: String(u.pk), username: u.username }))
+    return { following: users }
+  })
 }
 
 // ── Комментарии под последними постами ───────────────────────────────────────
+// media_id храним как SHORTCODE (poll строит postUrl через mediaPostUrl, который его понимает),
+// а к API обращаемся по числовому media.id.
 export async function parseComments(context, { targetUsername, mediaCount = 3, perMedia = 20 }) {
-  const page = await context.newPage()
-  const out = []
-  try {
-    const posts = await recentPostUrls(page, targetUsername, mediaCount)
-    for (const postUrl of posts) {
-      const mediaId = shortcodeFromUrl(postUrl) // суррогат: используем shortcode как media_id (postUrl строится обратно из него же в poll/route.ts)
-      try {
-        await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 45000 })
-        await jitter(1000, 1800)
-        // Комментарии — список <ul>/<li> под постом; текст берём из ролей "comment"/ссылок на профиль рядом.
-        const rows = await page.locator('ul li:has(a[href^="/"])').evaluateAll((els, self) =>
-          els.slice(0, 60).map((li) => {
-            const a = li.querySelector('a[href^="/"]')
-            const uname = (a?.getAttribute('href') || '').match(/^\/([a-zA-Z0-9._]{1,30})\/?$/)?.[1]
-            const span = li.querySelector('span')
-            const text = span?.textContent ?? ''
-            return uname && uname !== self ? { username: uname, text } : null
-          }).filter(Boolean)
-        , targetUsername).catch(() => [])
-        for (const r of rows.slice(0, perMedia)) {
-          out.push({ pk: `${mediaId}_${r.username}_${out.length}`, text: r.text, user_pk: r.username, username: r.username, media_id: mediaId })
-        }
-      } catch { /* один пост не отдал комменты — пропускаем, не валим весь парсинг */ }
+  return withPage(context, async (page) => {
+    const prof = await profileInfo(page, targetUsername)
+    if (prof.error) return { comments: [], error: prof.error }
+    const self = targetUsername.toLowerCase()
+    const out = []
+    for (const m of prof.media.slice(0, mediaCount)) {
+      if (!m.id) continue
+      const j = await apiGet(page, `/api/v1/media/${m.id}/comments/?can_support_threading=true&permalink_enabled=false`)
+      const comments = (j && j.comments) || []
+      for (const c of comments.slice(0, perMedia)) {
+        const u = c.user || {}
+        if (!u.username || u.username.toLowerCase() === self) continue
+        out.push({ pk: String(c.pk || c.id || ''), text: c.text || '', user_pk: String(u.pk || ''), username: u.username, media_id: m.shortcode || m.id })
+      }
+      await jitter(600, 1400)
     }
-  } finally {
-    await page.close().catch(() => {})
-  }
-  return { comments: out }
+    return { comments: out }
+  })
 }
 
 // ── Лайкнувшие последние посты ────────────────────────────────────────────────
 export async function parseLikers(context, { targetUsername, mediaCount = 3, perMedia = 50 }) {
-  const page = await context.newPage()
-  const out = []
-  const seen = new Set()
-  try {
-    const posts = await recentPostUrls(page, targetUsername, mediaCount)
-    for (const postUrl of posts) {
-      const mediaId = shortcodeFromUrl(postUrl)
-      try {
-        await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 45000 })
-        await jitter(1000, 1800)
-        // Открыть диалог «Нравится N пользователям» кликом по счётчику лайков.
-        const likesLink = page.getByText(/like|нрав/i).first()
-        if (!(await likesLink.isVisible().catch(() => false))) continue
-        await likesLink.click({ delay: 50 }).catch(() => {})
-        const dialog = page.locator('div[role="dialog"]').last()
-        const ok = await dialog.isVisible({ timeout: 5000 }).catch(() => false)
-        if (!ok) continue
-        const usernames = await scrollCollectUsernames(page, dialog, { limit: perMedia })
-        for (const username of usernames) {
-          if (seen.has(username) || username.toLowerCase() === targetUsername.toLowerCase()) continue
-          seen.add(username)
-          out.push({ pk: username, username, media_id: mediaId })
-        }
-        await page.keyboard.press('Escape').catch(() => {})
-      } catch { /* пост без доступного списка лайкнувших — пропускаем */ }
+  return withPage(context, async (page) => {
+    const prof = await profileInfo(page, targetUsername)
+    if (prof.error) return { likers: [], error: prof.error }
+    const self = targetUsername.toLowerCase()
+    const out = []
+    const seen = new Set()
+    for (const m of prof.media.slice(0, mediaCount)) {
+      if (!m.id) continue
+      const j = await apiGet(page, `/api/v1/media/${m.id}/likers/`)
+      const users = (j && j.users) || []
+      for (const u of users.slice(0, perMedia)) {
+        const uname = u.username
+        if (!uname || seen.has(uname) || uname.toLowerCase() === self) continue
+        seen.add(uname)
+        out.push({ pk: String(u.pk), username: uname, media_id: m.shortcode || m.id })
+      }
+      await jitter(600, 1400)
     }
-  } finally {
-    await page.close().catch(() => {})
-  }
-  return { likers: out }
+    return { likers: out }
+  })
 }

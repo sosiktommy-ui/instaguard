@@ -206,8 +206,15 @@ export function browserStoryEvents(ctx: Ctx, amount = 10) {
 // poll/route.ts мог переключаться между API/черновыми без переписывания потребителей.
 // ⚠️ ЭКСПЕРИМЕНТАЛЬНО — DOM-парсинг воркера не проверялся на живом Instagram, см.
 // workers/browser/lib/parse.js.
+export interface ParseFollowersResult {
+  followers: { pk: string; username: string; full_name?: string }[]
+  followerCount?: number | null   // реальное число подписчиков (для метрики в drafts-режиме)
+  restricted?: boolean            // аккаунт скрыл список подписчиков от третьих сторон (verified/приватный)
+  isVerified?: boolean
+  error?: string
+}
 export function parseFollowersBrowser(ctx: Ctx, targetUsername: string, limit = 50) {
-  return browserFetch<{ followers: { pk: string; username: string }[]; error?: string }>('/parse/followers', { ...ctx, targetUsername, limit })
+  return browserFetch<ParseFollowersResult>('/parse/followers', { ...ctx, targetUsername, limit })
 }
 export function parseFollowingBrowser(ctx: Ctx, targetUsername: string, limit = 200) {
   return browserFetch<{ following: { pk: string; username: string }[]; error?: string }>('/parse/following', { ...ctx, targetUsername, limit })

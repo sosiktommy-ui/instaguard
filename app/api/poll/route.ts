@@ -75,14 +75,15 @@ function makeDraftGetter(userId: string): DraftGetter {
   }
 }
 
-async function parseFollowersFor(username: string, parsingSource: string, getDraft: DraftGetter, limit: number) {
+async function parseFollowersFor(username: string, parsingSource: string, getDraft: DraftGetter, limit: number): Promise<{ followers: { pk: string; username: string; full_name?: string }[]; followerCount?: number | null; restricted?: boolean }> {
   if (parsingSource !== 'api') {
     const d = await getDraft()
     if (d) {
       try {
         const r = await parseFollowersBrowser({ storageState: d.browserState, proxy: d.proxy ?? undefined, username: d.username, locale: d.locale ?? undefined, timezoneId: d.timezoneId ?? undefined }, username, limit)
         await markDraftUsed(d.id)
-        return { followers: r.followers ?? [] }
+        // Черновой даёт и число подписчиков, и признак ограничения (список скрыт от третьих сторон).
+        return { followers: r.followers ?? [], followerCount: r.followerCount ?? null, restricted: Boolean(r.restricted) }
       } catch { /* черновой недоступен — попробуем API, если разрешено (см. ниже) */ }
     }
     if (parsingSource === 'drafts') return { followers: [] }
@@ -535,8 +536,12 @@ export async function POST(req: NextRequest) {
         catch {}
       }
     }
-    // Копим историю подписчиков (одна точка в день) для спарклайна прироста
-    if (realFollowers !== undefined) {
+    // Признак «список подписчиков скрыт» (verified/приватный) — заполняется парсингом черновым ниже.
+    let parseBlocked: boolean | undefined
+    // История подписчиков (одна точка в день) строится ПОСЛЕ потоков — realFollowers может
+    // прийти не только из HikerAPI (api-режим), но и из чернового (followerCount, drafts-режим).
+    const buildFollowersHistory = () => {
+      if (realFollowers === undefined) return
       const hist = [...histNow]
       const last = hist[hist.length - 1]
       if (last && last.d === today) last.n = realFollowers
@@ -562,6 +567,13 @@ export async function POST(req: NextRequest) {
         const scraped = await scrape(() => parseFollowersFor(account.username, parsingSource, getDraft, FOLLOWERS_FETCH_LIMIT))
         if (scraped) {
           const { followers } = scraped
+          // Число подписчиков от чернового (drafts-режим, когда HikerAPI не использовался).
+          if (realFollowers === undefined && scraped.followerCount != null) realFollowers = scraped.followerCount
+          // Список подписчиков скрыт (проверенный/приватный аккаунт → парсинг подписчиков невозможен).
+          parseBlocked = Boolean(scraped.restricted)
+          if (parseBlocked) {
+            await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Парсинг подписчиков @${account.username} невозможен — аккаунт скрыл список (проверенный/приватный). Комментарии и лайки парсятся нормально.` } }).catch(() => null)
+          }
           const snapFollowers = account.snapshots.find((sn) => sn.type === 'FOLLOWERS')
           const hadBaseline = Boolean(snapFollowers)
           const knownPks = extractKnownPks(snapFollowers?.data)
@@ -874,9 +886,10 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      buildFollowersHistory()   // realFollowers мог прийти из чернового (drafts) — строим историю после потоков
       await prisma.instagramAccount.update({
         where: { id: account.id },
-        data: { lastChecked: new Date(), errorCount: 0, limits: counters as any, ...(liveState && liveState !== originalState ? { browserState: liveState as any } : {}), ...(realFollowers !== undefined ? { followers: realFollowers, followersHistory } : {}) },
+        data: { lastChecked: new Date(), errorCount: 0, limits: counters as any, ...(liveState && liveState !== originalState ? { browserState: liveState as any } : {}), ...(realFollowers !== undefined ? { followers: realFollowers, followersHistory } : {}), ...(parseBlocked !== undefined ? { parseBlocked } : {}) },
       })
       summary.push(s)
     } catch (e: any) {
