@@ -123,7 +123,15 @@ export async function sendDM(context, { toUsername, text, image, dryRun }) {
     await humanType(box, text)
     await jitter(400, 900)
     await box.press('Enter')
-    await jitter(1200, 2200)
+    await jitter(900, 1600)
+    // Instagram web НЕ всегда отправляет директ по Enter (иногда нужна кнопка «Send»/«Отправить»).
+    // Если после Enter текст ЗАВИС в композере — кликаем кнопку отправки (как в фото-пути).
+    // Без этого директ молча не уходил, а confirmDelivered показывал «не доставлено» (баг «0 выполнено»).
+    const stuck = await box.evaluate((el) => ((el.innerText ?? el.value ?? '').trim().length > 0)).catch(() => false)
+    if (stuck) {
+      await clickByText(page, ['Send', 'Отправить', 'Отправить сообщение', 'Send message'], { timeout: 3500 }).catch(() => {})
+      await jitter(900, 1600)
+    }
     // §4.6 — проверяем, что сообщение реально появилось в треде.
     const conf = await confirmDelivered(page, box, text)
     delivered = conf.delivered

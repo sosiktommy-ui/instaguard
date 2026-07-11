@@ -107,20 +107,7 @@ export function ImportCookiesModal({ onClose, onDone, lockedRole }: { onClose: (
           {tab('cookies', mode, () => { setMode('cookies'); setRes(null) }, '🍪 Куки')}
         </div>
 
-        {/* Роль — скрываем, если она зафиксирована (например, импорт с вкладки «Черновые»). */}
-        {lockedRole ? (
-          <div className="text-[12px] text-subt bg-canvas rounded-2xl px-3.5 py-2.5 mb-4 leading-snug">
-            Все аккаунты импортируются как <b className="text-ink">{lockedRole === 'HELPER' ? 'черновые (парсят подписчиков)' : 'основные (шлют)'}</b>.
-          </div>
-        ) : (
-          <>
-            <div className="text-[11px] text-subt mb-1.5">Роль всех аккаунтов в пачке</div>
-            <div className="flex gap-1 p-1 bg-canvas rounded-2xl mb-4">
-              {tab('RESPONDER', role, () => setRole('RESPONDER'), 'Основные (шлют)')}
-              {tab('HELPER', role, () => setRole('HELPER'), 'Черновые (парсят)')}
-            </div>
-          </>
-        )}
+        {/* plan4: выбор роли убран — черновые скрыты, все импортируемые аккаунты = основные (RESPONDER). */}
 
         <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed mb-4">
           {mode === 'password' ? (
