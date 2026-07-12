@@ -27,12 +27,22 @@ export async function readSelfEvents(context, { amount = 30, raw = false } = {})
   try {
     await gotoResilient(page, 'https://www.instagram.com/', { timeout: 30000, retries: 1, backoffMs: [2000] })
     await jitter(1000, 2200)
+    // news/inbox иногда отдаёт транзиентный 500/429/5xx (серверный хиккап IG / мягкий троттлинг).
+    // Ретраим ТОЛЬКО транзиентные коды/сеть с бэкоффом; осмысленный 4xx (401/403/404) — сразу.
     const json = await page.evaluate(async ({ appId }) => {
-      try {
-        const r = await fetch('/api/v1/news/inbox/', { headers: { 'x-ig-app-id': appId }, credentials: 'include' })
-        if (!r.ok) return { __status: r.status }
-        return await r.json()
-      } catch (e) { return { __err: String((e && e.message) || e) } }
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+      const TRANSIENT = [429, 500, 502, 503, 504]
+      let last = { __err: 'no_attempt' }
+      for (let i = 0; i < 3; i++) {
+        try {
+          const r = await fetch('/api/v1/news/inbox/', { headers: { 'x-ig-app-id': appId }, credentials: 'include' })
+          if (r.ok) return await r.json()
+          last = { __status: r.status }
+          if (!TRANSIENT.includes(r.status)) return last   // осмысленный код — не ретраим
+        } catch (e) { last = { __err: String((e && e.message) || e) } }
+        if (i < 2) await sleep(1000 + i * 1500)   // 1с, 2.5с
+      }
+      return last
     }, { appId: IG_APP_ID })
 
     if (json?.__status) return { events: [], error: `news_inbox_http_${json.__status}` }
