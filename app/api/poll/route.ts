@@ -411,6 +411,14 @@ export async function POST(req: NextRequest) {
     }
     const use = (k: ActionKind, n = 1) => consume(counters, k, n, caps)
 
+    // Меж-потоковый дедуп ДИРЕКТА: один человек может попасть в НЕСКОЛЬКО потоков за цикл
+    // (подписался + лайкнул + прокомментировал) → раньше получал ОТДЕЛЬНЫЙ директ из каждого
+    // потока/кампании = спам-сигнал бана. Теперь — не более ОДНОГО директа на человека за цикл
+    // (первый поток выигрывает). Лайк/подписка/сторис/ответ идемпотентны и не дедупятся.
+    const dmedThisCycle = new Set<string>()
+    const alreadyDmed = (u?: string) => Boolean(u) && dmedThisCycle.has(u!.toLowerCase())
+    const markDmed = (u?: string) => { if (u) dmedThisCycle.add(u.toLowerCase()) }
+
     // ── Проверка подписки БЕЗ обращения к основному ──────────────────────────
     // Подписчиков/подписки основного тянет скрейпер-API (публичные данные) → гейт = принадлежность
     // множеству. Так проверка «подписан ли на нас» не грузит основной аккаунт вообще.
@@ -472,9 +480,13 @@ export async function POST(req: NextRequest) {
           if (dmAllowed && gateMode) {
             dmAllowed = await passesGateFor(target.pk, gateMode)
           }
+          // Меж-потоковый дедуп: этому человеку директ в этом цикле уже уходил → не дублируем
+          // (проверяем ДО use('dm'), чтобы не списать бюджет на пропущенный директ).
+          if (dmAllowed && alreadyDmed(target.username)) dmAllowed = false
 
           // ВСЕ действия делает основной (лимиты counters); черновой только парсил цель
           const willDM = dmAllowed && use('dm')
+          if (willDM) markDmed(target.username)
           const willFollow = doFollowT && use('follow')
           const willLike = doLikeT && use('like')
           const willStory = Boolean(storiesAct) && use('story')
@@ -807,7 +819,10 @@ export async function POST(req: NextRequest) {
                 }
                 catch (e: any) { errors.push(`подписка: ${e.message}`) }
               }
-              if (dm?.templates?.[0] && use('dm')) {
+              // Меж-потоковый дедуп директа (как в handleTargets): если этому автору директ
+              // в цикле уже уходил (напр. он же новый подписчик) — не дублируем. Проверка ДО use.
+              if (dm?.templates?.[0] && !alreadyDmed(c.username) && use('dm')) {
+                markDmed(c.username)
                 incFired.dm = (incFired.dm || 0) + 1
                 await randDelay(3, 8)
                 let text = String(dm.templates[0]).replace(/\{\{username\}\}/gi, c.username)
