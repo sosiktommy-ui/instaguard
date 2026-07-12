@@ -6,7 +6,7 @@ import { scrapeFollowers, scrapeFollowing, scrapeComments, scrapeLikers, scraper
 import { runFollowerActionsBrowser } from '@/lib/browser/actions'
 import {
   browserComment, browserReply, browserFollow, browserLike, browserDM, browserStories,
-  browserStoryEvents, browserWarmup,
+  browserStoryEvents, browserWarmup, browserSelfEvents,
   parseFollowersBrowser, parseCommentsBrowser, parseLikersBrowser,
 } from '@/lib/browser/client'
 import { pickDraft, markDraftUsed } from '@/lib/browser/draftPool'
@@ -38,6 +38,7 @@ const LIKERS_MEDIA_COUNT = 3
 const LIKERS_PER_MEDIA = 50
 // Сколько тредов директа читать на предмет ответов/упоминаний в сторис
 const STORY_EVENTS_AMOUNT = 15
+const SELF_EVENTS_AMOUNT = 30   // plan4: сколько историй news/inbox читать за проверку
 // Глубина скрейпа подписчиков/подписок ОСНОВНОГО черновым для проверки гейта.
 // Держим НЕБОЛЬШОЙ (свежая порция + накопленный снапшот подписчиков): 900+900 с
 // внутренними паузами instagrapi давали ~1-2 мин НА КАЖДЫЙ аккаунт — при 10 аккаунтах
@@ -314,12 +315,11 @@ export async function POST(req: NextRequest) {
   // молча пропадут. Реально действовать может лишь аккаунт с browserState.
   const workingMains = accounts.filter((a) => (a.sessionData || a.browserState) && a.triggersAsResponder.length)
 
-  // Скрейпер-API нужен владельцам с parsingSource 'api' или 'drafts_then_api' (там он фолбэк).
-  // Чисто 'drafts' — ключ не нужен вообще. Если ключа нет — блокируем ТОЛЬКО тех, кому он
-  // реально нужен (честная тревога + стоп для них), остальные (drafts-only) идут в общий цикл.
-  const needsScraper = (uid: string) => (parsingSourceOf.get(uid) ?? 'api') !== 'drafts'
-  const blockedMains = workingMains.filter((a) => needsScraper(a.userId) && !scraperConfigured())
-  const blockedIds = new Set(blockedMains.map((a) => a.id))
+  // plan4 (Фаза D): детект идёт через СВОИ уведомления (self-events) — HikerAPI/черновые для
+  // детекта НЕ нужны, поэтому никого не блокируем за отсутствие ключа. Скрейпер остаётся лишь
+  // опциональным источником метрики «число подписчиков» (scrapeUserInfo, деградирует мягко).
+  const blockedMains: typeof workingMains = []
+  const blockedIds = new Set<string>()
   if (blockedMains.length) {
     await notifyOwner(
       blockedMains.map((a) => a.id),
@@ -566,18 +566,43 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      // ── Поток подписчиков ────────────────────────────────────────────────
-      if (followerTriggers.length) {
-        const scraped = await scrape(() => parseFollowersFor(account.username, parsingSource, getDraft, FOLLOWERS_FETCH_LIMIT))
-        if (scraped) {
-          const { followers } = scraped
-          // Число подписчиков от чернового (drafts-режим, когда HikerAPI не использовался).
-          if (realFollowers === undefined && scraped.followerCount != null) realFollowers = scraped.followerCount
-          // Список подписчиков скрыт (проверенный/приватный аккаунт → парсинг подписчиков невозможен).
-          parseBlocked = Boolean(scraped.restricted)
-          if (parseBlocked) {
-            await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Парсинг подписчиков @${account.username} невозможен — аккаунт скрыл список (проверенный/приватный). Комментарии и лайки парсятся нормально.` } }).catch(() => null)
+      // ── plan4 (Фаза D): ЕДИНСТВЕННЫЙ источник детекта — СВОИ уведомления (news/inbox) ──
+      // Один вызов на цикл под per-account локом (§4.8); события раскладываем по потокам
+      // (follow/like/comment). Черновые/HikerAPI в детекте НЕ вызываются (мёртвый задел).
+      // liveState/лок/re-read перенесены СЮДА (наверх), т.к. детект теперь тоже требует сессии.
+      let originalState = account.browserState
+      let liveState: object | undefined = (account.browserState as object) ?? undefined
+      let skipBrowserSection = false
+      let selfFollows: { pk: string; username: string }[] = []
+      let selfLikes: { pk: string; username: string }[] = []
+      let selfComments: { pk: string; user_pk: string; username: string; text: string; media_id: string }[] = []
+      if (account.browserState) {
+        browserLockHeld = await acquireBrowserLock(prisma, account.id)
+        if (browserLockHeld) {
+          const fresh = await prisma.instagramAccount.findUnique({ where: { id: account.id }, select: { browserState: true } }).catch(() => null)
+          if (fresh?.browserState) { originalState = fresh.browserState; liveState = fresh.browserState as object }
+          try {
+            const se = await browserSelfEvents({ storageState: liveState as object, proxy: account.proxy ?? undefined, username: account.username, locale: account.locale ?? undefined, timezoneId: account.timezoneId ?? undefined }, { amount: SELF_EVENTS_AMOUNT })
+            if (se.browserState) liveState = se.browserState
+            if (se.error) await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Уведомления (self-events) не прочитаны: ${String(se.error).slice(0, 120)}` } }).catch(() => null)
+            const evs = se.events ?? []
+            selfFollows = evs.filter((e) => e.type === 'follow').map((e) => ({ pk: e.pk, username: e.username }))
+            selfLikes = evs.filter((e) => e.type === 'like').map((e) => ({ pk: e.pk, username: e.username }))
+            selfComments = evs.filter((e) => e.type === 'comment').map((e) => ({ pk: `${e.pk}_${e.media_id ?? ''}`, user_pk: e.pk, username: e.username, text: e.text ?? '', media_id: e.media_id ?? '' }))
+          } catch (e: any) {
+            await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Уведомления (self-events) сбой: ${String(e?.message ?? e).slice(0, 120)}` } }).catch(() => null)
           }
+        } else {
+          skipBrowserSection = true
+          await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: 'Браузерная сессия занята отправкой (dm-воркер) — детект отложен до следующего цикла (§4.8).' } }).catch(() => null)
+        }
+      }
+      const canDetect = browserLockHeld && !skipBrowserSection
+
+      // ── Поток подписчиков (детект из self-events: type=follow) ───────────────
+      if (followerTriggers.length && canDetect) {
+        {
+          const followers = selfFollows
           const snapFollowers = account.snapshots.find((sn) => sn.type === 'FOLLOWERS')
           const hadBaseline = Boolean(snapFollowers)
           const knownPks = extractKnownPks(snapFollowers?.data)
@@ -604,10 +629,9 @@ export async function POST(req: NextRequest) {
       // ── Поток лайков (отдельный кулдаун) ─────────────────────────────────
       const snapLikesMeta = account.snapshots.find((sn) => sn.type === 'LIKES')
       const likeElapsed = snapLikesMeta ? Date.now() - new Date(snapLikesMeta.createdAt).getTime() : Infinity
-      if (likeTriggers.length && (isManual || likeElapsed >= LIKE_COOLDOWN_MS)) {
-        const scraped = await scrape(() => parseLikersFor(account.username, parsingSource, getDraft, LIKERS_MEDIA_COUNT, LIKERS_PER_MEDIA))
-        if (scraped) {
-          const { likers } = scraped
+      if (likeTriggers.length && canDetect && (isManual || likeElapsed >= LIKE_COOLDOWN_MS)) {
+        {
+          const likers = selfLikes
           const hadBaseline = Boolean(snapLikesMeta)
           const knownL = extractKnownPks(snapLikesMeta?.data)
           const { fresh, process } = selectTargets(likers, knownL, hadBaseline, (l) => String(l.pk))
@@ -629,32 +653,10 @@ export async function POST(req: NextRequest) {
       // ── Поток стори-событий: ответы на мои сторис + упоминания (сессией основного) ──
       const snapStoryMeta = account.snapshots.find((sn) => sn.type === 'STORY')
       const storyElapsed = snapStoryMeta ? Date.now() - new Date(snapStoryMeta.createdAt).getTime() : Infinity
-      // Стори-события видит только ОСНОВНОЙ (это его личка). Браузерные аккаунты читают
-      // инбокс своим Chromium (`/story-inbox`, веб-приватный API), legacy — instagrapi.
-      // §4.8 — ЕДИНОЕ «живое» состояние браузерной сессии на весь цикл аккаунта.
-      // Каждый шаг (стори-инбокс → комменты → прогрев) читает и обновляет ЕГО, а не
-      // исходный account.browserState. Иначе прогрев, стартующий со «старого» стейта,
-      // затирал бы дозревание сессии, уже накопленное потоками стори/комментов в ЭТОМ же
-      // цикле (гонка записи browserState внутри одного поллинга). Финальный апдейт пишет
-      // самый свежий liveState один раз.
-      let originalState = account.browserState
-      let liveState: object | undefined = (account.browserState as object) ?? undefined
-      // §4.8 — межпроцессный лок на браузерную сессию (poll ↔ dm-воркер). Берём эксклюзив и
-      // ПЕРЕЧИТЫВАЕМ самый свежий browserState из БД (dm-воркер мог записать после bulk-загрузки
-      // аккаунтов). Не удалось взять (сессию сейчас держит dm-воркер) → откладываем стори/комменты/
-      // прогрев до следующего цикла (события останутся «новыми» — не потеряются), НЕ затирая сессию.
-      let skipBrowserSection = false
-      if (account.browserState) {
-        browserLockHeld = await acquireBrowserLock(prisma, account.id)
-        if (browserLockHeld) {
-          const fresh = await prisma.instagramAccount.findUnique({ where: { id: account.id }, select: { browserState: true } }).catch(() => null)
-          if (fresh?.browserState) { originalState = fresh.browserState; liveState = fresh.browserState as object }
-        } else {
-          skipBrowserSection = true
-          await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: 'Браузерная сессия занята отправкой (dm-воркер) — стори/комменты/прогрев отложены до следующего цикла (§4.8).' } }).catch(() => null)
-        }
-      }
-      const useBrowserForStories = Boolean(account.browserState) && !skipBrowserSection
+      // Стори-события видит только ОСНОВНОЙ (его личка) — читаем инбокс своим Chromium под ТЕМ ЖЕ
+      // локом (§4.8), что и self-events выше. liveState/originalState/skipBrowserSection/лок —
+      // уже взяты в начале цикла (наверху). Здесь только используем canDetect.
+      const useBrowserForStories = canDetect
       if (storyTriggers.length && useBrowserForStories && (isManual || storyElapsed >= STORY_COOLDOWN_MS)) {
         let events: Array<{ pk?: string | number; user_pk: string | number; username: string }> = []
         try {
@@ -694,11 +696,10 @@ export async function POST(req: NextRequest) {
       // воркера — postUrl строится из media_id (shortcode, lib/instagram/shortcode.ts). Реплай
       // браузером сейчас = обычный коммент к посту, НЕ тред-ответ конкретному комменту (см.
       // workers/browser/lib/actions.js replyComment — тред отложен на Фазу 4).
-      const useBrowserForComments = Boolean(account.browserState) && !skipBrowserSection
+      const useBrowserForComments = canDetect
       if (commentTriggers.length && useBrowserForComments && (isManual || commentElapsed >= COMMENT_COOLDOWN_MS)) {
-        const scraped = await scrape(() => parseCommentsFor(account.username, parsingSource, getDraft, COMMENT_MEDIA_COUNT, COMMENT_PER_MEDIA))
-        if (scraped) {
-        const { comments } = scraped
+        {
+        const comments = selfComments   // plan4: комментарии к моим постам из self-events (type=comment)
         const hadBaseline = Boolean(snapCommentsMeta)
         const knownC = extractKnownPks(snapCommentsMeta?.data)
         // Первая проверка (нет снапшота) — только фиксируем базу, НЕ реагируем на старые комменты,
