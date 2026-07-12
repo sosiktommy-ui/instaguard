@@ -27,7 +27,7 @@ import { DryRunButton } from '@/components/accounts/DryRunButton'
 const TRIG_META = [
   { key: 'FOLLOW',      db: 'NEW_FOLLOWER',  label: 'Новая подписка',  desc: 'Основной триггер — ответ новым подписчикам', Icon: UserPlus,      color: '#663af1', soon: false },
   { key: 'COMMENT',     db: 'NEW_COMMENT',   label: 'Комментарий',     desc: 'Реакция на комментарии под постами',         Icon: MessageCircle, color: '#34c759', soon: false },
-  { key: 'LIKE',        db: 'NEW_LIKE',      label: 'Лайк',            desc: 'Реакция на лайки ваших постов',              Icon: Heart,         color: '#ff2d92', soon: false },
+  { key: 'LIKE',        db: 'NEW_LIKE',      label: 'Лайк',            desc: 'Реакция на лайки ваших постов',              Icon: Heart,         color: '#ff2d92', soon: true },
   { key: 'STORY_REPLY', db: 'STORY_MENTION', label: 'Ответ на сторис', desc: 'Ответы и упоминания в сторис',               Icon: Clapperboard,  color: '#ff9f0a', soon: false },
 ] as const
 
