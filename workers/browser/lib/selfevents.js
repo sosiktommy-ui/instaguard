@@ -92,9 +92,11 @@ async function readViaApi(context, capturedReq) {
   try { const ck = await context.cookies('https://www.instagram.com'); csrf = (ck.find((c) => c.name === 'csrftoken') || {}).value || '' } catch { /* csrf опционален */ }
 
   const attempts = []
-  if (capturedReq?.url) attempts.push({ url: capturedReq.url, headers: sanitizeHeaders(capturedReq.headers) })  // реплей рабочего запроса сайта
-  attempts.push({                                                                                               // сконструированный запрос
-    url: 'https://www.instagram.com/api/v1/news/inbox/',
+  // Реплей рабочего запроса сайта (REST GET или GraphQL POST с тем же телом) — метод и body берём
+  // из захваченного запроса, чтобы воспроизвести вызов байт-в-байт.
+  if (capturedReq?.url) attempts.push({ url: capturedReq.url, method: (capturedReq.method || 'GET').toUpperCase(), headers: sanitizeHeaders(capturedReq.headers), postData: capturedReq.postData })
+  attempts.push({                                                                                               // сконструированный запрос (REST)
+    url: 'https://www.instagram.com/api/v1/news/inbox/', method: 'GET',
     headers: { 'x-ig-app-id': IG_APP_ID, 'x-asbd-id': '129477', 'x-requested-with': 'XMLHttpRequest', 'x-csrftoken': csrf, accept: '*/*' },
   })
 
@@ -102,7 +104,10 @@ async function readViaApi(context, capturedReq) {
   for (const at of attempts) {
     for (let i = 0; i < 3; i++) {
       try {
-        const resp = await context.request.get(at.url, { headers: at.headers, timeout: 15000 })
+        const opts = { headers: at.headers, timeout: 15000 }
+        const resp = at.method === 'POST'
+          ? await context.request.post(at.url, { ...opts, data: at.postData })
+          : await context.request.get(at.url, opts)
         const st = resp.status()
         if (resp.ok()) {
           const j = await resp.json().catch(() => null)
@@ -134,27 +139,31 @@ export async function readSelfEvents(context, { amount = 30, raw = false } = {})
   if (!ok) return { events: [], error: 'login_required: сессия недействительна — нужен повторный вход' }
   const page = await context.newPage()
 
-  // Перехват ответа приложения на уведомления (клиент дёрнет свой рабочий эндпоинт при
-  // открытии колокольчика). Матчим и по URL (news/inbox), и по ФОРМЕ тела (new/old_stories).
+  // Перехват ответа приложения на уведомления (клиент дёрнет свой рабочий эндпоинт при открытии
+  // колокольчика). Матчим по URL (news/inbox ИЛИ graphql — этот аккаунт грузит уведомления через
+  // GraphQL) И по ФОРМЕ тела (new/old_stories). Из МАТЧНУВШЕГО ответа берём его ЗАПРОС (resp.request)
+  // — это ТОЧНЫЙ вызов уведомлений (REST или graphql-POST с нужным телом), пригодный для реплея.
   let captured = null
+  let capturedReq = null
   const onResp = async (resp) => {
     if (captured) return
     try {
       const u = resp.url()
       if (!/news\/inbox|\/api\/v1\/news|graphql/i.test(u)) return
       const j = await resp.json().catch(() => null)
-      if (j && (Array.isArray(j.new_stories) || Array.isArray(j.old_stories))) captured = j
+      if (j && (Array.isArray(j.new_stories) || Array.isArray(j.old_stories))) {
+        captured = j
+        try { const rq = resp.request(); capturedReq = { url: rq.url(), method: rq.method(), headers: rq.headers(), postData: rq.postData() || undefined } } catch { /* реплей-источник опционален */ }
+      }
     } catch { /* не тот ответ */ }
   }
   page.on('response', onResp)
 
-  // Перехват ЗАПРОСА уведомлений (url + заголовки) — чтобы РЕЗЕРВ мог РЕПЛЕИТЬ рабочий вызов
-  // самого сайта (тот, что не отдаёт 500), а не конструировать голый запрос. Берём первый GET
-  // к news/inbox — заголовки клиента снимаем ровно те, что реально ушли.
-  let capturedReq = null
+  // Плюс перехват GET-ЗАПРОСА news/inbox напрямую (на случай, когда ОТВЕТ не матчнулся телом, но
+  // запрос ушёл — тогда панель открылась, а тело просто не распарсилось). onResp приоритетнее.
   const onReq = (req) => {
     if (capturedReq) return
-    try { const u = req.url(); if (/news\/inbox|\/api\/v1\/news/i.test(u) && req.method() === 'GET') capturedReq = { url: u, headers: req.headers() } } catch { /* не тот запрос */ }
+    try { const u = req.url(); if (/news\/inbox|\/api\/v1\/news/i.test(u) && req.method() === 'GET') capturedReq = { url: u, method: 'GET', headers: req.headers() } } catch { /* не тот запрос */ }
   }
   page.on('request', onReq)
 
@@ -210,7 +219,7 @@ export async function readSelfEvents(context, { amount = 30, raw = false } = {})
 
     const out = { events, storageState: await context.storageState() }
     if (!events.length && apiError) out.error = apiError
-    if (raw) out.raw = { source, panelOpened, capturedReq: capturedReq ? { url: capturedReq.url } : null, intercepted: captured ? { topKeys: Object.keys(captured), new: (captured.new_stories || []).length, old: (captured.old_stories || []).length } : null, rows: rowsDump, sample, apiError }
+    if (raw) out.raw = { source, panelOpened, capturedReq: capturedReq ? { url: capturedReq.url, method: capturedReq.method || 'GET' } : null, intercepted: captured ? { topKeys: Object.keys(captured), new: (captured.new_stories || []).length, old: (captured.old_stories || []).length } : null, rows: rowsDump, sample, apiError }
     return out
   } catch (e) {
     return { events: [], error: String(e?.message ?? e).slice(0, 200) }

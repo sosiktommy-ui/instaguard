@@ -12,7 +12,7 @@ import { toStorageState } from './lib/state.js'
 import { fingerprint } from './lib/fingerprint.js'
 import { fingerprintSelfTest } from './lib/selftest.js'
 
-const BUILD = '2026-07-12-browser-41-no-feed-false-follows'
+const BUILD = '2026-07-12-browser-42-graphql-replay'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
