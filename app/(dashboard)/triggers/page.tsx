@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/Tooltip'
+import { Tilt } from '@/components/ui/Tilt'
 import { TriggerType } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
@@ -1366,8 +1367,9 @@ function AccountCard({ acc, campaigns, activeTypes, onOpen, onOpenLog, index = 0
   const followers = acc.followers ?? acc.followerCount ?? 0
   const activeMetas = TRIG_META.filter((m) => activeTypes.has(m.db))
   return (
+    <Tilt className="h-full">
     <div onClick={onOpen} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') onOpen() }}
-      className={cn('group card card-3d rise text-left p-4 flex flex-col gap-3 w-full border cursor-pointer', PLATE_STYLE[ps])}
+      className={cn('group card card-3d rise text-left p-4 flex flex-col gap-3 w-full h-full border cursor-pointer', PLATE_STYLE[ps])}
       style={{ animationDelay: `${index * 70}ms` }}>
       <div className="flex items-center gap-2.5">
         <span className="w-9 h-9 rounded-2xl bg-gradient-to-br from-[#feda75] via-[#d62976] to-[#4f5bd5] flex items-center justify-center text-white font-semibold shrink-0">
@@ -1426,6 +1428,7 @@ function AccountCard({ acc, campaigns, activeTypes, onOpen, onOpenLog, index = 0
         </div>
       </div>
     </div>
+    </Tilt>
   )
 }
 
