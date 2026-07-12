@@ -74,25 +74,40 @@ export function classify(st) {
 // ── Разбор строки DOM-панели уведомлений (как видит человек) ────────────────────
 // row: { username, rowText, postHref, hasButton }. Мультиязычно по видимому тексту + структура.
 // Порядок важен: «лайкнули ваш коммент» (ignore) и follow проверяем раньше.
+//
+// ⚠️ КРИТИЧНО (баг 2026-07-12): DOM-панель может «съехать» на ленту/сайдбар «Кому подписаться»
+// (если колокольчик не открылся). Раньше эвристика «нет превью поста + есть кнопка → follow»
+// принимала КАЖДЫЙ рекомендованный аккаунт (у него есть кнопка «Подписаться») за нового
+// подписчика → ЛОЖНЫЕ follow-события (бот действовал на случайных из «Suggested for you»).
+// Теперь: (1) строки «Followed by …»/«Suggested» отбрасываем; (2) follow — ТОЛЬКО по явному
+// «начал(а) читать ВАС» (есть объект «вас/you»), а не по наличию кнопки; (3) like — только при
+// превью поста. Пропустить настоящее уведомление в DOM не страшно (DOM — крайний резерв за
+// intercept+API), а ЛОЖНОЕ действие на чужой аккаунт — недопустимо.
 export const ROW_RX = {
   ignoreCommentLike: /(вподоба\S*|уподоба\S*|liked|понрав\S*|нравится|le gusta|menyukai)[^.]*?(коментар|коммент\S*|comment)/i,
-  follow: /(поча[вл]\S*|начал\S*|стеж\S*|подпис\S*|підпис\S*|started following|follow(ed)? you|empez[oó] a seguirte|mengikuti|стежити)/i,
   comment: /(коментує|прокоментув\S*|comment(ed|s)?|комментир\S*|comentó|ответил|replied|залишив коментар)/i,
   like: /(вподоба\S*|уподоба\S*|liked|понрав\S*|нравится|le gusta|menyukai)/i,
 }
+// «Кому подписаться»/лента, а НЕ уведомление: «Followed by X», «Suggested for you», рекомендации.
+const NOT_NOTIF_RX = /(followed by|suggested for you|рекоменд\S*|предложен\S*|для вас — подписки)/i
+// Настоящее follow-уведомление: требуется ОБЪЕКТ «вас/you» (это подписались НА ВАС), а не просто
+// глагол «follow»/«стежити» (у рекомендаций тоже «Following X»/«Follow»). Мультиязычно.
+const FOLLOW_YOU_RX = /(follow\w*\s+you|requested to follow|за вами|на вас|вас читати|seguirte|te ha seguido|empez[oó] a seguirte|solicit[oó] seguirte|mengikuti anda|meminta untuk mengikuti)/i
 
 export function classifyRow(row) {
   const t = String((row && row.rowText) || '')
+  if (!t) return null
   if (ROW_RX.ignoreCommentLike.test(t)) return null   // «лайкнули ваш коммент» — не наш триггер
+  if (NOT_NOTIF_RX.test(t)) return null               // «Кому подписаться»/лента — НЕ уведомление
+  const username = row && row.username
+  if (!username) return null
   const scMatch = String((row && row.postHref) || '').match(/\/(?:p|reel|reels)\/([^/?#]+)/)
   const shortcode = scMatch ? scMatch[1] : ''
   let type
-  if (ROW_RX.follow.test(t) || (!(row && row.postHref) && row && row.hasButton)) type = 'follow'
+  if (FOLLOW_YOU_RX.test(t)) type = 'follow'          // ТОЛЬКО «подписались на вас» (объект «вас»)
   else if (ROW_RX.comment.test(t)) type = 'comment'
-  else if (ROW_RX.like.test(t) || (row && row.postHref)) type = 'like'
-  else return null
-  const username = row && row.username
-  if (!username) return null
+  else if (row && row.postHref) type = 'like'         // лайк — только при превью МОЕГО поста
+  else return null                                    // нет «вас»/поста/коммент-глагола → не событие
   const pk = type === 'follow' ? username : `${username}_${shortcode}`
   return { type, pk, username, text: t.slice(0, 200), media_id: shortcode, ts: null, code: 'dom' }
 }

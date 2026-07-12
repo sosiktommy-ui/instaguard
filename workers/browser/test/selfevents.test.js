@@ -112,9 +112,25 @@ test('DOM ignore: «вподобав(-ла) ваш коментар: ouu» → n
   assert.equal(classifyRow({ username: 'felix.lopezz', rowText: 'felix.lopezz вподобав(-ла) ваш коментар: ouu 1 дн', postHref: '/p/x/', hasButton: false }), null)
 })
 
-test('DOM follow по кнопке без явного текста (postHref нет) → follow', () => {
-  const e = classifyRow({ username: 'x', rowText: 'x', postHref: null, hasButton: true })
-  assert.equal(e.type, 'follow')
+// РЕГРЕСС (баг 2026-07-12): рекомендация «Кому подписаться» имеет кнопку «Подписаться», но
+// это НЕ новый подписчик. Раньше «нет превью + кнопка → follow» давало ЛОЖНЫЕ follow-события.
+test('DOM: голая строка с кнопкой (реко, нет «вас») → null (НЕ follow)', () => {
+  assert.equal(classifyRow({ username: 'judebellingham', rowText: 'judebellingham', postHref: null, hasButton: true }), null)
+})
+
+test('DOM: «Suggested for you» / «Followed by X» → null (лента, не уведомление)', () => {
+  assert.equal(classifyRow({ username: 'gslllezcano', rowText: '𝒢𝒾𝑔𝒾 Followed by btww__samy Follow', postHref: null, hasButton: true }), null)
+  assert.equal(classifyRow({ username: 'jamal_ali220', rowText: 'Jamal___Al_bad Following btww__samy Follow', postHref: null, hasButton: true }), null)
+})
+
+test('DOM follow EN: «started following you» → follow', () => {
+  const e = classifyRow({ username: 'swnqkx', rowText: 'swnqkx started following you. 35m Follow Back', postHref: null, hasButton: true })
+  assert.equal(e.type, 'follow'); assert.equal(e.pk, 'swnqkx')
+})
+
+test('DOM follow EN: «requested to follow you» → follow', () => {
+  const e = classifyRow({ username: 'aheidy.hec', rowText: 'aheidy.hec requested to follow you. 1m Confirm Delete', postHref: null, hasButton: false })
+  assert.equal(e.type, 'follow'); assert.equal(e.username, 'aheidy.hec')
 })
 
 test('DOM: нет username → null', () => {

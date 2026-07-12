@@ -13,15 +13,33 @@ import { normalizeNews, classifyRow } from './newsparse.js'   // чистый р
 const IG_APP_ID = '936619743392459'
 
 // Открыть панель уведомлений (клик по пункту навигации; accessible name мультиязычный).
+// Пробуем по роли (link/button), затем по svg[aria-label] иконки-колокольчика (иногда доступный
+// именно значок, а не подпись). Возвращаем true, если клик состоялся.
 async function openNotifications(page) {
   const NAME = /notification|сповіщенн|повідомленн|уведомлен|notificaci|notifikasi|bildirim|powiadomien|通知/i
+  let clicked = false
   for (const role of ['link', 'button']) {
     try {
       const el = page.getByRole(role, { name: NAME }).first()
-      if (await el.isVisible().catch(() => false)) { await el.click({ timeout: 4000 }).catch(() => {}); break }
+      if (await el.isVisible().catch(() => false)) { await el.click({ timeout: 4000 }).catch(() => {}); clicked = true; break }
     } catch { /* пробуем следующий role */ }
   }
+  if (!clicked) {
+    // Фолбэк: кликабельный предок значка-колокольчика (svg[aria-label] совпадает с NAME).
+    try {
+      const cands = page.locator('a:has(svg[aria-label]), div[role="button"]:has(svg[aria-label]), button:has(svg[aria-label])')
+      const n = await cands.count().catch(() => 0)
+      for (let i = 0; i < n; i++) {
+        const cand = cands.nth(i)
+        const lbl = await cand.locator('svg[aria-label]').first().getAttribute('aria-label').catch(() => '')
+        if (lbl && NAME.test(lbl) && await cand.isVisible().catch(() => false)) {
+          await cand.click({ timeout: 4000 }).catch(() => {}); clicked = true; break
+        }
+      }
+    } catch { /* иконка не найдена — панель, вероятно, недоступна */ }
+  }
   await jitter(2200, 3500)   // ждём подгрузку строк панели
+  return clicked
 }
 
 // Прочитать строки панели из DOM. Возвращает {rows, sample}.
@@ -155,31 +173,44 @@ export async function readSelfEvents(context, { amount = 30, raw = false } = {})
     let rowsDump = null
     let sample = ''
     let apiError
+    let panelOpened = false
 
-    // 1) Органично открываем колокольчик → ждём перехвата JSON (до ~7с) + попутно снимаем DOM.
+    // Открываем колокольчик С РЕТРАЕМ → ждём, пока УЙДЁТ запрос news/inbox (captured/capturedReq).
+    // ⚠️ Факт ухода запроса = панель РЕАЛЬНО открылась. Если запрос не ушёл — панель НЕ открылась,
+    // на экране осталась ЛЕНТА → DOM читать НЕЛЬЗЯ (баг 2026-07-12: скрейп ленты давал ложные follow
+    // из «Кому подписаться»). Снимок DOM берём для debug (sample), но используем строго под гейтом.
     try {
-      await openNotifications(page)
-      for (let i = 0; i < 14 && !captured; i++) await page.waitForTimeout(500)
+      for (let attempt = 0; attempt < 2 && !captured && !capturedReq; attempt++) {
+        await openNotifications(page)
+        for (let i = 0; i < 12 && !captured && !capturedReq; i++) await page.waitForTimeout(400)
+      }
+      for (let i = 0; i < 8 && !captured; i++) await page.waitForTimeout(400)   // дать телу ответа дойти (intercept)
+      panelOpened = Boolean(captured || capturedReq)
       const r = await readNotificationsRows(page).catch(() => null)
       if (r) { rowsDump = r.rows; sample = r.sample }
     } catch (e) {
       apiError = `open_failed: ${String(e?.message ?? e).slice(0, 100)}`
     }
 
+    // 1) Перехват JSON ответа приложения — основной путь (ban-friendly, язык-независимый).
     if (captured) { events = normalizeNews(captured).slice(0, amount); source = 'intercept' }
-    // 2) DOM-панель (резерв, если перехват пуст).
-    if (!events.length && rowsDump) { const ev = rowsDump.map(classifyRow).filter(Boolean); if (ev.length) { events = ev.slice(0, amount); source = 'dom' } }
-    // 3) НЕЗАВИСИМЫЙ запрос к API — реплей рабочего запроса сайта (или сконструированный) через
-    //    context.request (крайний резерв). Теперь это настоящий рабочий фолбэк, а не голый fetch→500.
+    // 2) НЕЗАВИСИМЫЙ запрос к API — РАНЬШЕ DOM: структурный JSON (реплей рабочего запроса сайта,
+    //    иначе сконструированный) надёжнее и БЕЗОПАСНЕЕ скрейпа — он не спутает ленту с уведомлениями.
     if (!events.length) {
       const api = await readViaApi(context, capturedReq).catch(() => ({ events: [], apiError: 'api_exception' }))
       if (api.events.length) { events = api.events.slice(0, amount); source = 'api' }
       if (api.apiError) apiError = apiError ? `${apiError}; ${api.apiError}` : api.apiError
     }
+    // 3) DOM-панель — ТОЛЬКО если панель РЕАЛЬНО открылась (иначе это лента → ложные follow).
+    //    classifyRow ужесточён (реко/лента отбрасываются), но гейт panelOpened — главная защита.
+    if (!events.length && panelOpened && rowsDump) {
+      const ev = rowsDump.map(classifyRow).filter(Boolean)
+      if (ev.length) { events = ev.slice(0, amount); source = 'dom' }
+    }
 
     const out = { events, storageState: await context.storageState() }
     if (!events.length && apiError) out.error = apiError
-    if (raw) out.raw = { source, capturedReq: capturedReq ? { url: capturedReq.url } : null, intercepted: captured ? { topKeys: Object.keys(captured), new: (captured.new_stories || []).length, old: (captured.old_stories || []).length } : null, rows: rowsDump, sample, apiError }
+    if (raw) out.raw = { source, panelOpened, capturedReq: capturedReq ? { url: capturedReq.url } : null, intercepted: captured ? { topKeys: Object.keys(captured), new: (captured.new_stories || []).length, old: (captured.old_stories || []).length } : null, rows: rowsDump, sample, apiError }
     return out
   } catch (e) {
     return { events: [], error: String(e?.message ?? e).slice(0, 200) }
