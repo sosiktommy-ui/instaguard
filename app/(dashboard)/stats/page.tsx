@@ -10,10 +10,11 @@ import { PageHeader } from '@/components/common/PageHeader'
 import { StatCard } from '@/components/common/StatCard'
 import { IconTile } from '@/components/common/IconTile'
 import { CampaignMatrix } from '@/components/stats/CampaignMatrix'
+import { FleetSafety } from '@/components/stats/FleetSafety'
 import { Chart3D } from '@/components/stats/Chart3D'
 import { TONE } from '@/lib/colors'
 
-interface DbAccount { id: string; username: string; status: string; errorCount?: number; followerCount?: number; followers?: number | null }
+interface DbAccount { id: string; username: string; status: string; errorCount?: number; followerCount?: number; followers?: number | null; role?: string | null; limits?: unknown; proxy?: string | null; hasSession?: boolean | null; lastChecked?: string | null; createdAt?: string | null }
 interface DbTrigger { id: string; name?: string; triggerType: string; isActive: boolean; fireCount?: number; stats?: any; actions?: any[]; responder?: { id: string; username: string } | null }
 interface DbLog { id: string; level: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS'; message: string; createdAt: string; account?: { username?: string } }
 
@@ -118,6 +119,9 @@ function Stats() {
           <StatCard key={label} icon={icon} color={color} value={value} label={label} tip={tip} delay={i * 60} />
         ))}
       </div>
+
+      {/* §13.4 — Ban-safety Score наружу: живой светофор защиты флота от бана */}
+      <FleetSafety accounts={accounts} triggers={triggers} />
 
       {/* 3D-диаграмма срабатываний по типу кампании (§13.13). Ниже — тот же срез плоскими барами
           (всегда читаемые числа + запасной вид, если WebGPU/WebGL недоступны). */}
