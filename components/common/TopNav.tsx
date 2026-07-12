@@ -7,6 +7,7 @@ import { LogOut, Menu, X, List, Users, BarChart3, Globe, Settings } from 'lucide
 import { cn } from '@/lib/utils'
 import { AppLogo } from '@/components/common/AppLogo'
 import { ReactiveMascot } from '@/components/common/ReactiveMascot'
+import { ActivityBell } from '@/components/common/ActivityBell'
 import { useBreadcrumbs } from '@/lib/breadcrumbs'
 
 // Единственный уровень навигации — разделы приложения (супертаб-переключатель «режимов» убран)
@@ -118,6 +119,7 @@ export default function TopNav() {
               </div>
             )
           })()}
+          <ActivityBell />
           <button onClick={handleLogout} className="text-subt hover:text-bad transition-colors p-2" title="Выйти">
             <LogOut className="w-[18px] h-[18px]" />
           </button>
