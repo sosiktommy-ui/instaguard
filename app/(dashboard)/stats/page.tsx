@@ -10,6 +10,7 @@ import { PageHeader } from '@/components/common/PageHeader'
 import { StatCard } from '@/components/common/StatCard'
 import { IconTile } from '@/components/common/IconTile'
 import { CampaignMatrix } from '@/components/stats/CampaignMatrix'
+import { Chart3D } from '@/components/stats/Chart3D'
 import { TONE } from '@/lib/colors'
 
 interface DbAccount { id: string; username: string; status: string; errorCount?: number; followerCount?: number; followers?: number | null }
@@ -83,6 +84,18 @@ function Stats() {
   const maxRuns = Math.max(1, ...byType.map((b) => b.runs))
   const topAccounts = [...accounts].sort((a, b) => followersOf(b) - followersOf(a)).slice(0, 5)
 
+  // Данные для 3D-диаграммы (§13.13). Порядок массивов синхронизирован с public/stats3d/index.html:
+  // campaigns = порядок DB_TYPE_LABELS; actions = порядок ACTION_KEYS [dm,like,follow,story,comment].
+  const runsOf = (a: DbAccount) => triggers.filter((t) => t.responder?.id === a.id).reduce((s, t) => s + (t.fireCount ?? 0), 0)
+  const chart3dData = {
+    campaigns: byType.map((b) => b.runs),
+    actions: ACTION_KEYS.map((k) => triggers.reduce((s, t) => s + readStat(t.stats, k).done, 0)),
+    accounts: [...accounts]
+      .map((a) => ({ label: `@${a.username}`, value: runsOf(a) }))
+      .sort((x, y) => y.value - x.value)
+      .slice(0, 6),
+  }
+
   const cards = [
     { icon: Users, label: 'Аккаунтов', value: accounts.length, color: TONE.brand },
     { icon: Eye, label: 'Подписчиков', value: formatFollowers(totalReach), color: TONE.alt, tip: 'Сумма подписчиков по всем аккаунтам (реальное число из Instagram, если известно, иначе — по последнему отслеженному значению).' },
@@ -104,6 +117,12 @@ function Stats() {
         {cards.map(({ icon, label, value, color, tip }, i) => (
           <StatCard key={label} icon={icon} color={color} value={value} label={label} tip={tip} delay={i * 60} />
         ))}
+      </div>
+
+      {/* 3D-диаграмма срабатываний по типу кампании (§13.13). Ниже — тот же срез плоскими барами
+          (всегда читаемые числа + запасной вид, если WebGPU/WebGL недоступны). */}
+      <div className="card card-3d rise overflow-hidden p-0">
+        <Chart3D data={chart3dData} height={460} />
       </div>
 
       {/* Здоровье автоматизации: браузерный воркер (эмуль) + скрейпер-API */}
@@ -196,7 +215,7 @@ function Stats() {
 
       <div className="grid lg:grid-cols-2 gap-5">
         <div className="card card-3d gloss p-6">
-          <div className="font-semibold text-[15px] mb-5">Срабатывания по типу кампании</div>
+          <div className="font-semibold text-[15px] mb-5">Срабатывания по типу — числа</div>
           <div className="space-y-4">
             {byType.map((b) => (
               <div key={b.type}>

@@ -1,0 +1,2854 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Pie Chart Visualization</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Instrument+Serif&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #e8e4df;
+    overflow: hidden;
+    font-family: 'Inter', sans-serif;
+    width: 100vw;
+    height: 100vh;
+  }
+
+  #tooltip {
+    position: fixed;
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 8px;
+    padding: 10px 16px;
+    color: #2a2a2a;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    font-size: 13px;
+    font-family: 'Inter', sans-serif;
+    font-weight: 400;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    z-index: 100;
+    max-width: 260px;
+    line-height: 1.5;
+  }
+  #tooltip .tt-label {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 4px;
+  }
+  #tooltip .tt-value {
+    color: rgba(0,0,0,0.45);
+    font-size: 12px;
+  }
+  #tooltip .tt-pct {
+    font-family: 'Instrument Serif', serif;
+    font-size: 28px;
+    color: #1a1a1a;
+    margin-top: 2px;
+    letter-spacing: 0.5px;
+  }
+  #tooltip .tt-bar {
+    height: 3px;
+    border-radius: 2px;
+    margin-top: 6px;
+  }
+
+  #ui-overlay {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+
+  #title-bar {
+    background: none;
+    border: none;
+    padding: 0 4px;
+    color: #2a2a2a;
+  }
+
+  #title-bar h1 {
+    font-family: 'Instrument Serif', serif;
+    font-size: 24px;
+    font-weight: 400;
+    letter-spacing: 0.8px;
+    margin-bottom: 6px;
+  }
+
+  #title-bar p {
+    font-size: 11px;
+    color: rgba(0,0,0,0.4);
+    font-weight: 400;
+  }
+
+  #controls {
+    background: none;
+    border: none;
+    padding: 0 4px;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .ctrl-btn {
+    background: rgba(0, 0, 0, 0.05);
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 6px;
+    color: #555;
+    font-family: 'Inter', sans-serif;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .ctrl-btn:hover {
+    background: rgba(0, 0, 0, 0.1);
+    color: #222;
+  }
+
+  .ctrl-btn.active {
+    background: rgba(80, 120, 200, 0.15);
+    border-color: rgba(80, 120, 200, 0.35);
+    color: #4068c0;
+  }
+
+  #dataset-switcher {
+    position: fixed;
+    bottom: 16px;
+    left: 16px;
+    z-index: 50;
+    display: flex;
+    gap: 6px;
+    flex-wrap: nowrap;
+  }
+
+  .map-btn {
+    background: rgba(255, 255, 255, 0.7);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 8px;
+    color: rgba(0,0,0,0.5);
+    font-family: 'Inter', sans-serif;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 7px 14px;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    white-space: nowrap;
+  }
+
+  .map-btn:hover {
+    background: rgba(255, 255, 255, 0.9);
+    color: #222;
+    border-color: rgba(0, 0, 0, 0.15);
+  }
+
+  .map-btn.active {
+    background: rgba(80, 120, 200, 0.15);
+    border-color: rgba(80, 120, 200, 0.35);
+    color: #4068c0;
+  }
+
+  #legend {
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    background: rgba(255, 255, 255, 0.7);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 10px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+    padding: 14px 18px;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 180px;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+
+  .legend-title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: rgba(0,0,0,0.35);
+    margin-bottom: 2px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: rgba(0,0,0,0.55);
+    font-weight: 400;
+    cursor: pointer;
+    transition: all 0.2s;
+    padding: 2px 0;
+  }
+  .legend-item:hover { color: #111; }
+  .legend-item.dimmed { opacity: 0.3; }
+
+  .legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .legend-value {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+    color: rgba(0,0,0,0.35);
+    font-size: 10px;
+  }
+
+  /* Панель «Scene Settings» — авторский dev-инструмент, скрыт во встраивании */
+  #settings-toggle, #settings-panel { display: none !important; }
+  #settings-toggle {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    width: 40px;
+    height: 40px;
+    background: rgba(255, 255, 255, 0.7);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 10px;
+    color: #666;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    font-size: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 60;
+    transition: all 0.3s ease;
+    user-select: none;
+    opacity: 0;
+  }
+  #settings-toggle:hover { background: rgba(255,255,255,0.9); color: #222; }
+
+  #settings-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 310px;
+    height: 100vh;
+    background: rgba(245, 242, 238, 0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-left: 1px solid rgba(0, 0, 0, 0.08);
+    z-index: 150;
+    overflow-y: auto;
+    transform: translateX(100%);
+    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    padding: 0 0 24px 0;
+  }
+  #settings-panel.open { transform: translateX(0); }
+
+  #settings-panel::-webkit-scrollbar { width: 4px; }
+  #settings-panel::-webkit-scrollbar-track { background: transparent; }
+  #settings-panel::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 2px; }
+
+  .sp-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 18px;
+    border-bottom: 1px solid rgba(0,0,0,0.08);
+    position: sticky;
+    top: 0;
+    background: rgba(245, 242, 238, 0.98);
+    z-index: 2;
+  }
+  .sp-header h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #2a2a2a;
+    letter-spacing: -0.3px;
+  }
+  .sp-close {
+    background: rgba(0,0,0,0.05);
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 6px;
+    color: #888;
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+  }
+  .sp-close:hover { background: rgba(0,0,0,0.1); color: #222; }
+
+  .sp-section {
+    padding: 12px 16px 6px;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+  }
+  .sp-section-title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: rgba(0,0,0,0.35);
+    margin-bottom: 8px;
+  }
+  .sp-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    gap: 8px;
+    min-height: 24px;
+  }
+  .sp-label {
+    font-size: 11px;
+    color: rgba(0,0,0,0.55);
+    font-weight: 400;
+    white-space: nowrap;
+    min-width: 90px;
+    flex-shrink: 0;
+  }
+  .sp-slider {
+    flex: 1;
+    min-width: 60px;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(0,0,0,0.1);
+    outline: none;
+    cursor: pointer;
+  }
+  .sp-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #5a8ad0;
+    border: 2px solid #fff;
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+  }
+  .sp-select {
+    flex: 1;
+    background: rgba(255,255,255,0.6);
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 6px;
+    color: #444;
+    font-family: 'Inter', sans-serif;
+    font-size: 11px;
+    padding: 5px 8px;
+    outline: none;
+    cursor: pointer;
+  }
+  .sp-select option { background: #f0ede8; }
+  .sp-color-input {
+    width: 32px;
+    height: 24px;
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+  }
+  .sp-color-input::-webkit-color-swatch-wrapper { padding: 2px; }
+  .sp-color-input::-webkit-color-swatch { border: none; border-radius: 2px; }
+  .sp-toggle {
+    width: 36px;
+    height: 20px;
+    border-radius: 10px;
+    background: rgba(0,0,0,0.1);
+    cursor: pointer;
+    position: relative;
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+  .sp-toggle::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #666;
+    transition: all 0.2s;
+  }
+  .sp-toggle.active { background: rgba(80,120,200,0.25); }
+  .sp-toggle.active::after { left: 19px; background: #5a8ad0; }
+
+  .sp-value {
+    font-size: 10px;
+    color: rgba(0,0,0,0.4);
+    font-weight: 500;
+    min-width: 32px;
+    flex-shrink: 0;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  #fpsIndicator {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 200;
+    font-family: 'Inter', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    color: #ffffff;
+    background: rgba(28,28,30,0.60);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    padding: 5px 9px;
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.3px;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+</style>
+</head>
+<body>
+<div id="tooltip"></div>
+<div id="fpsIndicator">-- FPS</div>
+
+<div id="ui-overlay">
+  <div id="title-bar">
+    <h1>Срабатывания по типу кампании</h1>
+    <p>Клик — разложить · Тяни — вращать · Колесо — зум</p>
+  </div>
+  <div id="controls">
+    <button class="ctrl-btn" onclick="resetView()">Сбросить вид</button>
+    <button class="ctrl-btn" onclick="toggleAutoRotate()" id="rotateBtn">Остановить вращение</button>
+    <button class="ctrl-btn" onclick="toggleExplodeAll()" id="explodeAllBtn">Разложить всё</button>
+    <button class="ctrl-btn" onclick="toggleDonut()" id="donutBtn">Кольцо</button>
+  </div>
+</div>
+
+<div id="dataset-switcher">
+  <button class="map-btn active" onclick="switchDataset('market')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>По типу кампании</button>
+  <button class="map-btn" onclick="switchDataset('revenue')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>По действию</button>
+  <button class="map-btn" onclick="switchDataset('energy')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg>По аккаунту</button>
+</div>
+
+<div id="legend"></div>
+
+<div id="settings-toggle" onclick="toggleSettings()">⚙</div>
+<div id="settings-panel">
+  <div class="sp-header">
+    <h3>Scene Settings</h3>
+    <button class="sp-close" onclick="toggleSettings()">✕</button>
+  </div>
+
+  <div class="sp-section">
+    <div class="sp-section-title">Environment</div>
+    <div class="sp-row">
+      <span class="sp-label">HDR Map</span>
+      <select class="sp-select" id="hdr-select" onchange="changeHDR(this.value)">
+        <option value="studio_small_09" selected>Studio</option>
+        <option value="kloppenheim_02">Kloppenheim</option>
+        <option value="meadow_2">Meadow</option>
+        <option value="venice_sunset">Venice Sunset</option>
+        <option value="potsdamer_platz">Urban</option>
+        <option value="none">None</option>
+      </select>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Env Intensity</span>
+      <input type="range" class="sp-slider" min="0" max="300" value="158" oninput="setEnvIntensity(this.value)">
+      <span class="sp-value" id="val-env-intensity">158</span>
+    </div>
+  </div>
+
+  <div class="sp-section">
+    <div class="sp-section-title">Lighting</div>
+    <div class="sp-row">
+      <span class="sp-label">Key Light</span>
+      <input type="range" class="sp-slider" min="0" max="800" value="320" oninput="setKeyLight(this.value)">
+      <span class="sp-value" id="val-key-light">320</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Key Color</span>
+      <input type="color" class="sp-color-input" value="#ffbe8f" oninput="setKeyColor(this.value)">
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Fill Light</span>
+      <input type="range" class="sp-slider" min="0" max="300" value="110" oninput="setFillLight(this.value)">
+      <span class="sp-value" id="val-fill-light">110</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Key Pos X</span>
+      <input type="range" class="sp-slider" min="-200" max="200" value="28" oninput="setKeyPosX(this.value)">
+      <span class="sp-value" id="val-key-pos-x">2.8</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Key Pos Y</span>
+      <input type="range" class="sp-slider" min="10" max="300" value="139" oninput="setKeyPosY(this.value)">
+      <span class="sp-value" id="val-key-pos-y">13.9</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Key Pos Z</span>
+      <input type="range" class="sp-slider" min="-200" max="200" value="60" oninput="setKeyPosZ(this.value)">
+      <span class="sp-value" id="val-key-pos-z">6.0</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Shadows</span>
+      <div class="sp-toggle active" id="shadowToggle" onclick="toggleShadows()"></div>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Shadow Opacity</span>
+      <input type="range" class="sp-slider" min="0" max="100" value="100" oninput="setShadowOpacity(this.value)">
+      <span class="sp-value" id="val-shadow-opacity">100</span>
+    </div>
+  </div>
+
+  <div class="sp-section">
+    <div class="sp-section-title">Chart</div>
+    <div class="sp-row">
+      <span class="sp-label">Height</span>
+      <input type="range" class="sp-slider" min="5" max="80" value="20" oninput="setChartHeight(this.value)">
+      <span class="sp-value" id="val-chart-height">20</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Radius</span>
+      <input type="range" class="sp-slider" min="30" max="120" value="70" oninput="setChartRadius(this.value)">
+      <span class="sp-value" id="val-chart-radius">70</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Inner Radius</span>
+      <input type="range" class="sp-slider" min="0" max="80" value="0" id="innerRadiusSlider" oninput="setInnerRadius(this.value)">
+      <span class="sp-value" id="val-inner-radius">0</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Gap</span>
+      <input type="range" class="sp-slider" min="0" max="50" value="30" oninput="setSliceGap(this.value)">
+      <span class="sp-value" id="val-slice-gap">30</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Bevel</span>
+      <input type="range" class="sp-slider" min="0" max="30" value="5" oninput="setBevel(this.value)">
+      <span class="sp-value" id="val-bevel">5</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Side Segments</span>
+      <input type="range" class="sp-slider" min="8" max="256" step="4" value="64" oninput="setSideSegments(this.value)">
+      <span class="sp-value" id="val-side-segments">64</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Bevel Segments</span>
+      <input type="range" class="sp-slider" min="1" max="8" value="8" oninput="setBevelSegments(this.value)">
+      <span class="sp-value" id="val-bevel-segments">8</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Smooth Shading</span>
+      <div class="sp-toggle active" id="smoothToggle" onclick="toggleSmooth()"></div>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Crease Angle</span>
+      <input type="range" class="sp-slider" min="0" max="180" value="90" oninput="setCreaseAngle(this.value)">
+      <span class="sp-value" id="val-crease-angle">90°</span>
+    </div>
+  </div>
+
+  <div class="sp-section">
+    <div class="sp-section-title">Gradient</div>
+    <div class="sp-row">
+      <span class="sp-label">Direction</span>
+      <select class="sp-select" id="grad-direction" onchange="setGradDirection(this.value)">
+        <option value="vertical" selected>Vertical (Y)</option>
+        <option value="radial">Radial (Center→Edge)</option>
+        <option value="angular">Angular (Sweep)</option>
+      </select>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">From Y</span>
+      <input type="range" class="sp-slider" min="0" max="100" value="0" oninput="setGradFromY(this.value)">
+      <span class="sp-value" id="val-grad-from-y">0.00</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">To Y</span>
+      <input type="range" class="sp-slider" min="0" max="100" value="100" oninput="setGradToY(this.value)">
+      <span class="sp-value" id="val-grad-to-y">1.00</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Curve (Power)</span>
+      <input type="range" class="sp-slider" min="10" max="300" value="80" oninput="setGradCurve(this.value)">
+      <span class="sp-value" id="val-grad-curve">0.80</span>
+    </div>
+    <div id="grad-colors-container" style="margin-top:6px;"></div>
+  </div>
+
+  <div class="sp-section">
+    <div class="sp-section-title">Material</div>
+    <div class="sp-row">
+      <span class="sp-label">Roughness</span>
+      <input type="range" class="sp-slider" min="0" max="100" value="50" oninput="setRoughness(this.value)">
+      <span class="sp-value" id="val-roughness">50</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Metalness</span>
+      <input type="range" class="sp-slider" min="0" max="100" value="50" oninput="setMetalness(this.value)">
+      <span class="sp-value" id="val-metalness">50</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Env Map Intensity</span>
+      <input type="range" class="sp-slider" min="0" max="200" value="120" oninput="setMatEnvIntensity(this.value)">
+      <span class="sp-value" id="val-mat-env-intensity">120</span>
+    </div>
+  </div>
+
+  <div class="sp-section">
+    <div class="sp-section-title">Ambient Occlusion</div>
+    <div class="sp-row">
+      <span class="sp-label">Enabled</span>
+      <div class="sp-toggle active" id="aoToggle" onclick="toggleAO()"></div>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Radius</span>
+      <input type="range" class="sp-slider" min="1" max="200" value="33" oninput="setAORadius(this.value)">
+      <span class="sp-value" id="val-ao-radius">0.33</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Intensity</span>
+      <input type="range" class="sp-slider" min="1" max="500" value="475" oninput="setAOScale(this.value)">
+      <span class="sp-value" id="val-ao-scale">4.75</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Thickness</span>
+      <input type="range" class="sp-slider" min="1" max="300" value="300" oninput="setAOThickness(this.value)">
+      <span class="sp-value" id="val-ao-thickness">3.00</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Samples</span>
+      <input type="range" class="sp-slider" min="2" max="64" value="6" oninput="setAOSamples(this.value)">
+      <span class="sp-value" id="val-ao-samples">6</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Dist Exponent</span>
+      <input type="range" class="sp-slider" min="1" max="400" value="125" oninput="setAODistExponent(this.value)">
+      <span class="sp-value" id="val-ao-dist-exp">1.25</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Dist Fall-Off</span>
+      <input type="range" class="sp-slider" min="0" max="100" value="36" oninput="setAODistFallOff(this.value)">
+      <span class="sp-value" id="val-ao-dist-falloff">0.36</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Near Threshold</span>
+      <input type="range" class="sp-slider" min="0" max="100" value="0" oninput="setAONearThreshold(this.value)">
+      <span class="sp-value" id="val-ao-near-thresh">0.00</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Far Threshold</span>
+      <input type="range" class="sp-slider" min="10" max="1000" value="1000" oninput="setAOFarThreshold(this.value)">
+      <span class="sp-value" id="val-ao-far-thresh">10.00</span>
+    </div>
+  </div>
+
+  <div class="sp-section">
+    <div class="sp-section-title">Screen-Space Reflections</div>
+    <div class="sp-row">
+      <span class="sp-label">Enabled</span>
+      <div class="sp-toggle active" id="ssrToggle" onclick="toggleSSR()"></div>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Direction</span>
+      <div style="display:flex;gap:4px;">
+        <button class="ctrl-btn active" id="ssrDirX" onclick="toggleSSRDir('x')" style="padding:4px 8px;font-size:10px;">X</button>
+        <button class="ctrl-btn active" id="ssrDirY" onclick="toggleSSRDir('y')" style="padding:4px 8px;font-size:10px;">Y</button>
+        <button class="ctrl-btn active" id="ssrDirZ" onclick="toggleSSRDir('z')" style="padding:4px 8px;font-size:10px;">Z</button>
+      </div>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Strength</span>
+      <input type="range" class="sp-slider" min="0" max="100" value="100" oninput="setSSRStrength(this.value)">
+      <span class="sp-value" id="val-ssr-strength">1.00</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Thickness</span>
+      <input type="range" class="sp-slider" min="1" max="100" value="51" oninput="setSSRThickness(this.value)">
+      <span class="sp-value" id="val-ssr-thickness">0.51</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Max Distance</span>
+      <input type="range" class="sp-slider" min="10" max="1000" value="1000" oninput="setSSRMaxDist(this.value)">
+      <span class="sp-value" id="val-ssr-max-dist">10.00</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Fresnel Power</span>
+      <input type="range" class="sp-slider" min="5" max="500" value="35" oninput="setSSRFresnel(this.value)">
+      <span class="sp-value" id="val-ssr-fresnel">0.35</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Fade</span>
+      <input type="range" class="sp-slider" min="0" max="100" value="100" oninput="setSSRFade(this.value)">
+      <span class="sp-value" id="val-ssr-fade">1.00</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Roughness Influence</span>
+      <input type="range" class="sp-slider" min="0" max="300" value="300" oninput="setSSRRoughInfluence(this.value)">
+      <span class="sp-value" id="val-ssr-rough">3.00</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Steps</span>
+      <input type="range" class="sp-slider" min="8" max="128" step="4" value="24" oninput="setSSRSteps(this.value)">
+      <span class="sp-value" id="val-ssr-steps">24</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Refine Steps</span>
+      <input type="range" class="sp-slider" min="2" max="32" step="2" value="12" oninput="setSSRRefine(this.value)">
+      <span class="sp-value" id="val-ssr-refine">12</span>
+    </div>
+  </div>
+
+  <div class="sp-section">
+    <div class="sp-section-title">Rendering</div>
+    <div class="sp-row">
+      <span class="sp-label">Tone Mapping</span>
+      <select class="sp-select" onchange="setToneMapping(this.value)">
+        <option value="aces" selected>ACES Filmic</option>
+        <option value="linear">Linear</option>
+        <option value="reinhard">Reinhard</option>
+        <option value="cineon">Cineon</option>
+        <option value="agx">AgX</option>
+      </select>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Exposure</span>
+      <input type="range" class="sp-slider" min="10" max="300" value="100" oninput="setExposure(this.value)">
+      <span class="sp-value" id="val-exposure">1.00</span>
+    </div>
+  </div>
+
+  <div class="sp-section">
+    <div class="sp-section-title">Ground</div>
+    <div class="sp-row">
+      <span class="sp-label">Color</span>
+      <input type="color" class="sp-color-input" value="#e7e9dd" oninput="setGroundColor(this.value)">
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Roughness</span>
+      <input type="range" class="sp-slider" min="0" max="100" value="26" oninput="setGroundRoughness(this.value)">
+      <span class="sp-value" id="val-ground-roughness">0.26</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Metalness</span>
+      <input type="range" class="sp-slider" min="0" max="100" value="0" oninput="setGroundMetalness(this.value)">
+      <span class="sp-value" id="val-ground-metalness">0.00</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Normal Scale</span>
+      <input type="range" class="sp-slider" min="0" max="200" value="56" oninput="setGroundNormalScale(this.value)">
+      <span class="sp-value" id="val-ground-normal">0.56</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Normal Repeat</span>
+      <input type="range" class="sp-slider" min="1" max="80" value="10" oninput="setGroundNormalRepeat(this.value)">
+      <span class="sp-value" id="val-ground-normal-repeat">10</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Normal Pattern</span>
+      <select class="sp-select" id="ground-normal-pattern" onchange="setGroundNormalPattern(this.value)">
+        <option value="fine-noise" selected>Fine Noise</option>
+        <option value="perlin">Perlin</option>
+        <option value="cell">Cell / Voronoi</option>
+        <option value="brushed">Brushed Metal</option>
+        <option value="fabric">Fabric Weave</option>
+        <option value="stipple">Stipple</option>
+      </select>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Normal Strength</span>
+      <input type="range" class="sp-slider" min="1" max="100" value="24" oninput="setGroundNormalStrength(this.value)">
+      <span class="sp-value" id="val-ground-normal-strength">24</span>
+    </div>
+    <div class="sp-row">
+      <span class="sp-label">Fade Radius</span>
+      <input type="range" class="sp-slider" min="10" max="100" value="35" oninput="setGroundFadeRadius(this.value)">
+      <span class="sp-value" id="val-ground-fade-radius">0.35</span>
+    </div>
+  </div>
+
+
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.webgpu.js",
+    "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.webgpu.js",
+    "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.tsl.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.174.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three/webgpu';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { uniform, vec2, vec3, vec4, float, screenUV, pass, mrt, output, transformedNormalView, materialReference, Fn, Loop, If } from 'three/tsl';
+import { ao } from 'three/addons/tsl/display/GTAONode.js';
+import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+
+// ── Datasets ──
+// Датасеты адаптированы под InstaGuard. Значения — плейсхолдеры;
+// реальные числа приходят от страницы через postMessage ({type:'ig-stats'}).
+// unit:'' — величина в штуках (срабатываний/действий), проценты считаются от суммы.
+const DATASETS = {
+  // Срез «По типу кампании» — какой триггер срабатывает чаще (главная метрика)
+  market: {
+    title: 'По типу кампании',
+    unit: '',
+    slices: [
+      { label: 'Новая подписка', value: 12, color: 0x7C5CFC, hex: '#7C5CFC', gradTop: '#241663', gradBot: '#9B7BFF' },
+      { label: 'Комментарий',    value: 0,  color: 0x22C55E, hex: '#22C55E', gradTop: '#0A3D18', gradBot: '#4BE07A' },
+      { label: 'Лайк',           value: 0,  color: 0xF59E0B, hex: '#F59E0B', gradTop: '#4A3400', gradBot: '#FFC24D' },
+      { label: 'Ответ на сторис',value: 0,  color: 0x38BDF8, hex: '#38BDF8', gradTop: '#083848', gradBot: '#6FD8FF' },
+    ]
+  },
+  // Срез «По действию» — что реально выполнялось
+  revenue: {
+    title: 'По действию',
+    unit: '',
+    slices: [
+      { label: 'Директ',   value: 1, color: 0x7C5CFC, hex: '#7C5CFC', gradTop: '#241663', gradBot: '#9B7BFF' },
+      { label: 'Лайк',     value: 1, color: 0xF59E0B, hex: '#F59E0B', gradTop: '#4A3400', gradBot: '#FFC24D' },
+      { label: 'Подписка', value: 1, color: 0x22C55E, hex: '#22C55E', gradTop: '#0A3D18', gradBot: '#4BE07A' },
+      { label: 'Сторис',   value: 1, color: 0x38BDF8, hex: '#38BDF8', gradTop: '#083848', gradBot: '#6FD8FF' },
+      { label: 'Коммент',  value: 1, color: 0xFF5CA8, hex: '#FF5CA8', gradTop: '#40082C', gradBot: '#FF7FBE' },
+    ]
+  },
+  // Срез «По аккаунту» — топ аккаунтов по срабатываниям (слайсы перестраивает страница)
+  energy: {
+    title: 'По аккаунту',
+    unit: '',
+    slices: [
+      { label: 'Нет данных', value: 1, color: 0x9AA0A6, hex: '#9AA0A6', gradTop: '#2A2E33', gradBot: '#C2C7CC' },
+    ]
+  }
+};
+
+// Палитра для динамического среза «По аккаунту» (циклически по индексу)
+const ACCOUNT_PALETTE = [
+  { color: 0x7C5CFC, hex: '#7C5CFC', gradTop: '#241663', gradBot: '#9B7BFF' },
+  { color: 0x22C55E, hex: '#22C55E', gradTop: '#0A3D18', gradBot: '#4BE07A' },
+  { color: 0xF59E0B, hex: '#F59E0B', gradTop: '#4A3400', gradBot: '#FFC24D' },
+  { color: 0x38BDF8, hex: '#38BDF8', gradTop: '#083848', gradBot: '#6FD8FF' },
+  { color: 0xFF5CA8, hex: '#FF5CA8', gradTop: '#40082C', gradBot: '#FF7FBE' },
+  { color: 0xFF7043, hex: '#FF7043', gradTop: '#4A1808', gradBot: '#FF9068' },
+];
+
+let currentDatasetKey = 'market';
+let currentData = DATASETS.market;
+
+// ── Chart params ──
+let chartRadius = 5.5;
+let chartHeight = 2.5;
+let innerRadius = 0;
+let sliceGap = 0.06;
+let bevelSize = 0.15;
+let sideSegments = 64;
+let bevelSegments = 8;
+let smoothShading = true;
+let creaseAngle = 90; // degrees
+let roughnessVal = 0.50;
+let metalnessVal = 0.50;
+let matEnvIntensity = 1.2;
+
+// ── Procedural normal map ──
+function seededRandom(seed) {
+  let s = seed;
+  return function () {
+    s = (s * 16807 + 0) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+}
+
+let groundNormalStrength = 24; // 1-100, controls perturbation amplitude
+
+function generateNormalMap(pattern, strength) {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const imageData = ctx.createImageData(size, size);
+  const data = imageData.data;
+  const rand = seededRandom(42);
+  const amp = (strength || groundNormalStrength) * 1.5; // max ~150 perturbation range
+
+  // Simple 2D hash for procedural patterns
+  function hash(x, y) {
+    let h = (x * 374761393 + y * 668265263 + 1013904223) | 0;
+    h = ((h >> 13) ^ h) | 0;
+    h = (h * (h * h * 15731 + 789221) + 1376312589) | 0;
+    return ((h >> 16) & 0x7fff) / 32767.0;
+  }
+
+  function smoothNoise(x, y, scale) {
+    const sx = x / scale, sy = y / scale;
+    const ix = Math.floor(sx), iy = Math.floor(sy);
+    const fx = sx - ix, fy = sy - iy;
+    const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+    const a = hash(ix, iy), b = hash(ix + 1, iy);
+    const c = hash(ix, iy + 1), d = hash(ix + 1, iy + 1);
+    return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+  }
+
+  function perlinFbm(x, y) {
+    return smoothNoise(x, y, 64) * 0.5 + smoothNoise(x, y, 32) * 0.25 + smoothNoise(x, y, 16) * 0.15 + smoothNoise(x, y, 8) * 0.1;
+  }
+
+  function cellNoise(x, y) {
+    const scale = 40;
+    const cx = x / scale, cy = y / scale;
+    const ix = Math.floor(cx), iy = Math.floor(cy);
+    let minDist = 999;
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const px = ix + dx + hash(ix + dx, iy + dy);
+        const py = iy + dy + hash(iy + dy, ix + dx + 77);
+        const d = Math.sqrt((cx - px) ** 2 + (cy - py) ** 2);
+        if (d < minDist) minDist = d;
+      }
+    }
+    return Math.min(minDist * 1.2, 1.0);
+  }
+
+  const pat = pattern || 'fine-noise';
+
+  for (let py = 0; py < size; py++) {
+    for (let px = 0; px < size; px++) {
+      const idx = py * size + px;
+      let nx = 0, ny = 0;
+
+      if (pat === 'fine-noise') {
+        nx = (rand() - 0.5) * amp;
+        ny = (rand() - 0.5) * amp;
+      } else if (pat === 'perlin') {
+        // Derive normal from height differences
+        const h00 = perlinFbm(px, py);
+        const h10 = perlinFbm(px + 1, py);
+        const h01 = perlinFbm(px, py + 1);
+        nx = (h00 - h10) * amp * 2;
+        ny = (h00 - h01) * amp * 2;
+      } else if (pat === 'cell') {
+        const h00 = cellNoise(px, py);
+        const h10 = cellNoise(px + 1, py);
+        const h01 = cellNoise(px, py + 1);
+        nx = (h00 - h10) * amp * 3;
+        ny = (h00 - h01) * amp * 3;
+      } else if (pat === 'brushed') {
+        // Horizontal streaks
+        const streak = Math.sin(py * 0.8 + hash(0, py) * 20) * 0.5 + smoothNoise(px, py, 4) * 0.5;
+        nx = (rand() - 0.5) * amp * 0.3;
+        ny = streak * amp * 0.8;
+      } else if (pat === 'fabric') {
+        // Cross-hatch weave pattern
+        const warpX = Math.sin(px * 0.5) * Math.cos(py * 0.12);
+        const weftY = Math.sin(py * 0.5) * Math.cos(px * 0.12);
+        nx = warpX * amp * 0.5;
+        ny = weftY * amp * 0.5;
+      } else if (pat === 'stipple') {
+        // Sparse dots
+        const r = hash(px, py);
+        if (r > 0.92) {
+          const angle = hash(py, px) * Math.PI * 2;
+          const mag = amp * 0.8;
+          nx = Math.cos(angle) * mag;
+          ny = Math.sin(angle) * mag;
+        } else {
+          nx = (rand() - 0.5) * amp * 0.15;
+          ny = (rand() - 0.5) * amp * 0.15;
+        }
+      }
+
+      data[idx * 4] = Math.max(0, Math.min(255, 128 + nx));
+      data[idx * 4 + 1] = Math.max(0, Math.min(255, 128 + ny));
+      data[idx * 4 + 2] = 255;
+      data[idx * 4 + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+let currentGroundNormalPattern = 'fine-noise';
+let normalMap = generateNormalMap('fine-noise', groundNormalStrength);
+normalMap.repeat.set(10, 10);
+normalMap.needsUpdate = true;
+
+// ── Crease-angle normal smoothing ──
+// Computes smooth normals only where the dihedral angle between
+// adjacent faces is below the threshold. Sharp edges (like flat
+// top/bottom meeting curved sides) keep hard normals.
+function computeCreaseNormals(geometry, thresholdAngle) {
+  const posAttr = geometry.getAttribute('position');
+  const count = posAttr.count;
+  const positions = posAttr.array;
+
+  // Build face normals
+  const triCount = count / 3;
+  const faceNormals = new Float32Array(triCount * 3);
+  const vA = new THREE.Vector3(), vB = new THREE.Vector3(), vC = new THREE.Vector3();
+  const cb = new THREE.Vector3(), ab = new THREE.Vector3();
+
+  for (let f = 0; f < triCount; f++) {
+    const i = f * 3;
+    vA.fromBufferAttribute(posAttr, i);
+    vB.fromBufferAttribute(posAttr, i + 1);
+    vC.fromBufferAttribute(posAttr, i + 2);
+    cb.subVectors(vC, vB);
+    ab.subVectors(vA, vB);
+    cb.cross(ab).normalize();
+    faceNormals[f * 3] = cb.x;
+    faceNormals[f * 3 + 1] = cb.y;
+    faceNormals[f * 3 + 2] = cb.z;
+  }
+
+  // Build a map: quantized position key → list of {faceIndex, vertexIndex}
+  const precision = 1e4;
+  const quantize = (v) => `${Math.round(v * precision)},`;
+  const vertMap = new Map();
+
+  for (let i = 0; i < count; i++) {
+    const x = positions[i * 3], y = positions[i * 3 + 1], z = positions[i * 3 + 2];
+    const key = quantize(x) + quantize(y) + quantize(z);
+    if (!vertMap.has(key)) vertMap.set(key, []);
+    vertMap.get(key).push({ face: Math.floor(i / 3), vert: i });
+  }
+
+  const cosThreshold = Math.cos(thresholdAngle);
+  const normals = new Float32Array(count * 3);
+  const nA = new THREE.Vector3(), nB = new THREE.Vector3();
+
+  for (const group of vertMap.values()) {
+    for (let a = 0; a < group.length; a++) {
+      const ga = group[a];
+      const fA = ga.face;
+      nA.set(faceNormals[fA * 3], faceNormals[fA * 3 + 1], faceNormals[fA * 3 + 2]);
+
+      // Accumulate normals from faces that share this vertex position
+      // and whose face normal is within crease angle
+      let sx = nA.x, sy = nA.y, sz = nA.z;
+
+      for (let b = 0; b < group.length; b++) {
+        if (b === a) continue;
+        const fB = group[b].face;
+        nB.set(faceNormals[fB * 3], faceNormals[fB * 3 + 1], faceNormals[fB * 3 + 2]);
+        const dot = nA.dot(nB);
+        if (dot >= cosThreshold) {
+          sx += nB.x;
+          sy += nB.y;
+          sz += nB.z;
+        }
+      }
+
+      // Normalize
+      const len = Math.sqrt(sx * sx + sy * sy + sz * sz);
+      if (len > 1e-8) { sx /= len; sy /= len; sz /= len; }
+
+      const vi = ga.vert;
+      normals[vi * 3] = sx;
+      normals[vi * 3 + 1] = sy;
+      normals[vi * 3 + 2] = sz;
+    }
+  }
+
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+}
+
+// ── Gradient textures for slices ──
+function createSideGradientTexture(topColor, botColor) {
+  const size = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createLinearGradient(0, 0, 0, size);
+  grad.addColorStop(0.0, topColor);
+  grad.addColorStop(1.0, botColor);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  const edgeGrad = ctx.createLinearGradient(0, 0, size, 0);
+  edgeGrad.addColorStop(0, 'rgba(0,0,0,0.10)');
+  edgeGrad.addColorStop(0.15, 'rgba(0,0,0,0)');
+  edgeGrad.addColorStop(0.85, 'rgba(0,0,0,0)');
+  edgeGrad.addColorStop(1, 'rgba(0,0,0,0.10)');
+  ctx.fillStyle = edgeGrad;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+function createTopTexture(topColor) {
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = topColor;
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+const sideTexCache = new Map();
+const topTexCache = new Map();
+function getCachedSideTex(gradTop, gradBot) {
+  const key = `${gradTop}_${gradBot}`;
+  if (sideTexCache.has(key)) return sideTexCache.get(key);
+  const tex = createSideGradientTexture(gradTop, gradBot);
+  sideTexCache.set(key, tex);
+  return tex;
+}
+function getCachedTopTex(gradTop) {
+  if (topTexCache.has(gradTop)) return topTexCache.get(gradTop);
+  const tex = createTopTexture(gradTop);
+  topTexCache.set(gradTop, tex);
+  return tex;
+}
+
+// ── Scene ──
+const scene = new THREE.Scene();
+const bgColor = new THREE.Color('#e7e9dd');
+scene.background = bgColor;
+// no fog – ground fades via vertex colors + alpha map
+
+const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 200);
+camera.position.set(8, 18, 16);
+
+const renderer = new THREE.WebGPURenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.BasicShadowMap;
+renderer.domElement.style.opacity = '0';
+renderer.domElement.style.transition = 'opacity 0.3s ease';
+document.body.appendChild(renderer.domElement);
+await renderer.init();
+let sceneReady = false;
+let envLoaded = false;
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 5;
+controls.maxDistance = 60;
+controls.target.set(0, 1, 0);
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.6;
+controls.maxPolarAngle = Math.PI * 0.48;
+
+
+// ── HDR Environment ──
+const rgbeLoader = new RGBELoader();
+const pmremGenerator = new THREE.PMREMGenerator(renderer);
+pmremGenerator.compileEquirectangularShader();
+
+const hdrCache = {};
+function loadHDR(url) {
+  if (url === 'none') {
+    scene.environment = null;
+    return;
+  }
+  if (hdrCache[url]) {
+    scene.environment = hdrCache[url];
+    return;
+  }
+  rgbeLoader.load(url, (hdr) => {
+    const envMap = pmremGenerator.fromEquirectangular(hdr).texture;
+    hdr.dispose();
+    hdrCache[url] = envMap;
+    scene.environment = envMap;
+    envLoaded = true;
+  }, undefined, () => { envLoaded = true; });
+}
+
+loadHDR('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_09_1k.hdr');
+
+// ── Lights ──
+const keyLight = new THREE.DirectionalLight(new THREE.Color('#ffbe8f'), 3.2);
+keyLight.position.set(2.8, 13.9, 6.0);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(1024, 1024);
+keyLight.shadow.camera.near = 0.5;
+keyLight.shadow.camera.far = 40;
+keyLight.shadow.camera.left = -15;
+keyLight.shadow.camera.right = 15;
+keyLight.shadow.camera.top = 15;
+keyLight.shadow.camera.bottom = -15;
+keyLight.shadow.bias = -0.0005;
+keyLight.shadow.normalBias = 0.04;
+scene.add(keyLight);
+
+const fillLight = new THREE.HemisphereLight(0xf0f0ff, 0x404060, 1.1);
+scene.add(fillLight);
+
+// ── Ground Plane (circular geometry with radial fade texture) ──
+const groundRadius = 50;
+const groundAngularSegs = 96; // angular segments for smooth circle edge
+const groundGeo = new THREE.CircleGeometry(groundRadius, groundAngularSegs);
+
+let groundFadeRadius = 0.35; // 0..1, the solid-center ratio
+let groundBaseColor = new THREE.Color('#e7e9dd');
+let groundBgColor = new THREE.Color('#e7e9dd');
+
+// Canvas texture that bakes both the radial color fade AND the alpha fade
+const groundFadeCanvas = document.createElement('canvas');
+groundFadeCanvas.width = 512; groundFadeCanvas.height = 512;
+
+function rebuildGroundFadeTexture(fadeRadius) {
+  const size = 512;
+  const ctx = groundFadeCanvas.getContext('2d');
+  ctx.clearRect(0, 0, size, size);
+
+  // Draw radial gradient: solid ground color in center, transparent background at edges
+  const cx = size / 2, cy = size / 2, r = size / 2;
+  const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+
+  const baseHex = '#' + groundBaseColor.getHexString();
+  const bgHex = '#' + groundBgColor.getHexString();
+
+  // Solid center
+  grad.addColorStop(0.0, baseHex);
+  grad.addColorStop(Math.max(fadeRadius * 0.9, 0.01), baseHex);
+  // Transition zone - blend color and fade alpha
+  const mid1 = Math.min(fadeRadius + (1.0 - fadeRadius) * 0.3, 0.92);
+  const mid2 = Math.min(fadeRadius + (1.0 - fadeRadius) * 0.65, 0.96);
+  // Parse bg color for rgba
+  const bgR = Math.round(groundBgColor.r * 255);
+  const bgG = Math.round(groundBgColor.g * 255);
+  const bgB = Math.round(groundBgColor.b * 255);
+  grad.addColorStop(mid1, `rgba(${bgR},${bgG},${bgB},0.4)`);
+  grad.addColorStop(mid2, `rgba(${bgR},${bgG},${bgB},0.1)`);
+  grad.addColorStop(1.0, `rgba(${bgR},${bgG},${bgB},0.0)`);
+
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+}
+rebuildGroundFadeTexture(groundFadeRadius);
+const groundFadeTex = new THREE.CanvasTexture(groundFadeCanvas);
+groundFadeTex.colorSpace = THREE.SRGBColorSpace;
+
+const groundMat = new THREE.MeshStandardMaterial({
+  map: groundFadeTex,
+  roughness: 0.26,
+  metalness: 0.00,
+  normalMap,
+  normalScale: new THREE.Vector2(0.56, 0.56),
+  envMapIntensity: 1.6,
+  transparent: true,
+  depthWrite: true,
+  side: THREE.DoubleSide,
+});
+
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.receiveShadow = true;
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = 0;
+ground.renderOrder = -1;
+scene.add(ground);
+
+// ── Pie Chart ──
+const chartGroup = new THREE.Group();
+chartGroup.name = 'chartGroup';
+scene.add(chartGroup);
+
+let sliceObjects = [];
+
+function createSliceShape(startAngle, endAngle, radius, innerR, gapAngle) {
+  const shape = new THREE.Shape();
+  const sliceAngle = endAngle - startAngle;
+  const segments = Math.max(8, Math.floor(Math.abs(sliceAngle) / (Math.PI * 2) * sideSegments));
+
+  // Compute gap as a fraction of angle, clamped to avoid degenerate shapes
+  const halfGap = Math.sin(gapAngle) * radius;
+  const maxInsetAngle = sliceAngle * 0.35; // never eat more than 35% of slice per side
+
+  if (innerR > 0.01) {
+    const outerR = radius;
+    const rawOuterInset = outerR > 0.01 ? Math.asin(Math.min(halfGap / outerR, 0.99)) : 0;
+    const rawInnerInset = innerR > 0.01 ? Math.asin(Math.min(halfGap / innerR, 0.99)) : 0;
+    const outerInset = Math.min(rawOuterInset, maxInsetAngle);
+    const innerInset = Math.min(rawInnerInset, maxInsetAngle);
+    const sOuter = startAngle + outerInset;
+    const eOuter = endAngle - outerInset;
+    const sInner = startAngle + innerInset;
+    const eInner = endAngle - innerInset;
+    if (eOuter <= sOuter || eInner <= sInner) {
+      // Degenerate — return a tiny sliver instead of empty shape
+      const mid = (startAngle + endAngle) / 2;
+      const tiny = 0.001;
+      shape.moveTo(Math.cos(mid) * innerR, Math.sin(mid) * innerR);
+      shape.lineTo(Math.cos(mid - tiny) * outerR, Math.sin(mid - tiny) * outerR);
+      shape.lineTo(Math.cos(mid + tiny) * outerR, Math.sin(mid + tiny) * outerR);
+      shape.closePath();
+      return shape;
+    }
+    shape.moveTo(Math.cos(sOuter) * outerR, Math.sin(sOuter) * outerR);
+    for (let i = 1; i <= segments; i++) {
+      const a = sOuter + (eOuter - sOuter) * (i / segments);
+      shape.lineTo(Math.cos(a) * outerR, Math.sin(a) * outerR);
+    }
+    for (let i = segments; i >= 0; i--) {
+      const a = sInner + (eInner - sInner) * (i / segments);
+      shape.lineTo(Math.cos(a) * innerR, Math.sin(a) * innerR);
+    }
+    shape.closePath();
+  } else {
+    const midAngle = (startAngle + endAngle) / 2;
+    const halfSliceAngle = sliceAngle / 2;
+    const sinHalf = Math.sin(halfSliceAngle);
+    const tipRadius = sinHalf > 1e-6 ? halfGap / sinHalf : halfGap * 2;
+    const clampedTipRadius = Math.min(tipRadius, radius * 0.85);
+    const tipX = Math.cos(midAngle) * clampedTipRadius;
+    const tipY = Math.sin(midAngle) * clampedTipRadius;
+    const rawOuterInset = radius > 0.01 ? Math.asin(Math.min(halfGap / radius, 0.99)) : 0;
+    const outerInset = Math.min(rawOuterInset, maxInsetAngle);
+    const sOuter = startAngle + outerInset;
+    const eOuter = endAngle - outerInset;
+    if (eOuter <= sOuter) {
+      shape.moveTo(tipX, tipY);
+      const tiny = 0.001;
+      shape.lineTo(Math.cos(midAngle - tiny) * radius, Math.sin(midAngle - tiny) * radius);
+      shape.lineTo(Math.cos(midAngle + tiny) * radius, Math.sin(midAngle + tiny) * radius);
+      shape.closePath();
+      return shape;
+    }
+    shape.moveTo(tipX, tipY);
+    shape.lineTo(Math.cos(sOuter) * radius, Math.sin(sOuter) * radius);
+    for (let i = 1; i <= segments; i++) {
+      const a = sOuter + (eOuter - sOuter) * (i / segments);
+      shape.lineTo(Math.cos(a) * radius, Math.sin(a) * radius);
+    }
+    shape.lineTo(tipX, tipY);
+    shape.closePath();
+  }
+  return shape;
+}
+
+// Gradient settings
+let gradDirection = 'vertical'; // 'vertical', 'radial', 'angular'
+let gradFromY = 0.0;
+let gradToY = 1.0;
+let gradCurve = 0.8;
+
+function createGradientTexture(topColor, botColor) {
+  const size = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = 4; canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  const grad = ctx.createLinearGradient(0, 0, 0, size);
+  grad.addColorStop(0.0, topColor);
+  grad.addColorStop(1.0, botColor);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 4, size);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  return tex;
+}
+
+function assignGradientUVs(geometry, startAngle, endAngle, radius, innerR) {
+  const pos = geometry.getAttribute('position');
+  const count = pos.count;
+
+  geometry.computeBoundingBox();
+  const minY = geometry.boundingBox.min.y;
+  const maxY = geometry.boundingBox.max.y;
+  const height = maxY - minY;
+
+  const uvs = new Float32Array(count * 2);
+
+  for (let i = 0; i < count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+
+    let t;
+    if (gradDirection === 'vertical') {
+      // Map Y position to 0..1, then remap through fromY/toY range
+      const rawT = height > 0.001 ? (y - minY) / height : 0.5;
+      const range = gradToY - gradFromY;
+      t = range > 0.001 ? ((rawT - gradFromY) / range) : 0.5;
+      t = Math.max(0, Math.min(1, t));
+      // Apply power curve
+      t = Math.pow(t, gradCurve);
+    } else if (gradDirection === 'radial') {
+      const dist = Math.sqrt(x * x + z * z);
+      const maxDist = radius;
+      const minDist = innerR || 0;
+      const range = maxDist - minDist;
+      t = range > 0.001 ? (dist - minDist) / range : 0.5;
+      t = Math.max(0, Math.min(1, t));
+      // Remap through fromY/toY
+      const span = gradToY - gradFromY;
+      t = span > 0.001 ? gradFromY + t * span : 0.5;
+      t = Math.max(0, Math.min(1, t));
+      t = Math.pow(t, gradCurve);
+    } else if (gradDirection === 'angular') {
+      let angle = Math.atan2(-z, x);
+      // Normalize angle to 0..1 within slice range
+      const sliceSpan = endAngle - startAngle;
+      let rel = (angle - startAngle) / sliceSpan;
+      // Handle wrapping
+      while (rel < -0.1) rel += (Math.PI * 2) / sliceSpan;
+      while (rel > 1.1) rel -= (Math.PI * 2) / sliceSpan;
+      rel = Math.max(0, Math.min(1, rel));
+      const span = gradToY - gradFromY;
+      t = span > 0.001 ? gradFromY + rel * span : 0.5;
+      t = Math.max(0, Math.min(1, t));
+      t = Math.pow(t, gradCurve);
+    }
+
+    // V=0 is top of texture (gradTop color), V=1 is bottom (gradBot color)
+    uvs[i * 2] = 0.5;       // U doesn't matter for 1D gradient
+    uvs[i * 2 + 1] = 1.0 - t; // Flip so top of mesh = gradTop
+  }
+
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+}
+
+// Leader line helper: creates a straight thin line from point A to point B
+function createLeaderLine(from, to, color, opacity) {
+  const dir = new THREE.Vector3(to.x - from.x, to.y - from.y, to.z - from.z);
+  const length = dir.length();
+  dir.normalize();
+  const lineGeo = new THREE.CylinderGeometry(0.018, 0.018, length, 4, 1);
+  lineGeo.translate(0, length / 2, 0);
+  lineGeo.rotateX(Math.PI / 2);
+  const lineOpacity = opacity !== undefined ? opacity : 0.4;
+  const lineMat = new THREE.MeshStandardMaterial({
+    color: color || 0x333333,
+    roughness: 0.5,
+    metalness: 0.1,
+    transparent: true,
+    opacity: lineOpacity,
+    depthWrite: false,
+  });
+  lineMat._baseOpacity = lineOpacity;
+  const lineMesh = new THREE.Mesh(lineGeo, lineMat);
+  lineMesh.position.set(from.x, from.y, from.z);
+  lineMesh.lookAt(to.x, to.y, to.z);
+  lineMesh.castShadow = false;
+  lineMesh.receiveShadow = false;
+
+  // Add small dot at the anchor point on the slice surface
+  const dotGeo = new THREE.SphereGeometry(0.045, 8, 8);
+  const dotMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.5, transparent: true, opacity: lineOpacity, depthWrite: false });
+  dotMat._baseOpacity = lineOpacity;
+  const dot = new THREE.Mesh(dotGeo, dotMat);
+  dot.position.set(0, 0, 0);
+  lineMesh.add(dot);
+
+  return lineMesh;
+}
+
+// Resolve label layout: small slices (<30deg) get pushed outward with leader lines,
+// large slices (>=30deg) float directly above the slice
+function resolveLabelsLayout(sliceInfos) {
+  const total = currentData.slices.reduce((s, d) => s + d.value, 0);
+  const outerLabelR = chartRadius + 2.8;
+  const thresholdAngle = (30 / 360) * Math.PI * 2; // 30 degrees in radians
+
+  const layoutInfos = sliceInfos.map((info, i) => {
+    const sliceAngle = info.endAngle - info.startAngle;
+    const isSmall = sliceAngle < thresholdAngle;
+    return {
+      ...info,
+      sliceAngle,
+      labelR: isSmall ? outerLabelR : (chartRadius * 0.62 + innerRadius * 0.38),
+      pushed: isSmall,
+      resolvedAngle: info.midAngle,
+    };
+  });
+
+  // Only resolve collisions for pushed (small) labels
+  const pushed = layoutInfos.filter(l => l.pushed);
+  if (pushed.length > 1) {
+    const minSep = Math.min(0.50, (Math.PI * 2) / pushed.length * 0.85);
+    const sorted = pushed.slice().sort((a, b) => a.resolvedAngle - b.resolvedAngle);
+
+    for (let iter = 0; iter < 50; iter++) {
+      let moved = false;
+      for (let i = 0; i < sorted.length; i++) {
+        for (let j = i + 1; j < sorted.length; j++) {
+          let diff = sorted[j].resolvedAngle - sorted[i].resolvedAngle;
+          while (diff < 0) diff += Math.PI * 2;
+          while (diff > Math.PI * 2) diff -= Math.PI * 2;
+          const dist = Math.min(diff, Math.PI * 2 - diff);
+          if (dist < minSep) {
+            const push = (minSep - dist) / 2 * 0.55;
+            if (diff <= Math.PI) {
+              sorted[i].resolvedAngle -= push;
+              sorted[j].resolvedAngle += push;
+            } else {
+              sorted[i].resolvedAngle += push;
+              sorted[j].resolvedAngle -= push;
+            }
+            moved = true;
+          }
+        }
+        const spring = 0.04;
+        let drift = sorted[i].resolvedAngle - sorted[i].midAngle;
+        while (drift > Math.PI) drift -= Math.PI * 2;
+        while (drift < -Math.PI) drift += Math.PI * 2;
+        sorted[i].resolvedAngle -= drift * spring;
+      }
+      if (!moved) break;
+    }
+
+    // Write back
+    sorted.forEach(s => {
+      const idx = layoutInfos.findIndex(l => l.index === s.index);
+      if (idx >= 0) layoutInfos[idx].resolvedAngle = s.resolvedAngle;
+    });
+  }
+
+  return layoutInfos;
+}
+
+function buildChart() {
+  while (chartGroup.children.length) {
+    const c = chartGroup.children[0];
+    if (c.geometry) c.geometry.dispose();
+    if (c.material) {
+      if (Array.isArray(c.material)) {
+        c.material.forEach(m => { if (m.map) m.map.dispose(); m.dispose(); });
+      } else {
+        if (c.material.map) c.material.map.dispose();
+        c.material.dispose();
+      }
+    }
+    chartGroup.remove(c);
+  }
+  sliceObjects = [];
+
+  const total = currentData.slices.reduce((s, d) => s + d.value, 0);
+  let angle = -Math.PI / 2;
+  const maxValue = Math.max(...currentData.slices.map(d => d.value));
+
+  // First pass: build slice info for layout
+  const sliceInfos = [];
+  currentData.slices.forEach((d, i) => {
+    const sliceAngle = (d.value / total) * Math.PI * 2;
+    const startAngle = angle;
+    const endAngle = angle + sliceAngle;
+    const midAngle = (startAngle + endAngle) / 2;
+    const heightRatio = d.value / maxValue;
+    const sliceHeight = chartHeight * (0.3 + 0.7 * heightRatio);
+    sliceInfos.push({ data: d, index: i, startAngle, endAngle, midAngle, sliceHeight, heightRatio });
+    angle = endAngle;
+  });
+
+  // Compute label layout with collision resolution
+  const layoutInfos = resolveLabelsLayout(sliceInfos);
+
+  sliceInfos.forEach((info, i) => {
+    const { data: d, startAngle, endAngle, midAngle, sliceHeight } = info;
+    const layout = layoutInfos[i];
+
+    const shape = createSliceShape(startAngle, endAngle, chartRadius, innerRadius, sliceGap);
+
+    const extrudeSettings = {
+      depth: sliceHeight,
+      bevelEnabled: bevelSize > 0,
+      bevelThickness: bevelSize,
+      bevelSize: bevelSize,
+      bevelSegments: bevelSegments,
+      curveSegments: sideSegments,
+    };
+
+    const geo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+    geo.rotateX(-Math.PI / 2);
+    geo.translate(0, bevelSize, 0);
+    if (smoothShading) {
+      computeCreaseNormals(geo, creaseAngle * Math.PI / 180);
+    } else {
+      geo.deleteAttribute('normal');
+      geo.computeVertexNormals();
+    }
+
+    const gradTop = d.gradTop || d.hex;
+    const gradBot = d.gradBot || d.hex;
+
+    assignGradientUVs(geo, startAngle, endAngle, chartRadius, innerRadius);
+
+    const gradTex = createGradientTexture(gradTop, gradBot);
+
+    const mat = new THREE.MeshStandardMaterial({
+      map: gradTex,
+      color: 0xffffff,
+      roughness: roughnessVal,
+      metalness: metalnessVal,
+      envMapIntensity: matEnvIntensity,
+    });
+
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = `slice_${i}_${d.label}`;
+    mesh.userData = { sliceIndex: i };
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    chartGroup.add(mesh);
+
+    // Create floating 3D text label
+    const sliceTotal = total;
+    const labelSprite = createSliceLabel(d, sliceTotal);
+
+    const labelAngle = layout.resolvedAngle;
+    const labelR = layout.labelR;
+    const labelY = sliceHeight + bevelSize + (layout.pushed ? 2.0 : 0.7);
+
+    labelSprite.position.set(
+      Math.cos(labelAngle) * labelR,
+      labelY,
+      -Math.sin(labelAngle) * labelR
+    );
+    // Billboard immediately so label never appears sideways
+    labelSprite.quaternion.copy(camera.quaternion);
+    chartGroup.add(labelSprite);
+
+    // Leader line only for small (pushed) slices
+    let leaderLine = null;
+    let leaderLineFrom = null;
+    let leaderLineTo = null;
+    if (layout.pushed) {
+      const anchorR = chartRadius - 0.1;
+      const surfaceY = sliceHeight + bevelSize + 0.05;
+      leaderLineFrom = {
+        x: Math.cos(midAngle) * anchorR,
+        y: surfaceY,
+        z: -Math.sin(midAngle) * anchorR,
+      };
+      leaderLineTo = {
+        x: Math.cos(labelAngle) * labelR,
+        y: labelY - 0.25,
+        z: -Math.sin(labelAngle) * labelR,
+      };
+      leaderLine = createLeaderLine(leaderLineFrom, leaderLineTo, 0x333333, 0.7);
+      chartGroup.add(leaderLine);
+    }
+
+    sliceObjects.push({
+      mesh,
+      labelSprite,
+      leaderLine,
+      leaderLineFrom,
+      leaderLineTo,
+      data: d,
+      index: i,
+      startAngle,
+      endAngle,
+      midAngle,
+      sliceHeight,
+      labelAngle,
+      labelR,
+      labelY,
+      pushed: layout.pushed,
+      exploded: false,
+      targetExplode: 0,
+      currentExplode: 0,
+      hoverLift: 0,
+      targetHoverLift: 0,
+    });
+  });
+
+  rebuildLegend();
+}
+
+// Cache the font globally so we only load once
+let cachedFont = null;
+let fontLoadPromise = null;
+
+function loadFont() {
+  if (fontLoadPromise) return fontLoadPromise;
+  const loader = new FontLoader();
+  fontLoadPromise = new Promise((resolve) => {
+    loader.load('https://threejs.org/examples/fonts/helvetiker_bold.typeface.json', (font) => {
+      cachedFont = font;
+      resolve(font);
+    });
+  });
+  return fontLoadPromise;
+}
+
+// Kick off font loading immediately
+loadFont();
+
+function createSliceLabel(d, total) {
+  const pct = ((d.value / total) * 100).toFixed(1) + '%';
+  
+  const labelGroup = new THREE.Group();
+  labelGroup.name = `sliceLabel_${d.label}`;
+  
+  const buildText = (font) => {
+    const labelGeo = new TextGeometry(d.label, {
+      font: font,
+      size: 0.35,
+      depth: 0.001,
+      curveSegments: 2,
+      bevelEnabled: false,
+    });
+    labelGeo.center();
+    const labelMat = new THREE.MeshBasicMaterial({ 
+      color: 0x000000, 
+      transparent: true,
+      opacity: 1.0,
+      depthWrite: true,
+    });
+    const labelMesh = new THREE.Mesh(labelGeo, labelMat);
+    labelMesh.position.y = 0.15;
+    labelGroup.add(labelMesh);
+    
+    // Percentage text
+    const pctGeo = new TextGeometry(pct, {
+      font: font,
+      size: 0.25,
+      depth: 0.001,
+      curveSegments: 2,
+      bevelEnabled: false,
+    });
+    pctGeo.center();
+    const pctMat = new THREE.MeshBasicMaterial({ 
+      color: 0x000000, 
+      transparent: true,
+      opacity: 1.0,
+      depthWrite: true,
+    });
+    const pctMesh = new THREE.Mesh(pctGeo, pctMat);
+    pctMesh.position.y = -0.25;
+    labelGroup.add(pctMesh);
+  };
+  
+  // Use cached font if available, otherwise wait for load
+  if (cachedFont) {
+    buildText(cachedFont);
+  } else {
+    loadFont().then(buildText);
+  }
+  
+  return labelGroup;
+}
+
+buildChart();
+buildGradColorControls();
+
+// ── Живой поток данных от страницы InstaGuard (postMessage) ──
+// Страница шлёт { type:'ig-stats', campaigns:[..], actions:[..], accounts:[{label,value}] }.
+// Значения — в штуках; проценты на диаграмме считаются от суммы среза.
+const IG_TEMPLATES = {
+  market: DATASETS.market.slices.map((s) => ({ ...s })),
+  revenue: DATASETS.revenue.slices.map((s) => ({ ...s })),
+};
+const IG_EMPTY = { label: 'Пока нет срабатываний', value: 1, color: 0x9AA0A6, hex: '#9AA0A6', gradTop: '#2A2E33', gradBot: '#C2C7CC' };
+function igRebuildSlices(key, values) {
+  const tpl = IG_TEMPLATES[key];
+  if (!tpl || !Array.isArray(values)) return;
+  const built = tpl
+    .map((s, i) => ({ ...s, value: Math.max(0, Number(values[i]) || 0) }))
+    .filter((s) => s.value > 0);
+  DATASETS[key].slices = built.length ? built : [{ ...IG_EMPTY }];
+}
+function igRebuildAccounts(list) {
+  const built = (Array.isArray(list) ? list : [])
+    .map((a) => ({ label: String(a && a.label || '—'), value: Math.max(0, Number(a && a.value) || 0) }))
+    .filter((a) => a.value > 0)
+    .slice(0, 6)
+    .map((a, i) => ({ ...ACCOUNT_PALETTE[i % ACCOUNT_PALETTE.length], label: a.label, value: a.value }));
+  DATASETS.energy.slices = built.length ? built : [{ ...IG_EMPTY, label: 'Нет данных' }];
+}
+window.addEventListener('message', (e) => {
+  const d = e.data;
+  if (!d || d.type !== 'ig-stats') return;
+  try {
+    if (d.campaigns) igRebuildSlices('market', d.campaigns);
+    if (d.actions) igRebuildSlices('revenue', d.actions);
+    if (d.accounts) igRebuildAccounts(d.accounts);
+    currentData = DATASETS[currentDatasetKey];
+    buildChart();
+    rebuildLegend();
+  } catch (err) { console.error('[stats3d] ig-stats apply failed', err); }
+});
+// Сообщаем родителю, что готовы принимать данные (он в ответ пришлёт ig-stats)
+try { if (window.parent && window.parent !== window) window.parent.postMessage({ type: 'ig-stats-ready' }, '*'); } catch (e) {}
+
+// ── Legend ──
+function rebuildLegend() {
+  const legendEl = document.getElementById('legend');
+  legendEl.innerHTML = '<div class="legend-title">Разбивка</div>';
+  const total = currentData.slices.reduce((s, d) => s + d.value, 0);
+  currentData.slices.forEach((d, i) => {
+    const pct = ((d.value / total) * 100).toFixed(1);
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    item.dataset.index = i;
+    item.innerHTML = `<span class="legend-dot" style="background:${d.hex}"></span>${d.label}<span class="legend-value">${pct}%</span>`;
+    item.addEventListener('mouseenter', () => highlightSlice(i));
+    item.addEventListener('mouseleave', () => unhighlightSlice());
+    item.addEventListener('click', () => toggleExplode(i));
+    legendEl.appendChild(item);
+  });
+}
+
+function highlightSlice(idx) {
+  sliceObjects.forEach((s, i) => {
+    if (i === idx) {
+      s.targetHoverLift = 1;
+    }
+  });
+}
+
+function unhighlightSlice() {
+  sliceObjects.forEach(s => {
+    s.targetHoverLift = 0;
+  });
+}
+
+function toggleExplode(idx) {
+  const s = sliceObjects[idx];
+  s.exploded = !s.exploded;
+  s.targetExplode = s.exploded ? 1 : 0;
+}
+
+
+
+// ── Interaction ──
+const tooltip = document.getElementById('tooltip');
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+let hoveredSlice = null;
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+
+  const meshes = sliceObjects.map(s => s.mesh);
+  const intersects = raycaster.intersectObjects(meshes);
+
+  if (intersects.length > 0) {
+    const idx = intersects[0].object.userData.sliceIndex;
+    if (hoveredSlice !== idx) {
+      if (hoveredSlice !== null) unhighlightSlice();
+      hoveredSlice = idx;
+      highlightSlice(idx);
+      renderer.domElement.style.cursor = 'pointer';
+    }
+  } else {
+    if (hoveredSlice !== null) {
+      unhighlightSlice();
+      hoveredSlice = null;
+    }
+    renderer.domElement.style.cursor = 'default';
+  }
+});
+
+renderer.domElement.addEventListener('click', (e) => {
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  const meshes = sliceObjects.map(s => s.mesh);
+  const intersects = raycaster.intersectObjects(meshes);
+  if (intersects.length > 0) {
+    toggleExplode(intersects[0].object.userData.sliceIndex);
+  }
+});
+
+// ── SSR Uniforms ──
+const ssrEnabledU = uniform(1.0);
+const ssrStrengthU = uniform(1.00);
+const ssrThicknessU = uniform(0.51);
+const ssrMaxDistU = uniform(10.00);
+const ssrFresnelPowU = uniform(0.35);
+const ssrFadeU = uniform(1.00);
+const ssrStepsU = uniform(24);
+const ssrRefineU = uniform(12);
+const ssrRoughnessInfluenceU = uniform(3.0);
+const ssrDirXU = uniform(1.0);
+const ssrDirYU = uniform(1.0);
+const ssrDirZU = uniform(1.0);
+const projMatU = uniform(camera.projectionMatrix);
+const projInvMatU = uniform(camera.projectionMatrixInverse);
+
+// ── Post-Processing with MRT ──
+const aoEnabledU = uniform(1.0);
+const aoColorU = uniform(new THREE.Color(0x000000));
+
+const postProcessing = new THREE.PostProcessing(renderer);
+const scenePass = pass(scene, camera);
+
+
+
+scenePass.setMRT(mrt({
+  output: output,
+  normal: transformedNormalView,
+  roughness: materialReference('roughness', 'float'),
+}));
+
+const scenePassColor = scenePass.getTextureNode('output');
+const scenePassNormal = scenePass.getTextureNode('normal');
+const scenePassDepth = scenePass.getTextureNode('depth');
+const scenePassRoughness = scenePass.getTextureNode('roughness');
+
+// GTAO
+const aoPass = ao(scenePassDepth, scenePassNormal, camera);
+aoPass.distanceExponent.value = 1.25;
+aoPass.distanceFallOff.value = 0.36;
+aoPass.radius.value = 0.33;
+aoPass.scale.value = 4.75;
+aoPass.thickness.value = 3.00;
+aoPass.samples.value = 6;
+
+const aoTexture = aoPass.getTextureNode();
+const aoNearThresholdU = uniform(0.0);
+const aoFarThresholdU = uniform(10.0);
+
+const aoRaw = aoTexture.x;
+const aoRemapped = aoRaw.mul(0.65).add(0.35);
+
+// Distance-based threshold: fade AO based on linear depth
+const aoDepthRaw = scenePassDepth.sample(screenUV).x;
+const aoA = projMatU.element(2).element(2);
+const aoB = projMatU.element(3).element(2);
+const aoNdcZ = aoDepthRaw.mul(2.0).sub(1.0);
+const aoLinearDepth = aoB.div(aoNdcZ.add(aoA));
+
+// Near threshold: suppress AO for surfaces closer than this distance
+const nearFade = aoLinearDepth.sub(aoNearThresholdU).div(float(0.5).max(aoNearThresholdU.mul(0.3))).clamp(0.0, 1.0);
+// Far threshold: suppress AO for surfaces farther than this distance
+const farFade = float(1.0).sub(aoLinearDepth.sub(aoFarThresholdU).div(float(0.5).max(aoFarThresholdU.mul(0.3))).clamp(0.0, 1.0));
+const distanceMask = nearFade.mul(farFade);
+
+const aoMasked = float(1.0).sub(float(1.0).sub(aoRemapped).mul(distanceMask));
+
+const aoColorVec = vec3(aoColorU);
+const aoFactor = aoColorVec.mul(float(1.0).sub(aoMasked)).add(vec3(aoMasked, aoMasked, aoMasked));
+const aoMixed = aoFactor.mul(aoEnabledU).add(float(1.0).sub(aoEnabledU));
+
+// SSR Node
+const ssrReflectionNode = Fn(([colorTex, depthTex, normalTex, roughnessTex]) => {
+  const uv = screenUV;
+  const rawDepth = depthTex.sample(uv).x;
+  const isSky = rawDepth.greaterThanEqual(0.999);
+
+  const A = projMatU.element(2).element(2);
+  const B = projMatU.element(3).element(2);
+  const ndcZ = rawDepth.mul(2.0).sub(1.0);
+  const linZ = B.div(ndcZ.add(A));
+
+  const clipX = uv.x.mul(2.0).sub(1.0);
+  const clipY = float(1.0).sub(uv.y).mul(2.0).sub(1.0);
+  const vx = clipX.mul(projInvMatU.element(0).element(0)).mul(linZ);
+  const vy = clipY.mul(projInvMatU.element(1).element(1)).mul(linZ);
+  const viewPos = vec3(vx, vy, linZ.negate());
+
+  const normN = normalTex.sample(uv).xyz.normalize();
+  const viewDir = viewPos.normalize();
+  const reflDirRaw = viewDir.sub(normN.mul(viewDir.dot(normN).mul(2.0)));
+  const reflDirMasked = vec3(
+    reflDirRaw.x.mul(ssrDirXU),
+    reflDirRaw.y.mul(ssrDirYU),
+    reflDirRaw.z.mul(ssrDirZU)
+  );
+  const reflDirNorm = reflDirMasked.normalize();
+
+  const surfaceRoughness = roughnessTex.sample(uv).x.clamp(0.0, 1.0);
+  const NdotV = normN.dot(viewDir.negate()).clamp(0.0, 1.0);
+  const fresnel = float(1.0).sub(NdotV).pow(ssrFresnelPowU).clamp(0.0, 1.0);
+  const reflZ = reflDirNorm.z;
+  const roughnessFade = surfaceRoughness.lessThan(0.5).select(
+    float(1.0).sub(surfaceRoughness.mul(ssrRoughnessInfluenceU).clamp(0.0, 1.0)),
+    float(0.0)
+  );
+
+  const hitColor = vec3(0.0, 0.0, 0.0).toVar();
+  const hitWeight = float(0.0).toVar();
+  const hitT = float(0.0).toVar();
+  const prevT = float(0.0).toVar();
+
+  If(ssrEnabledU.greaterThan(0.5).and(reflZ.lessThan(0.1)).and(isSky.not()), () => {
+    Loop({ start: 0, end: ssrStepsU, type: 'int', condition: '< ' }, ({ i }) => {
+      const fi = float(i).add(1.0);
+      const t = fi.div(ssrStepsU).mul(ssrMaxDistU);
+      const samplePos = viewPos.add(reflDirNorm.mul(t));
+      const negZ = samplePos.z.negate();
+      const sClipX = samplePos.x.mul(projMatU.element(0).element(0)).div(negZ);
+      const sClipY = samplePos.y.mul(projMatU.element(1).element(1)).div(negZ);
+      const sUV = vec2(sClipX.mul(0.5).add(0.5), float(1.0).sub(sClipY.mul(0.5).add(0.5)));
+      const inBounds = sUV.x.greaterThanEqual(0.0).and(sUV.x.lessThanEqual(1.0))
+        .and(sUV.y.greaterThanEqual(0.0)).and(sUV.y.lessThanEqual(1.0));
+      If(inBounds.and(hitWeight.lessThan(0.5)), () => {
+        const sampledDepth = depthTex.sample(sUV).x;
+        const sampledNdcZ = sampledDepth.mul(2.0).sub(1.0);
+        const sampledLinZ = B.div(sampledNdcZ.add(A));
+        const diff = negZ.sub(sampledLinZ);
+        const isHit = diff.greaterThan(0.0).and(diff.lessThan(ssrThicknessU));
+        const notSky = sampledDepth.lessThan(0.999);
+        If(isHit.and(notSky), () => {
+          hitT.assign(t);
+          hitWeight.assign(1.0);
+        });
+      });
+      If(hitWeight.lessThan(0.5), () => { prevT.assign(t); });
+    });
+
+    If(hitWeight.greaterThan(0.5), () => {
+      const loT = prevT.toVar();
+      const hiT = hitT.toVar();
+      Loop({ start: 0, end: ssrRefineU, type: 'int', condition: '< ' }, () => {
+        const midT = loT.add(hiT).mul(0.5);
+        const midPos = viewPos.add(reflDirNorm.mul(midT));
+        const midNegZ = midPos.z.negate();
+        const midClipX = midPos.x.mul(projMatU.element(0).element(0)).div(midNegZ);
+        const midClipY = midPos.y.mul(projMatU.element(1).element(1)).div(midNegZ);
+        const midUV = vec2(midClipX.mul(0.5).add(0.5), float(1.0).sub(midClipY.mul(0.5).add(0.5)));
+        const midDepth = depthTex.sample(midUV).x;
+        const midNdcZ = midDepth.mul(2.0).sub(1.0);
+        const midLinZ = B.div(midNdcZ.add(A));
+        const midDiff = midNegZ.sub(midLinZ);
+        If(midDiff.greaterThan(0.0), () => { hiT.assign(midT); }).Else(() => { loT.assign(midT); });
+      });
+
+      const finalT = loT.add(hiT).mul(0.5);
+      const finalPos = viewPos.add(reflDirNorm.mul(finalT));
+      const finalNegZ = finalPos.z.negate();
+      const finalClipX = finalPos.x.mul(projMatU.element(0).element(0)).div(finalNegZ);
+      const finalClipY = finalPos.y.mul(projMatU.element(1).element(1)).div(finalNegZ);
+      const finalUV = vec2(finalClipX.mul(0.5).add(0.5), float(1.0).sub(finalClipY.mul(0.5).add(0.5)));
+
+      const edgeX = finalUV.x.mul(float(1.0).sub(finalUV.x)).mul(4.0).clamp(0.0, 1.0);
+      const edgeY = finalUV.y.mul(float(1.0).sub(finalUV.y)).mul(4.0).clamp(0.0, 1.0);
+      const edgeFade = edgeX.mul(edgeY);
+      const distFade = float(1.0).sub(finalT.div(ssrMaxDistU)).clamp(0.0, 1.0);
+      const sampledColor = colorTex.sample(finalUV).xyz;
+      const roughDistFade = distFade.mul(float(1.0).sub(surfaceRoughness.mul(ssrRoughnessInfluenceU.mul(0.53))).clamp(0.1, 1.0));
+      hitColor.assign(sampledColor.mul(edgeFade).mul(roughDistFade));
+    });
+  });
+
+  const reflectionMix = hitWeight.mul(fresnel).mul(ssrStrengthU).mul(ssrFadeU).mul(roughnessFade);
+  const blendedRefl = hitColor.mul(reflectionMix);
+  return vec4(blendedRefl, reflectionMix);
+});
+
+function buildPostPipeline() {
+  const ssrResult = ssrReflectionNode(scenePassColor, scenePassDepth, scenePassNormal, scenePassRoughness);
+  const ssrAlpha = ssrResult.w;
+  const baseRGB = scenePassColor.xyz;
+  const reflRGB = ssrResult.xyz;
+  const finalRGB = baseRGB.mul(float(1.0).sub(ssrAlpha)).add(reflRGB);
+  const source = vec4(finalRGB.mul(aoMixed), 1.0);
+  postProcessing.outputNode = source;
+  postProcessing.needsUpdate = true;
+}
+
+buildPostPipeline();
+
+// ── Label overlay scene (excluded from AO/SSR) ──
+const labelScene = new THREE.Scene();
+const labelCamera = camera.clone();
+// We'll render labels on top after post-processing
+
+// ── Settings Functions ──
+let settingsOpen = false;
+window.toggleSettings = function() {
+  settingsOpen = !settingsOpen;
+  document.getElementById('settings-panel').classList.toggle('open', settingsOpen);
+  document.getElementById('settings-toggle').style.opacity = settingsOpen ? '0' : '1';
+  document.getElementById('settings-toggle').style.pointerEvents = settingsOpen ? 'none' : 'all';
+};
+
+function updateVal(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
+
+window.changeHDR = function(key) {
+  const urls = {
+    studio_small_09: 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_09_1k.hdr',
+    kloppenheim_02: 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloppenheim_02_1k.hdr',
+    meadow_2: 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/meadow_2_1k.hdr',
+    venice_sunset: 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/venice_sunset_1k.hdr',
+    potsdamer_platz: 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/potsdamer_platz_1k.hdr',
+    none: 'none',
+  };
+  loadHDR(urls[key] || 'none');
+};
+
+window.setEnvIntensity = function(v) {
+  scene.environmentIntensity = v / 100;
+  updateVal('val-env-intensity', v);
+};
+
+window.setKeyLight = function(v) { keyLight.intensity = v / 100; updateVal('val-key-light', v); };
+window.setKeyColor = function(v) { keyLight.color.set(v); };
+window.setFillLight = function(v) { fillLight.intensity = v / 100; updateVal('val-fill-light', v); };
+window.setKeyPosX = function(v) { keyLight.position.x = v / 10; updateVal('val-key-pos-x', (v / 10).toFixed(1)); };
+window.setKeyPosY = function(v) { keyLight.position.y = v / 10; updateVal('val-key-pos-y', (v / 10).toFixed(1)); };
+window.setKeyPosZ = function(v) { keyLight.position.z = v / 10; updateVal('val-key-pos-z', (v / 10).toFixed(1)); };
+
+window.toggleShadows = function() {
+  const btn = document.getElementById('shadowToggle');
+  btn.classList.toggle('active');
+  const on = btn.classList.contains('active');
+  renderer.shadowMap.enabled = on;
+  keyLight.castShadow = on;
+  scene.traverse(obj => { if (obj.material) obj.material.needsUpdate = true; });
+};
+
+window.setShadowOpacity = function(v) {
+  keyLight.shadow.intensity = parseFloat(v) / 100;
+  updateVal('val-shadow-opacity', v);
+};
+
+window.setChartHeight = function(v) { chartHeight = parseFloat(v) / 8; buildChart(); updateVal('val-chart-height', v); };
+window.setChartRadius = function(v) { chartRadius = parseFloat(v) / 12; buildChart(); updateVal('val-chart-radius', v); };
+window.setInnerRadius = function(v) { innerRadius = parseFloat(v) / 12; buildChart(); updateVal('val-inner-radius', v); };
+window.setSliceGap = function(v) { sliceGap = v / 500; buildChart(); updateVal('val-slice-gap', v); };
+window.setBevel = function(v) { bevelSize = v / 60; buildChart(); updateVal('val-bevel', v); };
+window.setSideSegments = function(v) { sideSegments = parseInt(v); buildChart(); updateVal('val-side-segments', v); };
+window.setBevelSegments = function(v) { bevelSegments = parseInt(v); buildChart(); updateVal('val-bevel-segments', v); };
+
+window.toggleSmooth = function() {
+  const btn = document.getElementById('smoothToggle');
+  btn.classList.toggle('active');
+  smoothShading = btn.classList.contains('active');
+  buildChart();
+};
+window.setCreaseAngle = function(v) {
+  creaseAngle = parseInt(v);
+  updateVal('val-crease-angle', v + '°');
+  buildChart();
+};
+
+window.setRoughness = function(v) {
+  roughnessVal = v / 100;
+  sliceObjects.forEach(s => { s.mesh.material.roughness = roughnessVal; });
+  updateVal('val-roughness', v);
+};
+window.setMetalness = function(v) {
+  metalnessVal = v / 100;
+  sliceObjects.forEach(s => { s.mesh.material.metalness = metalnessVal; });
+  updateVal('val-metalness', v);
+};
+window.setMatEnvIntensity = function(v) {
+  matEnvIntensity = v / 100;
+  sliceObjects.forEach(s => { s.mesh.material.envMapIntensity = matEnvIntensity; });
+  updateVal('val-mat-env-intensity', v);
+};
+
+// Gradient controls
+window.setGradDirection = function(v) { gradDirection = v; buildChart(); };
+window.setGradFromY = function(v) { gradFromY = v / 100; updateVal('val-grad-from-y', (v / 100).toFixed(2)); buildChart(); };
+window.setGradToY = function(v) { gradToY = v / 100; updateVal('val-grad-to-y', (v / 100).toFixed(2)); buildChart(); };
+window.setGradCurve = function(v) { gradCurve = v / 100; updateVal('val-grad-curve', (v / 100).toFixed(2)); buildChart(); };
+
+window.setSliceGradTop = function(datasetKey, sliceIdx, color) {
+  DATASETS[datasetKey].slices[sliceIdx].gradTop = color;
+  if (datasetKey === currentDatasetKey) buildChart();
+};
+window.setSliceGradBot = function(datasetKey, sliceIdx, color) {
+  DATASETS[datasetKey].slices[sliceIdx].gradBot = color;
+  if (datasetKey === currentDatasetKey) buildChart();
+};
+
+function buildGradColorControls() {
+  const container = document.getElementById('grad-colors-container');
+  if (!container) return;
+  container.innerHTML = '';
+  currentData.slices.forEach((d, i) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:6px;';
+    row.innerHTML = `
+      <span style="font-size:11px;color:rgba(0,0,0,0.5);min-width:60px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${d.label}</span>
+      <input type="color" class="sp-color-input" value="${d.gradTop}" oninput="setSliceGradTop('${currentDatasetKey}',${i},this.value)" title="Top">
+      <span style="font-size:9px;color:rgba(0,0,0,0.3);">→</span>
+      <input type="color" class="sp-color-input" value="${d.gradBot}" oninput="setSliceGradBot('${currentDatasetKey}',${i},this.value)" title="Bottom">
+    `;
+    container.appendChild(row);
+  });
+}
+
+// AO
+window.toggleAO = function() {
+  const btn = document.getElementById('aoToggle');
+  btn.classList.toggle('active');
+  aoEnabledU.value = btn.classList.contains('active') ? 1.0 : 0.0;
+};
+window.setAORadius = function(v) { aoPass.radius.value = v / 100; updateVal('val-ao-radius', (v / 100).toFixed(2)); };
+window.setAOScale = function(v) { aoPass.scale.value = v / 100; updateVal('val-ao-scale', (v / 100).toFixed(2)); };
+window.setAOThickness = function(v) { aoPass.thickness.value = v / 100; updateVal('val-ao-thickness', (v / 100).toFixed(2)); };
+window.setAOSamples = function(v) { aoPass.samples.value = parseInt(v); updateVal('val-ao-samples', v); };
+window.setAODistExponent = function(v) { aoPass.distanceExponent.value = v / 100; updateVal('val-ao-dist-exp', (v / 100).toFixed(2)); };
+window.setAODistFallOff = function(v) { aoPass.distanceFallOff.value = v / 100; updateVal('val-ao-dist-falloff', (v / 100).toFixed(2)); };
+window.setAONearThreshold = function(v) { aoNearThresholdU.value = v / 100; updateVal('val-ao-near-thresh', (v / 100).toFixed(2)); };
+window.setAOFarThreshold = function(v) { aoFarThresholdU.value = v / 100; updateVal('val-ao-far-thresh', (v / 100).toFixed(2)); };
+
+// SSR
+window.toggleSSR = function() {
+  const btn = document.getElementById('ssrToggle');
+  btn.classList.toggle('active');
+  ssrEnabledU.value = btn.classList.contains('active') ? 1.0 : 0.0;
+};
+window.setSSRStrength = function(v) { ssrStrengthU.value = v / 100; updateVal('val-ssr-strength', (v / 100).toFixed(2)); };
+window.setSSRThickness = function(v) { ssrThicknessU.value = v / 100; updateVal('val-ssr-thickness', (v / 100).toFixed(2)); };
+window.setSSRMaxDist = function(v) { ssrMaxDistU.value = v / 100; updateVal('val-ssr-max-dist', (v / 100).toFixed(2)); };
+window.setSSRFresnel = function(v) { ssrFresnelPowU.value = v / 100; updateVal('val-ssr-fresnel', (v / 100).toFixed(2)); };
+window.setSSRFade = function(v) { ssrFadeU.value = v / 100; updateVal('val-ssr-fade', (v / 100).toFixed(2)); };
+window.setSSRRoughInfluence = function(v) { ssrRoughnessInfluenceU.value = v / 100; updateVal('val-ssr-rough', (v / 100).toFixed(2)); };
+window.setSSRSteps = function(v) {
+  ssrStepsU.value = parseInt(v);
+  updateVal('val-ssr-steps', v);
+  buildPostPipeline();
+};
+window.setSSRRefine = function(v) {
+  ssrRefineU.value = parseInt(v);
+  updateVal('val-ssr-refine', v);
+  buildPostPipeline();
+};
+
+window.toggleSSRDir = function(axis) {
+  const btn = document.getElementById('ssrDir' + axis.toUpperCase());
+  btn.classList.toggle('active');
+  const on = btn.classList.contains('active') ? 1.0 : 0.0;
+  if (axis === 'x') ssrDirXU.value = on;
+  else if (axis === 'y') ssrDirYU.value = on;
+  else if (axis === 'z') ssrDirZU.value = on;
+};
+
+// Tone mapping / Exposure
+window.setToneMapping = function(v) {
+  const map = {
+    aces: THREE.ACESFilmicToneMapping, linear: THREE.LinearToneMapping,
+    reinhard: THREE.ReinhardToneMapping, cineon: THREE.CineonToneMapping,
+    agx: THREE.AgXToneMapping,
+  };
+  renderer.toneMapping = map[v] || THREE.ACESFilmicToneMapping;
+};
+window.setExposure = function(v) { renderer.toneMappingExposure = v / 100; updateVal('val-exposure', (v / 100).toFixed(2)); };
+
+// Ground
+window.setGroundColor = function(v) {
+  groundBaseColor.set(v);
+  groundBgColor.set(v);
+  bgColor.set(v);
+  scene.background = bgColor;
+  rebuildGroundFadeTexture(groundFadeRadius);
+  groundFadeTex.needsUpdate = true;
+  groundMat.needsUpdate = true;
+};
+window.setGroundRoughness = function(v) { groundMat.roughness = v / 100; updateVal('val-ground-roughness', (v / 100).toFixed(2)); };
+window.setGroundMetalness = function(v) { groundMat.metalness = v / 100; updateVal('val-ground-metalness', (v / 100).toFixed(2)); };
+window.setGroundNormalScale = function(v) {
+  const s = v / 100;
+  if (s < 0.01) { groundMat.normalMap = null; } else { groundMat.normalMap = normalMap; groundMat.normalScale.set(s, s); }
+  groundMat.needsUpdate = true;
+  updateVal('val-ground-normal', (s).toFixed(2));
+};
+
+window.setGroundNormalRepeat = function(v) {
+  const r = parseInt(v);
+  normalMap.repeat.set(r, r);
+  normalMap.needsUpdate = true;
+  updateVal('val-ground-normal-repeat', v);
+};
+
+window.setGroundNormalPattern = function(v) {
+  currentGroundNormalPattern = v;
+  const oldRepeat = normalMap.repeat.x;
+  const oldScale = groundMat.normalScale.x;
+  normalMap.dispose();
+  normalMap = generateNormalMap(v, groundNormalStrength);
+  normalMap.repeat.set(oldRepeat, oldRepeat);
+  normalMap.needsUpdate = true;
+  groundMat.normalMap = normalMap;
+  groundMat.normalScale.set(oldScale, oldScale);
+  groundMat.needsUpdate = true;
+};
+
+window.setGroundNormalStrength = function(v) {
+  groundNormalStrength = parseInt(v);
+  updateVal('val-ground-normal-strength', v);
+  const oldRepeat = normalMap.repeat.x;
+  const oldScale = groundMat.normalScale.x;
+  normalMap.dispose();
+  normalMap = generateNormalMap(currentGroundNormalPattern, groundNormalStrength);
+  normalMap.repeat.set(oldRepeat, oldRepeat);
+  normalMap.needsUpdate = true;
+  groundMat.normalMap = normalMap;
+  groundMat.normalScale.set(oldScale, oldScale);
+  groundMat.needsUpdate = true;
+};
+
+window.setGroundFadeRadius = function(v) {
+  groundFadeRadius = v / 100;
+  rebuildGroundFadeTexture(groundFadeRadius);
+  groundFadeTex.needsUpdate = true;
+  groundMat.needsUpdate = true;
+  updateVal('val-ground-fade-radius', groundFadeRadius.toFixed(2));
+};
+
+
+
+// ── Controls ──
+window.resetView = function() {
+  controls.target.set(0, 1, 0);
+  camera.position.set(8, 18, 16);
+};
+
+window.toggleAutoRotate = function() {
+  controls.autoRotate = !controls.autoRotate;
+  const btn = document.getElementById('rotateBtn');
+  btn.textContent = controls.autoRotate ? 'Pause Rotation' : 'Resume Rotation';
+  btn.classList.toggle('active', !controls.autoRotate);
+};
+
+let allExploded = false;
+window.toggleExplodeAll = function() {
+  allExploded = !allExploded;
+  const btn = document.getElementById('explodeAllBtn');
+  btn.textContent = allExploded ? 'Collapse All' : 'Explode All';
+  btn.classList.toggle('active', allExploded);
+  sliceObjects.forEach(s => { s.exploded = allExploded; s.targetExplode = allExploded ? 1 : 0; });
+};
+
+let isDonut = false;
+
+window.toggleDonut = function() {
+  isDonut = !isDonut;
+  const btn = document.getElementById('donutBtn');
+  btn.classList.toggle('active', isDonut);
+  innerRadius = isDonut ? chartRadius * 0.45 : 0;
+  buildChart();
+  const slider = document.getElementById('innerRadiusSlider');
+  if (slider) slider.value = Math.round(innerRadius * 12);
+  updateVal('val-inner-radius', Math.round(innerRadius * 12));
+};
+
+// ── Dataset transition state ──
+let datasetTransitioning = false;
+let datasetTransitionT = 0;
+
+// Post-transition label fade-in
+let labelFadingIn = false;
+let labelFadeInT = 0;
+let labelFadeInSpeed = 4.0; // fade in over ~0.25s
+let pendingDatasetKey = null;
+let oldSliceAngles = []; // {startAngle, endAngle, sliceHeight, color data}
+let newSliceAngles = [];
+let transitionSpeed = 3.0; // complete in ~0.33s
+let fadingOutLabels = []; // old labels/leaders fading out during transition
+
+// Pre-fade phase: labels fade out quickly BEFORE slice transition starts
+let labelPreFading = false;
+let labelPreFadeT = 0;
+let labelPreFadeSpeed = 8.0; // very fast fade out (~0.125s)
+let pendingSwitchKey = null; // dataset key waiting for label fade to complete
+
+window.switchDataset = function(key) {
+  if (key === currentDatasetKey && !labelPreFading) return;
+  // If already transitioning, snap to current target first
+  if (datasetTransitioning) {
+    datasetTransitionT = 1;
+    applyDatasetTransition(1);
+    datasetTransitioning = false;
+  }
+
+  // If already pre-fading for a different key, skip ahead
+  if (labelPreFading) {
+    // Instantly remove old fading labels and restart
+    fadingOutLabels.forEach(obj => {
+      if (obj.label) {
+        obj.label.traverse(child => { if (child.geometry) child.geometry.dispose(); if (child.material) child.material.dispose(); });
+        if (obj.label.parent) obj.label.parent.remove(obj.label);
+      }
+      if (obj.leader) {
+        obj.leader.traverse(child => { if (child.geometry) child.geometry.dispose(); if (child.material) child.material.dispose(); });
+        if (obj.leader.parent) obj.leader.parent.remove(obj.leader);
+      }
+    });
+    fadingOutLabels = [];
+    labelPreFading = false;
+  }
+
+  // Capture old labels/leaders and detach them from sliceObjects
+  // Freeze their orientation so they don't rotate during fade
+  sliceObjects.forEach(s => {
+    if (s.labelSprite) {
+      const frozenQ = s.labelSprite.quaternion.clone();
+      fadingOutLabels.push({ label: s.labelSprite, leader: s.leaderLine, frozenQuaternion: frozenQ });
+      s.labelSprite.traverse(child => {
+        if (child.material) {
+          child.material.transparent = true;
+          if (child.material.opacity === undefined) child.material.opacity = 1.0;
+        }
+      });
+      if (s.leaderLine) {
+        s.leaderLine.traverse(child => {
+          if (child.material) {
+            child.material.transparent = true;
+            if (!child.material._baseOpacity) child.material._baseOpacity = child.material.opacity;
+          }
+        });
+      }
+      s.labelSprite = null;
+      s.leaderLine = null;
+    }
+  });
+
+  // Start the pre-fade phase (labels fade out first, then slices transition)
+  labelPreFading = true;
+  labelPreFadeT = 0;
+  pendingSwitchKey = key;
+};
+
+function startSliceTransitionAfterFade(key) {
+  // Capture old state
+  const oldData = currentData;
+  const oldTotal = oldData.slices.reduce((s, d) => s + d.value, 0);
+  oldSliceAngles = [];
+  let oAngle = -Math.PI / 2;
+  const oldMax = Math.max(...oldData.slices.map(d => d.value));
+  oldData.slices.forEach(d => {
+    const sa = (d.value / oldTotal) * Math.PI * 2;
+    oldSliceAngles.push({
+      startAngle: oAngle,
+      endAngle: oAngle + sa,
+      value: d.value,
+      heightRatio: d.value / oldMax,
+      gradTop: d.gradTop || d.hex,
+      gradBot: d.gradBot || d.hex,
+      hex: d.hex,
+    });
+    oAngle += sa;
+  });
+
+  // Set new data
+  currentDatasetKey = key;
+  currentData = DATASETS[key];
+  document.querySelectorAll('.map-btn').forEach(btn => btn.classList.remove('active'));
+  document.querySelector(`.map-btn[onclick="switchDataset('${key}')"]`).classList.add('active');
+  document.querySelector('#title-bar h1').textContent = currentData.title;
+
+  // Capture new state
+  const newData = currentData;
+  const newTotal = newData.slices.reduce((s, d) => s + d.value, 0);
+  newSliceAngles = [];
+  let nAngle = -Math.PI / 2;
+  const newMax = Math.max(...newData.slices.map(d => d.value));
+  newData.slices.forEach(d => {
+    const sa = (d.value / newTotal) * Math.PI * 2;
+    newSliceAngles.push({
+      startAngle: nAngle,
+      endAngle: nAngle + sa,
+      value: d.value,
+      heightRatio: d.value / newMax,
+      gradTop: d.gradTop || d.hex,
+      gradBot: d.gradBot || d.hex,
+      hex: d.hex,
+    });
+    nAngle += sa;
+  });
+
+  // Start slice transition
+  datasetTransitioning = true;
+  datasetTransitionT = 0;
+
+  // Rebuild legend and gradient controls immediately for new data
+  rebuildLegend();
+  buildGradColorControls();
+}
+
+function lerpAngle(a, b, t) { return a + (b - a) * t; }
+function lerpColor(hexA, hexB, t) {
+  const parse = h => [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+  const [ar,ag,ab] = parse(hexA);
+  const [br,bg,bb] = parse(hexB);
+  const r = Math.round(ar + (br - ar) * t);
+  const g = Math.round(ag + (bg - ag) * t);
+  const b = Math.round(ab + (bb - ab) * t);
+  return `#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`;
+}
+
+function applyDatasetTransition(t) {
+  // Determine max slice count
+  const maxSlices = Math.max(oldSliceAngles.length, newSliceAngles.length);
+
+  // Pad shorter array with zero-width slices at the end
+  const padOld = [...oldSliceAngles];
+  const padNew = [...newSliceAngles];
+  while (padOld.length < maxSlices) {
+    const last = padOld[padOld.length - 1];
+    padOld.push({ startAngle: last.endAngle, endAngle: last.endAngle, value: 0, heightRatio: 0.3, gradTop: last.gradTop, gradBot: last.gradBot, hex: last.hex });
+  }
+  while (padNew.length < maxSlices) {
+    const last = padNew[padNew.length - 1];
+    padNew.push({ startAngle: last.endAngle, endAngle: last.endAngle, value: 0, heightRatio: 0.3, gradTop: last.gradTop, gradBot: last.gradBot, hex: last.hex });
+  }
+
+  // Build interpolated chart
+  const savedExplodes = sliceObjects.map(s => ({
+    exploded: s.exploded, targetExplode: s.targetExplode,
+    currentExplode: s.currentExplode, hoverLift: s.hoverLift, targetHoverLift: s.targetHoverLift,
+  }));
+
+  // Clear chart
+  const toRemove = [];
+  for (let ci = chartGroup.children.length - 1; ci >= 0; ci--) {
+    toRemove.push(chartGroup.children[ci]);
+  }
+  toRemove.forEach(c => {
+    if (c.geometry) c.geometry.dispose();
+    if (c.material) {
+      if (Array.isArray(c.material)) c.material.forEach(m => { if (m.map) m.map.dispose(); m.dispose(); });
+      else { if (c.material.map) c.material.map.dispose(); c.material.dispose(); }
+    }
+    chartGroup.remove(c);
+  });
+  sliceObjects = [];
+
+  const curInner = innerRadius;
+  const maxValue = Math.max(...currentData.slices.map(d => d.value), 0.001);
+
+  for (let i = 0; i < maxSlices; i++) {
+    const o = padOld[i];
+    const n = padNew[i];
+
+    const startA = lerpAngle(o.startAngle, n.startAngle, t);
+    const endA = lerpAngle(o.endAngle, n.endAngle, t);
+    const hRatio = o.heightRatio + (n.heightRatio - o.heightRatio) * t;
+    const sliceH = chartHeight * (0.3 + 0.7 * hRatio);
+    const gTop = lerpColor(o.gradTop, n.gradTop, t);
+    const gBot = lerpColor(o.gradBot, n.gradBot, t);
+
+    if (Math.abs(endA - startA) < 0.001) continue;
+
+    const shape = createSliceShape(startA, endA, chartRadius, curInner, sliceGap);
+    const extrudeSettings = {
+      depth: sliceH, bevelEnabled: bevelSize > 0,
+      bevelThickness: bevelSize, bevelSize: bevelSize, bevelSegments: bevelSegments, curveSegments: sideSegments,
+    };
+    const geo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+    geo.rotateX(-Math.PI / 2);
+    geo.translate(0, bevelSize, 0);
+    if (smoothShading) {
+      computeCreaseNormals(geo, creaseAngle * Math.PI / 180);
+    } else {
+      geo.deleteAttribute('normal');
+      geo.computeVertexNormals();
+    }
+    assignGradientUVs(geo, startA, endA, chartRadius, curInner);
+    const gradTex = createGradientTexture(gTop, gBot);
+    const mat = new THREE.MeshStandardMaterial({
+      map: gradTex, color: 0xffffff, roughness: roughnessVal, metalness: metalnessVal, envMapIntensity: matEnvIntensity,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = `slice_${i}`;
+    mesh.userData = { sliceIndex: i };
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    chartGroup.add(mesh);
+
+    const midAngle = (startA + endA) / 2;
+
+    // Label (use new data if available) — fade in during second half of transition
+    const dIdx = i < currentData.slices.length ? i : -1;
+    let labelSprite = null;
+    let leaderLine = null;
+    let leaderLineFrom = null;
+    let leaderLineTo = null;
+
+    // Use the FINAL target angles for label positioning so there's no jump at transition end
+    const finalN = padNew[i];
+    const finalMidAngle = (finalN.startAngle + finalN.endAngle) / 2;
+    const finalSliceAngle = Math.abs(finalN.endAngle - finalN.startAngle);
+    const finalThreshold = (30 / 360) * Math.PI * 2;
+    const finalIsSmall = finalSliceAngle < finalThreshold;
+    const finalSliceH = chartHeight * (0.3 + 0.7 * finalN.heightRatio);
+    const labelR = finalIsSmall ? (chartRadius + 2.8) : (chartRadius * 0.62 + curInner * 0.38);
+    const labelY = finalSliceH + bevelSize + (finalIsSmall ? 2.0 : 0.7);
+
+    // For sliceObjects we still track the current interpolated angle
+    const sliceAngle = Math.abs(endA - startA);
+    const thresholdAngle = (30 / 360) * Math.PI * 2;
+    const isSmall = sliceAngle < thresholdAngle;
+
+    // Labels are NOT created during transition — they fade in after buildChart() at t=1
+    // This avoids any positioning jumps
+
+    sliceObjects.push({
+      mesh, labelSprite, leaderLine, leaderLineFrom, leaderLineTo,
+      data: dIdx >= 0 ? currentData.slices[dIdx] : padNew[i],
+      index: i, startAngle: startA, endAngle: endA, midAngle, sliceHeight: sliceH,
+      labelAngle: finalMidAngle,
+      labelR: labelR,
+      labelY: labelY,
+      pushed: finalIsSmall,
+      exploded: false, targetExplode: 0, currentExplode: 0, hoverLift: 0, targetHoverLift: 0,
+    });
+
+    // Restore saved explode states
+    const lastIdx = sliceObjects.length - 1;
+    if (savedExplodes[i] && lastIdx >= 0) {
+      sliceObjects[lastIdx].exploded = savedExplodes[i].exploded;
+      sliceObjects[lastIdx].targetExplode = savedExplodes[i].targetExplode;
+      sliceObjects[lastIdx].currentExplode = savedExplodes[i].currentExplode;
+      sliceObjects[lastIdx].hoverLift = savedExplodes[i].hoverLift;
+      sliceObjects[lastIdx].targetHoverLift = savedExplodes[i].targetHoverLift;
+    }
+  }
+
+}
+
+// ── FPS Counter ──
+const fpsEl = document.getElementById('fpsIndicator');
+let fpsFrames = 0;
+let fpsLastTime = performance.now();
+
+// ── Toggle HUD with H key ──
+let hudVisible = true;
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') {
+    hudVisible = !hudVisible;
+    const display = hudVisible ? '' : 'none';
+    fpsEl.style.display = display;
+    document.getElementById('settings-toggle').style.display = display;
+    document.getElementById('settings-panel').style.display = display;
+  }
+});
+
+// ── Animation Loop ──
+const clock = new THREE.Clock();
+let donutRebuildAccum = 0;
+
+function animate() {
+  const delta = clock.getDelta();
+  const t = clock.getElapsedTime();
+  controls.update();
+
+  const explodeDist = 1.6;
+
+  sliceObjects.forEach((s) => {
+    s.currentExplode += (s.targetExplode - s.currentExplode) * 0.1;
+    s.hoverLift += (s.targetHoverLift - s.hoverLift) * 0.12;
+
+    const midAngle = s.midAngle;
+    const ex = Math.cos(midAngle) * explodeDist * s.currentExplode;
+    const ez = -Math.sin(midAngle) * explodeDist * s.currentExplode;
+    const ey = s.hoverLift * 0.4;
+
+    s.mesh.position.set(ex, ey, ez);
+
+    if (s.labelSprite) {
+      const lAngle = s.labelAngle !== undefined ? s.labelAngle : s.midAngle;
+      const lR = s.labelR !== undefined ? s.labelR : (chartRadius + 2.4);
+      const lY = s.labelY !== undefined ? s.labelY : (s.sliceHeight + bevelSize + 2.0);
+
+      s.labelSprite.position.set(
+        Math.cos(lAngle) * lR + ex,
+        lY + ey,
+        -Math.sin(lAngle) * lR + ez
+      );
+      // Billboard: make label always face camera
+      s.labelSprite.quaternion.copy(camera.quaternion);
+    }
+
+    // Update leader line — rebuild transform for explode/hover offsets
+    if (s.leaderLine && s.leaderLineFrom && s.leaderLineTo) {
+      const from = s.leaderLineFrom;
+      const to = s.leaderLineTo;
+      s.leaderLine.position.set(from.x + ex, from.y + ey, from.z + ez);
+      s.leaderLine.lookAt(to.x + ex, to.y + ey, to.z + ez);
+    }
+  });
+
+
+
+
+
+    // Pre-fade phase: fade out old labels quickly before slice transition starts
+    if (labelPreFading) {
+      labelPreFadeT += delta * labelPreFadeSpeed;
+      const fadeOpacity = Math.max(0, 1 - labelPreFadeT);
+      fadingOutLabels.forEach(obj => {
+        if (obj.label) {
+          obj.label.visible = fadeOpacity > 0.01;
+          // Keep frozen orientation — don't billboard during fade
+          if (obj.frozenQuaternion) {
+            obj.label.quaternion.copy(obj.frozenQuaternion);
+          }
+          obj.label.traverse(child => {
+            if (child.material) {
+              child.material.opacity = fadeOpacity;
+              child.material.transparent = true;
+            }
+          });
+        }
+        if (obj.leader) {
+          obj.leader.visible = fadeOpacity > 0.01;
+          obj.leader.traverse(child => {
+            if (child.material) {
+              const base = child.material._baseOpacity || 0.45;
+              child.material.opacity = base * fadeOpacity;
+              child.material.transparent = true;
+            }
+          });
+        }
+      });
+
+      if (labelPreFadeT >= 1) {
+        // Pre-fade complete — clean up old labels and start slice transition
+        fadingOutLabels.forEach(obj => {
+          if (obj.label) {
+            obj.label.traverse(child => { if (child.geometry) child.geometry.dispose(); if (child.material) child.material.dispose(); });
+            if (obj.label.parent) obj.label.parent.remove(obj.label);
+          }
+          if (obj.leader) {
+            obj.leader.traverse(child => { if (child.geometry) child.geometry.dispose(); if (child.material) child.material.dispose(); });
+            if (obj.leader.parent) obj.leader.parent.remove(obj.leader);
+          }
+        });
+        fadingOutLabels = [];
+        labelPreFading = false;
+        startSliceTransitionAfterFade(pendingSwitchKey);
+        pendingSwitchKey = null;
+      }
+    }
+
+    // Keep fading-out old labels at their frozen orientation (no billboarding)
+    fadingOutLabels.forEach(obj => {
+      if (obj.label && obj.label.visible && obj.frozenQuaternion) {
+        obj.label.quaternion.copy(obj.frozenQuaternion);
+      }
+    });
+
+    // Dataset transition
+    if (datasetTransitioning) {
+      datasetTransitionT += delta * transitionSpeed;
+      if (datasetTransitionT >= 1) {
+        datasetTransitionT = 1;
+        datasetTransitioning = false;
+        // Final clean build
+        if (isDonut) innerRadius = chartRadius * 0.45;
+        buildChart();
+        // Start label fade-in: hide all labels initially
+        labelFadingIn = true;
+        labelFadeInT = 0;
+        sliceObjects.forEach(s => {
+          if (s.labelSprite) {
+            s.labelSprite.visible = false;
+            s.labelSprite.traverse(child => {
+              if (child.material) { child.material.opacity = 0; child.material.transparent = true; }
+            });
+          }
+          if (s.leaderLine) { s.leaderLine.visible = false; }
+        });
+      } else {
+        // Ease in-out cubic
+        const eased = datasetTransitionT < 0.5
+          ? 4 * datasetTransitionT * datasetTransitionT * datasetTransitionT
+          : 1 - Math.pow(-2 * datasetTransitionT + 2, 3) / 2;
+        applyDatasetTransition(eased);
+      }
+    }
+
+    // Post-transition label fade-in
+    if (labelFadingIn) {
+      labelFadeInT += delta * labelFadeInSpeed;
+      const opacity = Math.min(1, labelFadeInT);
+      sliceObjects.forEach(s => {
+        if (s.labelSprite) {
+          s.labelSprite.visible = opacity > 0.01;
+          // Billboard during fade-in
+          s.labelSprite.quaternion.copy(camera.quaternion);
+          s.labelSprite.traverse(child => {
+            if (child.material) {
+              child.material.opacity = opacity;
+              child.material.transparent = true;
+            }
+          });
+        }
+        if (s.leaderLine) {
+          s.leaderLine.visible = opacity > 0.01;
+          s.leaderLine.traverse(child => {
+            if (child.material) {
+              child.material.opacity = 0.7 * opacity;
+              child.material.transparent = true;
+            }
+          });
+        }
+      });
+      if (labelFadeInT >= 1) {
+        labelFadingIn = false;
+      }
+    }
+
+  // Update projection uniforms for SSR
+  projMatU.value.copy(camera.projectionMatrix);
+  projInvMatU.value.copy(camera.projectionMatrixInverse);
+
+  postProcessing.render();
+
+  if (!sceneReady && envLoaded) {
+    sceneReady = true;
+    renderer.domElement.style.opacity = '1';
+    document.getElementById('ui-overlay').style.opacity = '1';
+    document.getElementById('legend').style.opacity = '1';
+    document.getElementById('settings-toggle').style.opacity = '1';
+    document.getElementById('fpsIndicator').style.opacity = '1';
+  }
+
+  // FPS
+  fpsFrames++;
+  const now = performance.now();
+  if (now - fpsLastTime >= 500) {
+    const fps = Math.round(fpsFrames / ((now - fpsLastTime) / 1000));
+    fpsEl.textContent = fps + ' FPS';
+    fpsFrames = 0;
+    fpsLastTime = now;
+  }
+}
+
+scene.environmentIntensity = 1.58;
+renderer.setAnimationLoop(animate);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>

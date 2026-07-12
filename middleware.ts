@@ -8,8 +8,12 @@ const JWT_SECRET = new TextEncoder().encode(
 // Секрет для внутренних вызовов (авто-поллинг из instrumentation → /api/poll)
 const INTERNAL_SECRET = process.env.INTERNAL_SECRET ?? 'instaguard-internal-cron'
 
-// Пути, доступные без входа
-const PUBLIC_PATHS = new Set<string>(['/login', '/register', '/api/auth/login', '/api/auth/register'])
+// Пути, доступные без входа.
+// `/stats3d/index.html` — статический шаблон 3D-диаграммы статистики (§13.13),
+// встраивается в /stats через iframe. Данных пользователя НЕ содержит: реальные
+// числа приходят в него от родительской (уже авторизованной) страницы по postMessage.
+// Публичен намеренно, чтобы iframe гарантированно рендерился (без завязки на куку).
+const PUBLIC_PATHS = new Set<string>(['/login', '/register', '/api/auth/login', '/api/auth/register', '/stats3d/index.html'])
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
