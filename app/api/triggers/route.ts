@@ -43,8 +43,8 @@ export async function POST(req: NextRequest) {
   const triggerType = TYPE_MAP[type]
   if (!triggerType) return NextResponse.json({ error: 'Неизвестный тип события' }, { status: 400 })
   // Исполняемые типы: подписка, комментарий, лайк, ответ/упоминание в сторис
-  // NEW_LIKE — бета («скоро»), временно снят: self-события лайков не несут media_id
-  // (полный список лайкнувших не добрать) → триггер на паузе до готовности (plan4 Фаза F).
+  // NEW_LIKE — бета («скоро»), временно снят: self-уведомления о лайках агрегируются Instagram
+  // (топ-актор + счётчик, не полный список) → триггер неполон, на паузе до готовности (plan4 Фаза F).
   const SUPPORTED = ['NEW_FOLLOWER', 'NEW_COMMENT', 'STORY_MENTION']
   if (!SUPPORTED.includes(triggerType)) {
     return NextResponse.json({ error: 'Этот тип триггера пока не поддерживается (скоро)' }, { status: 400 })

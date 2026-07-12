@@ -359,8 +359,10 @@ export async function POST(req: NextRequest) {
     const triggers = account.triggersAsResponder
     const followerTriggers = triggers.filter((t) => t.triggerType === 'NEW_FOLLOWER')
     const commentTriggers = triggers.filter((t) => t.triggerType === 'NEW_COMMENT')
-    // NEW_LIKE — бета («скоро»), НА ПАУЗЕ: self-события лайков не несут media_id (plan4 Фаза F).
-    // Пустой список = поток лайков не выполняется даже для существующих активных NEW_LIKE-кампаний.
+    // NEW_LIKE — бета («скоро»), НА ПАУЗЕ: self-уведомления о лайках АГРЕГИРУЮТСЯ Instagram
+    // («X и ещё N лайкнули» → только топ-актор + счётчик, НЕ полный список лайкнувших), поэтому
+    // триггер неполон до добора likers конкретного поста (plan4 Фаза F). Пустой список = поток
+    // лайков не выполняется даже для существующих активных NEW_LIKE-кампаний.
     const LIKE_TRIGGER_BETA: boolean = true
     const likeTriggers = LIKE_TRIGGER_BETA ? [] : triggers.filter((t) => t.triggerType === 'NEW_LIKE')
     const storyTriggers = triggers.filter((t) => t.triggerType === 'STORY_MENTION')
