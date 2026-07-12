@@ -125,7 +125,8 @@ function Stats() {
         <Chart3D data={chart3dData} height={460} />
       </div>
 
-      {/* Здоровье автоматизации: браузерный воркер (эмуль) + скрейпер-API */}
+      {/* Здоровье автоматизации: браузерный воркер (эмуль, вход/действия/детект self-events) +
+          HikerAPI — опциональная метрика числа подписчиков (НЕ детект; детект = self-events). */}
       <div className="card card-3d gloss p-6">
         <div className="font-semibold text-[15px] mb-4">Здоровье автоматизации</div>
         <div className="grid sm:grid-cols-2 gap-3">
@@ -148,10 +149,10 @@ function Stats() {
           <div className="rounded-2xl border border-line/50 p-4 flex items-start gap-3">
             <IconTile icon={Radar} color={TONE.pink} size={36} />
             <div className="min-w-0">
-              <div className="text-[13.5px] font-medium">Парсинг (API)</div>
+              <div className="text-[13.5px] font-medium">Число подписчиков (API)</div>
               {(() => {
                 if (!sh) return <div className="text-[12px] text-subt mt-0.5">проверяю…</div>
-                if (sh.configured === false) return <div className="text-[12px] text-subt mt-0.5 leading-snug">⚪ ключ не задан (<code className="font-mono">HIKER_API_KEY</code>)</div>
+                if (sh.configured === false) return <div className="text-[12px] text-subt mt-0.5 leading-snug">⚪ не задан (<code className="font-mono">HIKER_API_KEY</code>) — на детект не влияет, скрыт лишь счётчик подписчиков</div>
                 if (sh.ok || sh.alive) return <div className="text-[12px] text-ok mt-0.5">✅ работает</div>
                 if (sh.configured) return <div className="text-[12px] text-bad mt-0.5 leading-snug">🔴 ошибка связи{sh.error ? `: ${sh.error}` : ''}</div>
                 return <div className="text-[12px] text-subt mt-0.5">статус неизвестен</div>
