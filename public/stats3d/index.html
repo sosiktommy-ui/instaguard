@@ -407,6 +407,7 @@
   }
 
   #fpsIndicator {
+    display: none !important; /* dev-индикатор скрыт в продакшене (перебивает inline-style кода) */
     position: fixed;
     top: 12px;
     left: 50%;
@@ -1546,12 +1547,13 @@ function resolveLabelsLayout(sliceInfos) {
 function buildChart() {
   while (chartGroup.children.length) {
     const c = chartGroup.children[0];
-    if (c.geometry) c.geometry.dispose();
+    const isLabel = c.userData && c.userData.isLabel; // спрайт-метка: геометрия ОБЩАЯ, текстура КЭШИРОВАНА — не уничтожать
+    if (c.geometry && !isLabel) c.geometry.dispose();
     if (c.material) {
       if (Array.isArray(c.material)) {
         c.material.forEach(m => { if (m.map) m.map.dispose(); m.dispose(); });
       } else {
-        if (c.material.map) c.material.map.dispose();
+        if (c.material.map && !isLabel) c.material.map.dispose();
         c.material.dispose();
       }
     }
@@ -1559,13 +1561,20 @@ function buildChart() {
   }
   sliceObjects = [];
 
-  const total = currentData.slices.reduce((s, d) => s + d.value, 0);
+  // В геометрию идут ТОЛЬКО срезы с value>0 (иначе нулевые дают вырожденные слайсы
+  // и лишние метки «0.0%» с выносками — визуальная «кривизна»). Всё по нулям → плейсхолдер.
+  // Локальный плейсхолдер (НЕ IG_EMPTY — он объявлен ниже первого вызова buildChart → TDZ).
+  const nonZero = currentData.slices.filter(d => d.value > 0);
+  const slices = nonZero.length ? nonZero
+    : [{ label: 'Пока нет срабатываний', value: 1, color: 0x9AA0A6, hex: '#9AA0A6', gradTop: '#2A2E33', gradBot: '#C2C7CC' }];
+
+  const total = slices.reduce((s, d) => s + d.value, 0);
   let angle = -Math.PI / 2;
-  const maxValue = Math.max(...currentData.slices.map(d => d.value));
+  const maxValue = Math.max(...slices.map(d => d.value));
 
   // First pass: build slice info for layout
   const sliceInfos = [];
-  currentData.slices.forEach((d, i) => {
+  slices.forEach((d, i) => {
     const sliceAngle = (d.value / total) * Math.PI * 2;
     const startAngle = angle;
     const endAngle = angle + sliceAngle;
@@ -1710,12 +1719,15 @@ function loadFont() {
 // Kick off font loading immediately
 loadFont();
 
-function createSliceLabel(d, total) {
-  const pct = ((d.value / total) * 100).toFixed(1) + '%';
-
-  // Рисуем метку на 2D-канвасе и вешаем как спрайт: fillText берёт системный
-  // шрифт → кириллица рендерится (TextGeometry со шрифтом helvetiker знал только
-  // латиницу и давал «????» на русских подписях).
+// Кэш ТЕКСТУР меток по содержимому. Раньше каждый buildChart (в т.ч. при переключении
+// среза) пересоздавал canvas-текстуры и грузил их на GPU заново → лаг при переключении
+// (регресс перехода с TextGeometry на спрайты). Теперь текстура рисуется один раз на
+// уникальный текст и переиспользуется; в buildChart их map НЕ уничтожается (см. cleanup).
+const _labelTexCache = new Map(); // key: "label||pct" → { tex, w, h }
+function getLabelTexture(label, pct) {
+  const key = label + '||' + pct;
+  const hit = _labelTexCache.get(key);
+  if (hit) return hit;
   const S = 2; // суперсэмплинг для чёткости
   const FAMILY = 'Arial, "Helvetica Neue", Helvetica, sans-serif';
   const fLabel = 46 * S, fPct = 34 * S;
@@ -1723,7 +1735,7 @@ function createSliceLabel(d, total) {
 
   const meas = document.createElement('canvas').getContext('2d');
   meas.font = `700 ${fLabel}px ${FAMILY}`;
-  const wLabel = meas.measureText(d.label).width;
+  const wLabel = meas.measureText(label).width;
   meas.font = `700 ${fPct}px ${FAMILY}`;
   const wPct = meas.measureText(pct).width;
 
@@ -1737,7 +1749,7 @@ function createSliceLabel(d, total) {
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#000000';
   ctx.font = `700 ${fLabel}px ${FAMILY}`;
-  ctx.fillText(d.label, w / 2, padY + fLabel / 2);
+  ctx.fillText(label, w / 2, padY + fLabel / 2);
   ctx.font = `700 ${fPct}px ${FAMILY}`;
   ctx.fillText(pct, w / 2, padY + fLabel + gap + fPct / 2);
 
@@ -1745,6 +1757,14 @@ function createSliceLabel(d, total) {
   tex.minFilter = THREE.LinearFilter;
   tex.magFilter = THREE.LinearFilter;
   tex.anisotropy = 4;
+  const rec = { tex, w, h };
+  _labelTexCache.set(key, rec);
+  return rec;
+}
+
+function createSliceLabel(d, total) {
+  const pct = ((d.value / total) * 100).toFixed(1) + '%';
+  const { tex, w, h } = getLabelTexture(d.label, pct);
 
   const mat = new THREE.SpriteMaterial({
     map: tex,
@@ -1755,6 +1775,7 @@ function createSliceLabel(d, total) {
   });
   const sprite = new THREE.Sprite(mat);
   sprite.name = `sliceLabel_${d.label}`;
+  sprite.userData.isLabel = true; // cleanup НЕ должен уничтожать кэшированную текстуру
 
   // Мировой размер: высота ~0.9 ед. (как две строки прежнего текста), ширина по аспекту.
   const worldH = 0.92;
@@ -1808,8 +1829,19 @@ try { if (window.parent && window.parent !== window) window.parent.postMessage({
 function rebuildLegend() {
   const legendEl = document.getElementById('legend');
   legendEl.innerHTML = '<div class="legend-title">Разбивка</div>';
-  const total = currentData.slices.reduce((s, d) => s + d.value, 0);
-  currentData.slices.forEach((d, i) => {
+  // ВАЖНО: тот же фильтр нулей и тот же порядок, что в buildChart — иначе индекс
+  // легенды не совпал бы с индексом sliceObjects (ховер/клик указывали бы не туда).
+  const legendSlices = currentData.slices.filter(d => d.value > 0);
+  const total = legendSlices.reduce((s, d) => s + d.value, 0) || 1;
+  if (!legendSlices.length) {
+    const empty = document.createElement('div');
+    empty.className = 'legend-item';
+    empty.style.opacity = '0.6';
+    empty.textContent = 'Пока нет срабатываний';
+    legendEl.appendChild(empty);
+    return;
+  }
+  legendSlices.forEach((d, i) => {
     const pct = ((d.value / total) * 100).toFixed(1);
     const item = document.createElement('div');
     item.className = 'legend-item';
@@ -2651,6 +2683,7 @@ const clock = new THREE.Clock();
 let donutRebuildAccum = 0;
 
 function animate() {
+ try {
   const delta = clock.getDelta();
   const t = clock.getElapsedTime();
   controls.update();
@@ -2729,7 +2762,16 @@ function animate() {
         // Pre-fade complete — clean up old labels and start slice transition
         fadingOutLabels.forEach(obj => {
           if (obj.label) {
-            obj.label.traverse(child => { if (child.geometry) child.geometry.dispose(); if (child.material) child.material.dispose(); });
+            // Метка-спрайт: геометрия ОБЩАЯ (не уничтожать — иначе пере-загрузка всех
+            // спрайтов), текстура КЭШИРОВАНА. Освобождаем только сам материал.
+            obj.label.traverse(child => {
+              const isLabel = child.userData && child.userData.isLabel;
+              if (child.geometry && !isLabel) child.geometry.dispose();
+              if (child.material && !Array.isArray(child.material)) {
+                if (child.material.map && !isLabel) child.material.map.dispose();
+                child.material.dispose();
+              }
+            });
             if (obj.label.parent) obj.label.parent.remove(obj.label);
           }
           if (obj.leader) {
@@ -2836,6 +2878,11 @@ function animate() {
     fpsFrames = 0;
     fpsLastTime = now;
   }
+ } catch (e) {
+   // Сбой одного кадра НЕ должен «замораживать» диаграмму навсегда — глотаем и
+   // продолжаем цикл; логируем один раз, чтобы не спамить консоль.
+   if (!animate._errLogged) { animate._errLogged = true; console.error('[stats3d] ошибка кадра animate:', e); }
+ }
 }
 
 scene.environmentIntensity = 1.58;
