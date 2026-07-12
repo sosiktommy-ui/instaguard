@@ -195,12 +195,24 @@
 .tp-left  { animation: tp-left 0.9s ease-in-out infinite; }
 .tp-right { animation: tp-right 0.9s ease-in-out infinite; }
 
+/* ── Матрица выполнений — премиальный 3D-вид (в тон 3D-диаграмме) ── */
+@keyframes mx-pop { from { opacity: 0; transform: translateY(9px) scale(0.965); } to { opacity: 1; transform: none; } }
+.mx-pop { animation: mx-pop 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
+/* Тень-разделитель у «примороженного» левого столбца и шапки — даёт ощущение слоёв/глубины */
+.mx-sticky-shadow { box-shadow: 12px 0 18px -14px rgba(24, 16, 64, 0.28); }
+.mx-head-shadow   { box-shadow: 0 10px 18px -15px rgba(24, 16, 64, 0.32); }
+/* Мягкое приподнятие строки при наведении (в тон .card-3d) */
+.mx-row { transition: transform 0.18s cubic-bezier(0.16,1,0.3,1), background-color 0.18s ease; }
+.mx-row:hover { transform: translateY(-1px); }
+
 @media (prefers-reduced-motion: reduce) {
   .rise { animation: none !important; opacity: 1 !important; transform: none !important; }
   .rm-bob { animation: none !important; }
   .tour-in { animation: none !important; opacity: 1 !important; transform: none !important; }
   .tp-up, .tp-down, .tp-left, .tp-right { animation: none !important; }
   .tour-spot { animation: none !important; box-shadow: 0 0 0 3px rgba(155,102,255,0.95), 0 0 24px 6px rgba(102,58,241,0.35), 0 0 0 9999px rgba(14,11,34,0.34) !important; }
+  .mx-pop { animation: none !important; opacity: 1 !important; transform: none !important; }
+  .mx-row:hover { transform: none !important; }
 }
 
 /* Slim, unobtrusive scrollbars */
