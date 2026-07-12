@@ -437,7 +437,7 @@
 
 <div id="ui-overlay">
   <div id="title-bar">
-    <h1>Срабатывания по типу кампании</h1>
+    <h1>Срабатывания по типу триггера</h1>
     <p>Клик — разложить · Тяни — вращать · Колесо — зум</p>
   </div>
   <div id="controls">
@@ -449,7 +449,7 @@
 </div>
 
 <div id="dataset-switcher">
-  <button class="map-btn active" onclick="switchDataset('market')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>По типу кампании</button>
+  <button class="map-btn active" onclick="switchDataset('market')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>По типу триггера</button>
   <button class="map-btn" onclick="switchDataset('revenue')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>По действию</button>
   <button class="map-btn" onclick="switchDataset('energy')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg>По аккаунту</button>
 </div>
@@ -819,9 +819,9 @@ import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
 // реальные числа приходят от страницы через postMessage ({type:'ig-stats'}).
 // unit:'' — величина в штуках (срабатываний/действий), проценты считаются от суммы.
 const DATASETS = {
-  // Срез «По типу кампании» — какой триггер срабатывает чаще (главная метрика)
+  // Срез «По типу триггера» — какой триггер срабатывает чаще (главная метрика)
   market: {
-    title: 'По типу кампании',
+    title: 'По типу триггера',
     unit: '',
     slices: [
       { label: 'Новая подписка', value: 12, color: 0x7C5CFC, hex: '#7C5CFC', gradTop: '#241663', gradBot: '#9B7BFF' },
@@ -1712,57 +1712,54 @@ loadFont();
 
 function createSliceLabel(d, total) {
   const pct = ((d.value / total) * 100).toFixed(1) + '%';
-  
-  const labelGroup = new THREE.Group();
-  labelGroup.name = `sliceLabel_${d.label}`;
-  
-  const buildText = (font) => {
-    const labelGeo = new TextGeometry(d.label, {
-      font: font,
-      size: 0.35,
-      depth: 0.001,
-      curveSegments: 2,
-      bevelEnabled: false,
-    });
-    labelGeo.center();
-    const labelMat = new THREE.MeshBasicMaterial({ 
-      color: 0x000000, 
-      transparent: true,
-      opacity: 1.0,
-      depthWrite: true,
-    });
-    const labelMesh = new THREE.Mesh(labelGeo, labelMat);
-    labelMesh.position.y = 0.15;
-    labelGroup.add(labelMesh);
-    
-    // Percentage text
-    const pctGeo = new TextGeometry(pct, {
-      font: font,
-      size: 0.25,
-      depth: 0.001,
-      curveSegments: 2,
-      bevelEnabled: false,
-    });
-    pctGeo.center();
-    const pctMat = new THREE.MeshBasicMaterial({ 
-      color: 0x000000, 
-      transparent: true,
-      opacity: 1.0,
-      depthWrite: true,
-    });
-    const pctMesh = new THREE.Mesh(pctGeo, pctMat);
-    pctMesh.position.y = -0.25;
-    labelGroup.add(pctMesh);
-  };
-  
-  // Use cached font if available, otherwise wait for load
-  if (cachedFont) {
-    buildText(cachedFont);
-  } else {
-    loadFont().then(buildText);
-  }
-  
-  return labelGroup;
+
+  // Рисуем метку на 2D-канвасе и вешаем как спрайт: fillText берёт системный
+  // шрифт → кириллица рендерится (TextGeometry со шрифтом helvetiker знал только
+  // латиницу и давал «????» на русских подписях).
+  const S = 2; // суперсэмплинг для чёткости
+  const FAMILY = 'Arial, "Helvetica Neue", Helvetica, sans-serif';
+  const fLabel = 46 * S, fPct = 34 * S;
+  const padX = 22 * S, padY = 14 * S, gap = 6 * S;
+
+  const meas = document.createElement('canvas').getContext('2d');
+  meas.font = `700 ${fLabel}px ${FAMILY}`;
+  const wLabel = meas.measureText(d.label).width;
+  meas.font = `700 ${fPct}px ${FAMILY}`;
+  const wPct = meas.measureText(pct).width;
+
+  const w = Math.ceil(Math.max(wLabel, wPct) + padX * 2);
+  const h = Math.ceil(fLabel + gap + fPct + padY * 2);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#000000';
+  ctx.font = `700 ${fLabel}px ${FAMILY}`;
+  ctx.fillText(d.label, w / 2, padY + fLabel / 2);
+  ctx.font = `700 ${fPct}px ${FAMILY}`;
+  ctx.fillText(pct, w / 2, padY + fLabel + gap + fPct / 2);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.anisotropy = 4;
+
+  const mat = new THREE.SpriteMaterial({
+    map: tex,
+    transparent: true,
+    opacity: 1.0,
+    depthTest: true,
+    depthWrite: false,
+  });
+  const sprite = new THREE.Sprite(mat);
+  sprite.name = `sliceLabel_${d.label}`;
+
+  // Мировой размер: высота ~0.9 ед. (как две строки прежнего текста), ширина по аспекту.
+  const worldH = 0.92;
+  sprite.scale.set(worldH * (w / h), worldH, 1);
+  return sprite;
 }
 
 buildChart();
@@ -2331,7 +2328,7 @@ window.resetView = function() {
 window.toggleAutoRotate = function() {
   controls.autoRotate = !controls.autoRotate;
   const btn = document.getElementById('rotateBtn');
-  btn.textContent = controls.autoRotate ? 'Pause Rotation' : 'Resume Rotation';
+  btn.textContent = controls.autoRotate ? 'Пауза вращения' : 'Возобновить вращение';
   btn.classList.toggle('active', !controls.autoRotate);
 };
 
@@ -2339,7 +2336,7 @@ let allExploded = false;
 window.toggleExplodeAll = function() {
   allExploded = !allExploded;
   const btn = document.getElementById('explodeAllBtn');
-  btn.textContent = allExploded ? 'Collapse All' : 'Explode All';
+  btn.textContent = allExploded ? 'Собрать всё' : 'Разложить всё';
   btn.classList.toggle('active', allExploded);
   sliceObjects.forEach(s => { s.exploded = allExploded; s.targetExplode = allExploded ? 1 : 0; });
 };
