@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeNews, classify, pickUser } from '../lib/newsparse.js'
+import { normalizeNews, classify, pickUser, classifyRow } from '../lib/newsparse.js'
 
 // plan4 Фаза C — юнит-тесты разбора ленты news/inbox. Без сети — чистые функции.
 // Фикстуры — по РЕАЛЬНОМУ payload с живого аккаунта (2026-07-11): follow = story_type 101 /
@@ -90,4 +90,33 @@ test('pickUser: profile_id/profile_name → фолбэк inline_follow', () => {
   assert.deepEqual(pickUser({ profile_id: '1', profile_name: 'a' }), { pk: '1', username: 'a' })
   assert.deepEqual(pickUser({ inline_follow: { user_info: { pk: '2', username: 'b' } } }), { pk: '2', username: 'b' })
   assert.deepEqual(pickUser({}), { pk: '', username: '' })
+})
+
+// ── DOM-панель уведомлений (classifyRow) — по РЕАЛЬНОМУ тексту со скрина (укр.) ──
+test('DOM follow: «swnqkx починає стежити за вами» + кнопка → follow', () => {
+  const e = classifyRow({ username: 'swnqkx', rowText: 'swnqkx починає стежити за вами. 13 хв', postHref: null, hasButton: true })
+  assert.equal(e.type, 'follow'); assert.equal(e.username, 'swnqkx'); assert.equal(e.pk, 'swnqkx')
+})
+
+test('DOM like: «вподобав(-ла) вашу світлину» + превью поста → like + shortcode', () => {
+  const e = classifyRow({ username: 'qkwcsnr', rowText: 'qkwcsnr вподобав(-ла) вашу світлину. 12 хв', postHref: '/p/DaEXD6iinlW/', hasButton: false })
+  assert.equal(e.type, 'like'); assert.equal(e.media_id, 'DaEXD6iinlW'); assert.equal(e.pk, 'qkwcsnr_DaEXD6iinlW')
+})
+
+test('DOM comment: «qkwcsnr коментує: 😮» + превью → comment', () => {
+  const e = classifyRow({ username: 'qkwcsnr', rowText: 'qkwcsnr коментує: 😮 12 хв', postHref: '/p/DaEXD6iinlW/', hasButton: false })
+  assert.equal(e.type, 'comment'); assert.equal(e.username, 'qkwcsnr')
+})
+
+test('DOM ignore: «вподобав(-ла) ваш коментар: ouu» → null (лайк моего коммента)', () => {
+  assert.equal(classifyRow({ username: 'felix.lopezz', rowText: 'felix.lopezz вподобав(-ла) ваш коментар: ouu 1 дн', postHref: '/p/x/', hasButton: false }), null)
+})
+
+test('DOM follow по кнопке без явного текста (postHref нет) → follow', () => {
+  const e = classifyRow({ username: 'x', rowText: 'x', postHref: null, hasButton: true })
+  assert.equal(e.type, 'follow')
+})
+
+test('DOM: нет username → null', () => {
+  assert.equal(classifyRow({ username: '', rowText: 'liked', postHref: '/p/y/', hasButton: false }), null)
 })

@@ -71,6 +71,32 @@ export function classify(st) {
   return { type: mapped, pk, username, text, media_id, ts, code }
 }
 
+// ── Разбор строки DOM-панели уведомлений (как видит человек) ────────────────────
+// row: { username, rowText, postHref, hasButton }. Мультиязычно по видимому тексту + структура.
+// Порядок важен: «лайкнули ваш коммент» (ignore) и follow проверяем раньше.
+export const ROW_RX = {
+  ignoreCommentLike: /(вподоба\S*|уподоба\S*|liked|понрав\S*|нравится|le gusta|menyukai)[^.]*?(коментар|коммент\S*|comment)/i,
+  follow: /(поча[вл]\S*|начал\S*|стеж\S*|подпис\S*|підпис\S*|started following|follow(ed)? you|empez[oó] a seguirte|mengikuti|стежити)/i,
+  comment: /(коментує|прокоментув\S*|comment(ed|s)?|комментир\S*|comentó|ответил|replied|залишив коментар)/i,
+  like: /(вподоба\S*|уподоба\S*|liked|понрав\S*|нравится|le gusta|menyukai)/i,
+}
+
+export function classifyRow(row) {
+  const t = String((row && row.rowText) || '')
+  if (ROW_RX.ignoreCommentLike.test(t)) return null   // «лайкнули ваш коммент» — не наш триггер
+  const scMatch = String((row && row.postHref) || '').match(/\/(?:p|reel|reels)\/([^/?#]+)/)
+  const shortcode = scMatch ? scMatch[1] : ''
+  let type
+  if (ROW_RX.follow.test(t) || (!(row && row.postHref) && row && row.hasButton)) type = 'follow'
+  else if (ROW_RX.comment.test(t)) type = 'comment'
+  else if (ROW_RX.like.test(t) || (row && row.postHref)) type = 'like'
+  else return null
+  const username = row && row.username
+  if (!username) return null
+  const pk = type === 'follow' ? username : `${username}_${shortcode}`
+  return { type, pk, username, text: t.slice(0, 200), media_id: shortcode, ts: null, code: 'dom' }
+}
+
 export function normalizeNews(json) {
   const stories = [
     ...(Array.isArray(json && json.new_stories) ? json.new_stories : []),
