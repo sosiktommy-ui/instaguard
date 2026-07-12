@@ -302,16 +302,14 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
           {aggEntries.length > 0 && (
             <div>
               <div className="flex items-center gap-1.5 text-[12px] font-semibold text-subt mb-2">
-                <TrendingUp className="w-3.5 h-3.5" /> Действия <span className="font-normal text-subt/70">· выполнено / сработало</span>
+                <TrendingUp className="w-3.5 h-3.5" /> Действия <span className="font-normal text-subt/70">· выполнено / попыток</span>
               </div>
               <div className="flex flex-wrap gap-2">
                 {aggEntries.map((k) => {
                   const m = ACT_META[k]; const Icon = m.Icon
-                  const gap = (aggFired[k] ?? 0) - (aggDone[k] ?? 0)
                   return (
-                    <span key={k} className="flex items-center gap-1.5 text-[12.5px] font-medium px-3 py-1.5 rounded-xl" style={{ background: hexA(m.color, 0.1), color: m.color }} title="выполнено / сработало">
+                    <span key={k} className="flex items-center gap-1.5 text-[12.5px] font-medium px-3 py-1.5 rounded-xl" style={{ background: hexA(m.color, 0.1), color: m.color }} title="выполнено / попыток (сколько удалось / сколько пытался)">
                       <Icon className="w-3.5 h-3.5" /> {m.label} <span className="tabular-nums font-semibold">{(aggDone[k] ?? 0).toLocaleString('ru')}/{(aggFired[k] ?? 0).toLocaleString('ru')}</span>
-                      {gap > 0 && <span className="text-bad font-semibold">−{gap}</span>}
                     </span>
                   )
                 })}
@@ -360,16 +358,14 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
                             <div className="flex flex-wrap gap-1.5 mt-2">
                               {rows.map((r) => {
                                 const active = r.done > 0
-                                const gap = r.fired - r.done
                                 return (
                                   <span key={r.key} className={cn('flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg font-semibold', !active && 'opacity-80')}
-                                    title="выполнено / сработало"
+                                    title="выполнено / попыток (сколько удалось / сколько пытался)"
                                     style={active
                                       ? { background: `linear-gradient(135deg, ${r.color}, ${darken(r.color)})`, color: '#fff', boxShadow: `0 2px 6px ${hexA(r.color, 0.35)}` }
                                       : { background: hexA(r.color, 0.1), color: r.color }}>
                                     <r.Icon className="w-3 h-3" strokeWidth={2.4} /> {r.label}
                                     <span className="tabular-nums opacity-90">{r.done.toLocaleString('ru')}/{r.fired.toLocaleString('ru')}</span>
-                                    {gap > 0 && <span className="opacity-90 font-normal">(−{gap})</span>}
                                     {r.settings.length > 0 && <span className="opacity-70 font-normal hidden sm:inline">· {r.settings.join(', ')}</span>}
                                   </span>
                                 )

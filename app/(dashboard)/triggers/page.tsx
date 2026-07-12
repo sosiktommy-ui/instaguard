@@ -1173,7 +1173,7 @@ function ActionDetail({ trigger, k, onEdit }: { trigger: DbTrigger; k: string; o
   const gap = stat.fired - stat.done
   const summary = (
     <div className="flex items-center gap-2.5 flex-wrap text-[11px] pb-1.5 border-b border-black/[0.05]">
-      <span className="text-ink/70">Сработало <span className="font-semibold tabular-nums">{stat.fired.toLocaleString('ru')}</span></span>
+      <span className="text-ink/70">Попыток <span className="font-semibold tabular-nums">{stat.fired.toLocaleString('ru')}</span></span>
       <span className="text-ok">Выполнено <span className="font-semibold tabular-nums">{stat.done.toLocaleString('ru')}</span></span>
       {gap > 0 && (
         <Tooltip content="Триггер сработал, но действие не выполнилось: закрытая личка, нет поста для лайка, не прошла подписка или дневной лимит.">
@@ -1275,7 +1275,9 @@ function CampaignCard({ trigger, onToggle, onEdit, onDelete, onOpenLog, index = 
               </span>
             )}
             <span className="text-[13px] font-semibold truncate flex-1 min-w-0">{meta?.label ?? trigger.triggerType}</span>
-            <span className="text-[11px] text-subt shrink-0">сработал <span className="font-semibold text-ink tabular-nums">{firedTotal.toLocaleString('ru')}</span> раз</span>
+            <span className="text-[11px] text-subt shrink-0 flex items-center gap-1">сработал <span className="font-semibold text-ink tabular-nums">{firedTotal.toLocaleString('ru')}</span> раз
+              <Hint text="Сколько раз триггер поймал событие И выполнил хотя бы одно действие. Может быть меньше числа «Попыток» у действий: часть подписчиков не дала результата (закрытая личка / нет постов / лимит)." />
+            </span>
           </div>
           {signal && (
             <div className="mt-2">
@@ -1299,16 +1301,16 @@ function CampaignCard({ trigger, onToggle, onEdit, onDelete, onOpenLog, index = 
       {/* ── БЛОК «ДЕЙСТВИЯ» — таблица: что делает + сработало/выполнено ── */}
       <div className="rounded-xl border border-ok/30 overflow-hidden">
         <div className="px-2.5 py-1 bg-ok/10 text-[10px] font-semibold uppercase tracking-wider text-ok flex items-center gap-1">
-          Действия <Hint text="Что бот делает при срабатывании. «Сраб.» — сколько раз пытался, «Вып.» — сколько получилось. Нажми на строку — подробности." />
+          Действия <Hint text="«Попыток» — сколько раз бот пробовал это действие. «Выполнено» — сколько удалось. «Попыток» может быть больше, чем «сработал N раз» у триггера: не у каждого подписчика действие получается (закрытая личка, нет постов для лайка, нет активных сторис, дневной лимит). Нажми на строку — подробности." />
         </div>
         {rows.length === 0 ? (
           <div className="px-2.5 py-3 text-[11.5px] text-subt text-center">Действий нет</div>
         ) : (
           <>
-            <div className="grid grid-cols-[1fr_2.4rem_2.4rem] gap-x-2 px-2.5 py-1 text-[10px] text-subt/70 border-b border-line/40">
+            <div className="grid grid-cols-[1fr_3.4rem_4.6rem] gap-x-2 px-2.5 py-1 text-[10px] text-subt/70 border-b border-line/40">
               <span>Действие</span>
-              <span className="text-right">Сраб.</span>
-              <span className="text-right">Вып.</span>
+              <span className="text-right">Попыток</span>
+              <span className="text-right">Выполнено</span>
             </div>
             {rows.map((r) => {
               const isOpen = openKey === r.key
@@ -1316,7 +1318,7 @@ function CampaignCard({ trigger, onToggle, onEdit, onDelete, onOpenLog, index = 
               return (
                 <div key={r.key} className="border-b border-line/30 last:border-0">
                   <button onClick={() => setOpenKey(isOpen ? null : r.key)}
-                    className={cn('w-full grid grid-cols-[1fr_2.4rem_2.4rem] gap-x-2 items-center px-2.5 py-1.5 text-left transition-colors',
+                    className={cn('w-full grid grid-cols-[1fr_3.4rem_4.6rem] gap-x-2 items-center px-2.5 py-1.5 text-left transition-colors',
                       isOpen ? 'bg-black/[0.04]' : 'hover:bg-black/[0.03]')}>
                     <span className="flex items-center gap-1.5 min-w-0">
                       <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: hexA(r.color, 0.12) }}>
