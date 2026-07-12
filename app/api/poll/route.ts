@@ -518,7 +518,11 @@ export async function POST(req: NextRequest) {
             // Все действия выполняет основной своей браузерной сессией (browserState).
           }
 
-          if (dmQueue) {
+          // Ручная «Проверить подписчиков» (isManual) — выполняем ДЕЙСТВИЕ СРАЗУ (inline), а не
+          // в отложенную очередь: пользователь жмёт кнопку и ждёт результат ЗДЕСЬ, и это не
+          // зависит от фонового dm-воркера (если он в проде не крутится — очередь молча копится,
+          // «0 срабатываний»). Авто-поллинг (много аккаунтов) по-прежнему через очередь с пейсингом.
+          if (dmQueue && !isManual) {
             await dmQueue.add('send', job, {
               // BullMQ запрещает ':' в custom jobId → разделитель '_' (id — cuid/число, без '_').
               jobId: `dm_${account.id}_${trigger.id}_${target.pk}`,
@@ -528,7 +532,7 @@ export async function POST(req: NextRequest) {
             cursor += nextGap()
           } else {
             await runFollowerActionsInline(job)
-            await randDelay(40, 90)
+            await randDelay(isManual ? 4 : 40, isManual ? 12 : 90)
           }
           s.dmsQueued++
         }
@@ -601,6 +605,10 @@ export async function POST(req: NextRequest) {
             selfFollows = evs.filter((e) => e.type === 'follow').map((e) => ({ pk: e.pk, username: e.username }))
             selfLikes = evs.filter((e) => e.type === 'like').map((e) => ({ pk: e.pk, username: e.username }))
             selfComments = evs.filter((e) => e.type === 'comment').map((e) => ({ pk: `${e.pk}_${e.media_id ?? ''}`, user_pk: e.pk, username: e.username, text: e.text ?? '', media_id: e.media_id ?? '' }))
+            // Диагностика (только ручная проверка, чтобы не засорять авто-логи): что реально
+            // прочитано из уведомлений. Если тут «подписки 0», а подписчик точно новый —
+            // проблема в ЧТЕНИИ/разборе уведомлений (self-events), а не в действиях.
+            if (isManual) await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: `Уведомления прочитаны: всего ${evs.length} (подписки ${selfFollows.length} · лайки ${selfLikes.length} · комменты ${selfComments.length})` } }).catch(() => null)
           } catch (e: any) {
             await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Уведомления (self-events) сбой: ${String(e?.message ?? e).slice(0, 120)}` } }).catch(() => null)
           }
@@ -621,6 +629,15 @@ export async function POST(req: NextRequest) {
           // Первая проверка (нет снапшота) — только фиксируем базу, НЕ обрабатываем существующих
           // подписчиков (иначе на новом аккаунте будет массовая рассылка → бан).
           const { fresh, process } = selectTargets(followers, knownPks, hadBaseline, (f) => String(f.pk))
+
+          if (isManual) {
+            const msg = !hadBaseline
+              ? `Первый проход (базлайн): записано ${followers.length} подписок, действий 0 — новые ловятся со следующей проверки. Чтобы сработать на текущих — нажмите «Сбросить».`
+              : fresh.length === 0
+                ? `Новых подписок нет (в уведомлениях ${followers.length}, все уже обработаны).`
+                : `Новых подписок: ${fresh.length}, выполняю действия по ${process.length}.`
+            await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: msg } }).catch(() => null)
+          }
 
           await prisma.$transaction([
             prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'FOLLOWERS' } }),
