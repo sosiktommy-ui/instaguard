@@ -6,7 +6,7 @@
 // Классификация строки — по видимому тексту (мультиязычно) + структуре (кнопка «Подписаться» →
 // follow; превью поста → like/comment). Актор (username) берём из ссылки на профиль (/username/) —
 // это язык-независимо. При raw=true возвращаем сырой текст/строки панели — для сверки на живом.
-import { jitter } from './human.js'
+import { jitter, preActionBrowse } from './human.js'
 import { gotoResilient, hasSessionCookie } from './browser.js'
 import { normalizeNews, classifyRow } from './newsparse.js'   // чистый разбор (юнит-тестится)
 
@@ -54,30 +54,51 @@ async function readNotificationsRows(page) {
   })
 }
 
-// Резерв: прямой fetch news/inbox изнутри страницы с ПОЛНЫМ набором заголовков веб-клиента
-// (x-ig-app-id + x-asbd-id + x-csrftoken из cookie + x-requested-with) — так запрос выглядит
-// как обычная работа сайта, а не голый вызов. Ретрай транзиентных кодов. Крайний резерв.
-async function readViaApi(page) {
-  const json = await page.evaluate(async ({ appId }) => {
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-    const TRANSIENT = [429, 500, 502, 503, 504]
-    const csrf = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || ''
-    const headers = { 'x-ig-app-id': appId, 'x-asbd-id': '129477', 'x-requested-with': 'XMLHttpRequest', 'x-csrftoken': csrf }
-    let last = { __err: 'no_attempt' }
+// Захваченные заголовки запроса санитизируем перед реплеем: убираем те, что подставляет сам
+// транспорт (host/cookie/длина/кодировка) — cookie придут из context.request автоматически.
+function sanitizeHeaders(h) {
+  const DROP = new Set(['host', 'content-length', 'cookie', 'accept-encoding', 'connection', ':authority', ':method', ':path', ':scheme'])
+  const out = {}
+  for (const [k, v] of Object.entries(h || {})) { if (!DROP.has(k.toLowerCase())) out[k] = v }
+  return out
+}
+
+// НЕЗАВИСИМЫЙ РЕЗЕРВ через `context.request` (делит cookies с контекстом, но БЕЗ ограничений
+// браузерного fetch на заголовки — можно выставить любой x-*). Приоритет — РЕПЛЕЙ РЕАЛЬНОГО
+// запроса самого сайта (точные URL+заголовки, захваченные при открытии колокольчика) → это тот
+// самый рабочий вызов, что не отдаёт 500. Если его не захватили — сконструированный запрос с
+// полным набором заголовков веб-клиента. Оба с ретраем транзиентных кодов. Крайний резерв.
+async function readViaApi(context, capturedReq) {
+  const TRANSIENT = [429, 500, 502, 503, 504]
+  let csrf = ''
+  try { const ck = await context.cookies('https://www.instagram.com'); csrf = (ck.find((c) => c.name === 'csrftoken') || {}).value || '' } catch { /* csrf опционален */ }
+
+  const attempts = []
+  if (capturedReq?.url) attempts.push({ url: capturedReq.url, headers: sanitizeHeaders(capturedReq.headers) })  // реплей рабочего запроса сайта
+  attempts.push({                                                                                               // сконструированный запрос
+    url: 'https://www.instagram.com/api/v1/news/inbox/',
+    headers: { 'x-ig-app-id': IG_APP_ID, 'x-asbd-id': '129477', 'x-requested-with': 'XMLHttpRequest', 'x-csrftoken': csrf, accept: '*/*' },
+  })
+
+  let lastErr = 'no_attempt'
+  for (const at of attempts) {
     for (let i = 0; i < 3; i++) {
       try {
-        const r = await fetch('/api/v1/news/inbox/', { headers, credentials: 'include' })
-        if (r.ok) return await r.json()
-        last = { __status: r.status }
-        if (!TRANSIENT.includes(r.status)) return last
-      } catch (e) { last = { __err: String((e && e.message) || e) } }
-      if (i < 2) await sleep(1000 + i * 1500)
+        const resp = await context.request.get(at.url, { headers: at.headers, timeout: 15000 })
+        const st = resp.status()
+        if (resp.ok()) {
+          const j = await resp.json().catch(() => null)
+          if (j && (Array.isArray(j.new_stories) || Array.isArray(j.old_stories))) return { events: normalizeNews(j) }
+          lastErr = 'news_bad_json'
+        } else {
+          lastErr = `news_inbox_http_${st}`
+          if (!TRANSIENT.includes(st)) break   // осмысленный 4xx (401/403/404) — реплей/креды не помогут, к следующей попытке
+        }
+      } catch (e) { lastErr = `news_err: ${String(e?.message ?? e).slice(0, 80)}` }
+      if (i < 2) await new Promise((r) => setTimeout(r, 1000 + i * 1500))
     }
-    return last
-  }, { appId: IG_APP_ID })
-  if (json?.__status) return { events: [], apiError: `news_inbox_http_${json.__status}` }
-  if (json?.__err) return { events: [], apiError: `news_inbox_err: ${json.__err}` }
-  return { events: normalizeNews(json) }
+  }
+  return { events: [], apiError: lastErr }
 }
 
 /**
@@ -109,9 +130,25 @@ export async function readSelfEvents(context, { amount = 30, raw = false } = {})
   }
   page.on('response', onResp)
 
+  // Перехват ЗАПРОСА уведомлений (url + заголовки) — чтобы РЕЗЕРВ мог РЕПЛЕИТЬ рабочий вызов
+  // самого сайта (тот, что не отдаёт 500), а не конструировать голый запрос. Берём первый GET
+  // к news/inbox — заголовки клиента снимаем ровно те, что реально ушли.
+  let capturedReq = null
+  const onReq = (req) => {
+    if (capturedReq) return
+    try { const u = req.url(); if (/news\/inbox|\/api\/v1\/news/i.test(u) && req.method() === 'GET') capturedReq = { url: u, headers: req.headers() } } catch { /* не тот запрос */ }
+  }
+  page.on('request', onReq)
+
   try {
     await gotoResilient(page, 'https://www.instagram.com/', { timeout: 30000, retries: 1, backoffMs: [2000] })
     await jitter(1200, 2400)
+
+    // ПРОГРЕВ перед просмотром уведомлений (по запросу пользователя): человек сперва листает
+    // ленту, а потом открывает колокольчик — не «login → сразу news/inbox» (портрет бота).
+    // Лёгкий браузинг (пара скроллов, движения мыши); лайки НЕ делаем (нет доступа к лимитам).
+    // Сбой прогрева не критичен: колокольчик всё равно откроем.
+    try { await preActionBrowse(page) } catch { /* прогрев не должен ронять чтение */ }
 
     let events = []
     let source = ''
@@ -132,21 +169,23 @@ export async function readSelfEvents(context, { amount = 30, raw = false } = {})
     if (captured) { events = normalizeNews(captured).slice(0, amount); source = 'intercept' }
     // 2) DOM-панель (резерв, если перехват пуст).
     if (!events.length && rowsDump) { const ev = rowsDump.map(classifyRow).filter(Boolean); if (ev.length) { events = ev.slice(0, amount); source = 'dom' } }
-    // 3) Прямой fetch с полными заголовками (крайний резерв).
+    // 3) НЕЗАВИСИМЫЙ запрос к API — реплей рабочего запроса сайта (или сконструированный) через
+    //    context.request (крайний резерв). Теперь это настоящий рабочий фолбэк, а не голый fetch→500.
     if (!events.length) {
-      const api = await readViaApi(page).catch(() => ({ events: [], apiError: 'api_exception' }))
+      const api = await readViaApi(context, capturedReq).catch(() => ({ events: [], apiError: 'api_exception' }))
       if (api.events.length) { events = api.events.slice(0, amount); source = 'api' }
       if (api.apiError) apiError = apiError ? `${apiError}; ${api.apiError}` : api.apiError
     }
 
     const out = { events, storageState: await context.storageState() }
     if (!events.length && apiError) out.error = apiError
-    if (raw) out.raw = { source, intercepted: captured ? { topKeys: Object.keys(captured), new: (captured.new_stories || []).length, old: (captured.old_stories || []).length } : null, rows: rowsDump, sample, apiError }
+    if (raw) out.raw = { source, capturedReq: capturedReq ? { url: capturedReq.url } : null, intercepted: captured ? { topKeys: Object.keys(captured), new: (captured.new_stories || []).length, old: (captured.old_stories || []).length } : null, rows: rowsDump, sample, apiError }
     return out
   } catch (e) {
     return { events: [], error: String(e?.message ?? e).slice(0, 200) }
   } finally {
     page.off('response', onResp)
+    page.off('request', onReq)
     await page.close().catch(() => {})
   }
 }
