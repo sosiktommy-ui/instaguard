@@ -54,15 +54,19 @@ async function readNotificationsRows(page) {
   })
 }
 
-// Резерв: приватный API (если DOM-панель не открылась). Ретрай транзиентных кодов.
+// Резерв: прямой fetch news/inbox изнутри страницы с ПОЛНЫМ набором заголовков веб-клиента
+// (x-ig-app-id + x-asbd-id + x-csrftoken из cookie + x-requested-with) — так запрос выглядит
+// как обычная работа сайта, а не голый вызов. Ретрай транзиентных кодов. Крайний резерв.
 async function readViaApi(page) {
   const json = await page.evaluate(async ({ appId }) => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
     const TRANSIENT = [429, 500, 502, 503, 504]
+    const csrf = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || ''
+    const headers = { 'x-ig-app-id': appId, 'x-asbd-id': '129477', 'x-requested-with': 'XMLHttpRequest', 'x-csrftoken': csrf }
     let last = { __err: 'no_attempt' }
     for (let i = 0; i < 3; i++) {
       try {
-        const r = await fetch('/api/v1/news/inbox/', { headers: { 'x-ig-app-id': appId }, credentials: 'include' })
+        const r = await fetch('/api/v1/news/inbox/', { headers, credentials: 'include' })
         if (r.ok) return await r.json()
         last = { __status: r.status }
         if (!TRANSIENT.includes(r.status)) return last
@@ -77,35 +81,58 @@ async function readViaApi(page) {
 }
 
 /**
- * Читает свои уведомления: сначала DOM-панель (как человек), при неудаче — приватный API-резерв.
- *  - events: [{type,pk,username,text,media_id,ts,code}]
- *  - raw (если raw=true): {source, rows, sample, apiError?} — для сверки на живом.
+ * Читает свои уведомления ГИБРИДНО (лучшее из «API» и «меню», по разбору с пользователем):
+ *  1) Открываем колокольчик в браузере (ОРГАНИЧНЫЙ человеческий флоу — клиент сам грузит
+ *     уведомления со всей телеметрией) и ПЕРЕХВАТЫВАЕМ сетевой JSON ответа приложения
+ *     (page.on('response') по news/inbox) — это РАБОЧИЙ запрос самого сайта (без нашего 500)
+ *     и структурный, язык-независимый (normalizeNews). ← основной путь.
+ *  2) Если перехват не сработал — читаем DOM-панель (classifyRow, язык-зависимо) — резерв.
+ *  3) Если и это пусто — прямой fetch с полными заголовками — крайний резерв.
+ * Возвращает: events[], browserState; при raw=true — {source, intercepted, rows, sample, apiError}.
  */
 export async function readSelfEvents(context, { amount = 30, raw = false } = {}) {
   const ok = await hasSessionCookie(context)
   if (!ok) return { events: [], error: 'login_required: сессия недействительна — нужен повторный вход' }
   const page = await context.newPage()
+
+  // Перехват ответа приложения на уведомления (клиент дёрнет свой рабочий эндпоинт при
+  // открытии колокольчика). Матчим и по URL (news/inbox), и по ФОРМЕ тела (new/old_stories).
+  let captured = null
+  const onResp = async (resp) => {
+    if (captured) return
+    try {
+      const u = resp.url()
+      if (!/news\/inbox|\/api\/v1\/news|graphql/i.test(u)) return
+      const j = await resp.json().catch(() => null)
+      if (j && (Array.isArray(j.new_stories) || Array.isArray(j.old_stories))) captured = j
+    } catch { /* не тот ответ */ }
+  }
+  page.on('response', onResp)
+
   try {
     await gotoResilient(page, 'https://www.instagram.com/', { timeout: 30000, retries: 1, backoffMs: [2000] })
     await jitter(1200, 2400)
 
-    // 1) DOM: открываем панель уведомлений и читаем то, что видит человек.
     let events = []
-    let source = 'dom'
+    let source = ''
     let rowsDump = null
     let sample = ''
     let apiError
+
+    // 1) Органично открываем колокольчик → ждём перехвата JSON (до ~7с) + попутно снимаем DOM.
     try {
       await openNotifications(page)
-      const { rows, sample: s } = await readNotificationsRows(page)
-      rowsDump = rows
-      sample = s
-      events = rows.map(classifyRow).filter(Boolean).slice(0, amount)
+      for (let i = 0; i < 14 && !captured; i++) await page.waitForTimeout(500)
+      const r = await readNotificationsRows(page).catch(() => null)
+      if (r) { rowsDump = r.rows; sample = r.sample }
     } catch (e) {
-      apiError = `dom_read_failed: ${String(e?.message ?? e).slice(0, 120)}`
+      apiError = `open_failed: ${String(e?.message ?? e).slice(0, 100)}`
     }
 
-    // 2) Если DOM ничего не дал — молчаливый резерв через приватный API.
+    if (captured) { events = normalizeNews(captured).slice(0, amount); source = 'intercept' }
+    // 2) DOM-панель (резерв, если перехват пуст).
+    if (!events.length && rowsDump) { const ev = rowsDump.map(classifyRow).filter(Boolean); if (ev.length) { events = ev.slice(0, amount); source = 'dom' } }
+    // 3) Прямой fetch с полными заголовками (крайний резерв).
     if (!events.length) {
       const api = await readViaApi(page).catch(() => ({ events: [], apiError: 'api_exception' }))
       if (api.events.length) { events = api.events.slice(0, amount); source = 'api' }
@@ -114,11 +141,12 @@ export async function readSelfEvents(context, { amount = 30, raw = false } = {})
 
     const out = { events, storageState: await context.storageState() }
     if (!events.length && apiError) out.error = apiError
-    if (raw) out.raw = { source, rows: rowsDump, sample, apiError }
+    if (raw) out.raw = { source, intercepted: captured ? { topKeys: Object.keys(captured), new: (captured.new_stories || []).length, old: (captured.old_stories || []).length } : null, rows: rowsDump, sample, apiError }
     return out
   } catch (e) {
     return { events: [], error: String(e?.message ?? e).slice(0, 200) }
   } finally {
+    page.off('response', onResp)
     await page.close().catch(() => {})
   }
 }
