@@ -35,6 +35,7 @@ interface RealAccount {
   sectionId?: string | null
   hasSession?: boolean
   parseBlocked?: boolean
+  autoAcceptFollowers?: boolean
 }
 
 // Мини-спарклайн прироста подписчиков (инлайн SVG, без библиотек)
@@ -168,6 +169,19 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
     finally { setProbing(false) }
   }
 
+  // §13.11 — авто-приём заявок в подписчики (для закрытых/приватных аккаунтов).
+  const [autoAccept, setAutoAccept] = useState(Boolean(ra?.autoAcceptFollowers))
+  const [savingAuto, setSavingAuto] = useState(false)
+  const toggleAutoAccept = async () => {
+    if (!ra?.id || savingAuto) return
+    const next = !autoAccept
+    setSavingAuto(true); setAutoAccept(next)
+    try {
+      await fetch(`/api/accounts/${ra.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoAcceptFollowers: next }) })
+      onChanged?.()
+    } catch { setAutoAccept(!next) } finally { setSavingAuto(false) }
+  }
+
   const saveSection = async (nextSec: string, nextSub: string) => {
     if (!ra?.id) return
     setSavingSec(true)
@@ -290,6 +304,17 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
                 </select>
               </div>
             </div>
+          )}
+
+          {/* §13.11 — авто-приём заявок в подписчики (для закрытых/приватных аккаунтов) */}
+          {ra?.id && (
+            <label className="rounded-2xl bg-canvas px-4 py-3 flex items-start gap-2.5 text-[12.5px] cursor-pointer select-none" title="Для закрытых (приватных) аккаунтов: бот сам подтверждает входящие заявки на подписку. Без этого новый подписчик остаётся «заявкой» и триггер «Новая подписка» по нему не срабатывает.">
+              <input type="checkbox" className="mt-0.5 accent-brand w-4 h-4 shrink-0" checked={autoAccept} disabled={savingAuto} onChange={toggleAutoAccept} />
+              <span>
+                <span className="font-medium flex items-center gap-1.5">Авто-приём заявок в подписчики {savingAuto && <Loader2 className="w-3 h-3 animate-spin" />}</span>
+                <span className="block text-subt text-[11.5px] mt-0.5">Для закрытых аккаунтов: бот подтверждает входящие заявки, чтобы сработал триггер «Новая подписка».</span>
+              </span>
+            </label>
           )}
 
           {/* Прирост подписчиков */}
@@ -623,6 +648,7 @@ function Accounts() {
                       <span>Парсинг подписчиков невозможен — аккаунт скрыл список (проверенный/приватный). Триггер «Новая подписка» не сработает; комментарии и лайки — работают.</span>
                     </div>
                   )}
+
 
                   <div className="grid grid-cols-3 gap-2 mt-5 relative">
                     <div className="rounded-2xl bg-canvas p-3 text-center">

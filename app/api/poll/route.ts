@@ -6,7 +6,7 @@ import { scrapeFollowers, scrapeFollowing, scrapeComments, scrapeLikers, scraper
 import { runFollowerActionsBrowser } from '@/lib/browser/actions'
 import {
   browserComment, browserReply, browserFollow, browserLike, browserDM, browserStories,
-  browserStoryEvents, browserWarmup, browserSelfEvents,
+  browserStoryEvents, browserWarmup, browserSelfEvents, browserAcceptFollowRequests,
   parseFollowersBrowser, parseCommentsBrowser, parseLikersBrowser,
 } from '@/lib/browser/client'
 import { pickDraft, markDraftUsed } from '@/lib/browser/draftPool'
@@ -37,6 +37,7 @@ const LIKERS_PER_MEDIA = 50
 // Сколько тредов директа читать на предмет ответов/упоминаний в сторис
 const STORY_EVENTS_AMOUNT = 15
 const SELF_EVENTS_AMOUNT = 30   // plan4: сколько историй news/inbox читать за проверку
+const ACCEPT_REQUESTS_LIMIT = 10 // §13.11: сколько входящих заявок в подписчики подтверждать за цикл (ban-safety)
 // Глубина скрейпа подписчиков/подписок ОСНОВНОГО черновым для проверки гейта.
 // Держим НЕБОЛЬШОЙ (свежая порция + накопленный снапшот подписчиков): 900+900 с
 // внутренними паузами instagrapi давали ~1-2 мин НА КАЖДЫЙ аккаунт — при 10 аккаунтах
@@ -651,6 +652,19 @@ export async function POST(req: NextRequest) {
         if (browserLockHeld) {
           const fresh = await prisma.instagramAccount.findUnique({ where: { id: account.id }, select: { browserState: true } }).catch(() => null)
           if (fresh?.browserState) { originalState = fresh.browserState; liveState = fresh.browserState as object }
+          // §13.11 — приватный аккаунт: сперва подтвердить входящие заявки на подписку, иначе
+          // новый «подписчик» остаётся заявкой и триггер «Новая подписка» по нему не сработает.
+          // Идёт ДО чтения уведомлений, чтобы только что принятый подписчик попал в события follow.
+          if (account.autoAcceptFollowers) {
+            try {
+              const ar = await browserAcceptFollowRequests({ storageState: liveState as object, proxy: account.proxy ?? undefined, username: account.username, locale: account.locale ?? undefined, timezoneId: account.timezoneId ?? undefined }, ACCEPT_REQUESTS_LIMIT)
+              if (ar.browserState) liveState = ar.browserState
+              if (ar.approved?.length) await prisma.log.create({ data: { accountId: account.id, level: 'SUCCESS', message: `Приняты заявки в подписчики: ${ar.approved.map((u) => '@' + u.username).join(', ')} (из ${ar.pendingCount} ожидавших)` } }).catch(() => null)
+              else if (isManual) await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: `Заявок в подписчики нет (ожидающих: ${ar.pendingCount})` } }).catch(() => null)
+            } catch (e: any) {
+              await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Авто-приём заявок сбой: ${String(e?.message ?? e).slice(0, 120)}` } }).catch(() => null)
+            }
+          }
           try {
             const se = await browserSelfEvents({ storageState: liveState as object, proxy: account.proxy ?? undefined, username: account.username, locale: account.locale ?? undefined, timezoneId: account.timezoneId ?? undefined }, { amount: SELF_EVENTS_AMOUNT })
             if (se.browserState) liveState = se.browserState

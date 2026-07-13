@@ -3,7 +3,7 @@
 import express from 'express'
 import { getBrowser, newAccountContext, closeContextSafe } from './lib/browser.js'
 import { attemptLogin, resumeCode, resendCode, loginByState, testSession, warmupSession } from './lib/login.js'
-import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment, readStoryEvents } from './lib/actions.js'
+import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment, readStoryEvents, acceptFollowRequests } from './lib/actions.js'
 import { parseFollowers, parseFollowing, parseComments, parseLikers } from './lib/parse.js'
 import { runVisit } from './lib/session.js'
 import { readSelfEvents } from './lib/selfevents.js'
@@ -12,7 +12,7 @@ import { toStorageState } from './lib/state.js'
 import { fingerprint } from './lib/fingerprint.js'
 import { fingerprintSelfTest } from './lib/selftest.js'
 
-const BUILD = '2026-07-13-browser-49-action-order'
+const BUILD = '2026-07-13-browser-50-accept-requests'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -290,6 +290,8 @@ app.post('/story-inbox', actionRoute((ctx, b) => readStoryEvents(ctx, { amount: 
 // plan4: СВОИ уведомления (лента активности) — детект follow/like/comment основным аккаунтом.
 // raw=true → сырой payload news/inbox (Фаза B: снять формат на живом).
 app.post('/self-events', actionRoute((ctx, b) => readSelfEvents(ctx, { amount: b.amount, raw: b.raw })))
+// §13.11 — авто-приём заявок в подписчики (приватный аккаунт): подтвердить ожидающие follow-requests.
+app.post('/follow-requests/accept', actionRoute((ctx, b) => acceptFollowRequests(ctx, { limit: b.limit })))
 
 // ── Парсинг черновыми (Фаза 3, plan.md §4.4/§5) — DOM, без сохранения browserState (чтение) ──
 app.post('/parse/followers', actionRoute((ctx, b) => parseFollowers(ctx, { targetUsername: b.targetUsername, limit: b.limit })))

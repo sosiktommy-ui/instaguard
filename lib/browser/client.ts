@@ -210,6 +210,13 @@ export function browserSelfEvents(ctx: Ctx, opts: { amount?: number; raw?: boole
   return browserFetch<{ events: SelfEvent[]; raw?: any; error?: string; browserState?: object }>('/self-events', { ...ctx, amount: opts.amount, raw: opts.raw })
 }
 
+// §13.11 — авто-приём заявок в подписчики (для приватных аккаунтов): подтвердить ожидающие
+// follow-requests. Возвращает сколько было ожидающих и кого подтвердили (+ обновлённый browserState).
+export interface AcceptRequestsResult { pendingCount: number; approved: { pk: string; username: string }[]; errors?: string[]; browserState?: object }
+export function browserAcceptFollowRequests(ctx: Ctx, limit = 10) {
+  return browserFetch<AcceptRequestsResult>('/follow-requests/accept', { ...ctx, limit })
+}
+
 // ── Парсинг черновыми (Фаза 3, plan.md §4.4/§5). Формы = lib/scraper/hiker.ts, чтобы
 // poll/route.ts мог переключаться между API/черновыми без переписывания потребителей.
 // ⚠️ ЭКСПЕРИМЕНТАЛЬНО — DOM-парсинг воркера не проверялся на живом Instagram, см.

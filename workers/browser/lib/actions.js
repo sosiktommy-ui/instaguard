@@ -273,6 +273,50 @@ export async function replyComment(context, { postUrl, text, dryRun }) {
   return commentPost(context, { postUrl, text, dryRun })
 }
 
+// ── §13.11 Авто-приём заявок в подписчики (для ЗАКРЫТЫХ/приватных аккаунтов) ─────
+// Приватный аккаунт получает не «нового подписчика», а «заявку на подписку» — пока её не
+// подтвердить, человек не подписчик и триггер «Новая подписка» по нему не сработает. Читаем
+// ожидающие заявки и подтверждаем каждую тем же приватным web-API изнутри залогиненной страницы
+// (как readStoryEvents). Approve — POST с csrftoken из cookie. Пейсинг между подтверждениями +
+// лимит на цикл (ban-safety: приём СВОИХ подписчиков естественен, но не залпом).
+export async function acceptFollowRequests(context, { limit = 10 } = {}) {
+  await requireSession(context)
+  const page = await context.newPage()
+  await gotoResilient(page, 'https://www.instagram.com/', { timeout: 30000, retries: 1, backoffMs: [2000] })
+  await jitter(1200, 2200)
+
+  const result = await page.evaluate(async (limit) => {
+    const csrf = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || ''
+    const headers = { 'x-ig-app-id': '936619743392459' }
+    async function getJson(url) {
+      try { const r = await fetch(url, { headers, credentials: 'include' }); if (!r.ok) return null; return await r.json() } catch { return null }
+    }
+    const pend = await getJson('/api/v1/friendships/pending/')
+    const users = Array.isArray(pend?.users) ? pend.users : []
+    const pendingCount = users.length
+    const approved = []
+    const errors = []
+    for (const u of users.slice(0, limit)) {
+      const pk = String(u.pk || u.pk_id || '')
+      if (!pk) continue
+      try {
+        const r = await fetch(`/api/v1/friendships/approve/${pk}/`, {
+          method: 'POST',
+          headers: { ...headers, 'x-csrftoken': csrf, 'content-type': 'application/x-www-form-urlencoded' },
+          credentials: 'include', body: '',
+        })
+        if (r.ok) approved.push({ pk, username: u.username || '' })
+        else errors.push(`approve ${u.username || pk}: http ${r.status}`)
+      } catch (e) { errors.push(`approve ${u.username || pk}: ${String(e).slice(0, 60)}`) }
+      // человекоподобная пауза между подтверждениями
+      await new Promise((res) => setTimeout(res, 900 + Math.random() * 1800))
+    }
+    return { pendingCount, approved, errors }
+  }, limit)
+
+  return { ...result, storageState: await safeStorageState(context) }
+}
+
 // ── Стори-события из директа (ответы на мои сторис + упоминания) ─────────────────
 // Читаем ВЕБ-приватный API изнутри залогиненной страницы (fetch с cookies + x-ig-app-id) —
 // это надёжнее DOM-скрейпа инбокса (React-вёрстка часто меняется). Форма события совпадает
