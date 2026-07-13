@@ -36,6 +36,24 @@ describe('selectTargets', () => {
     expect(leftover.every((x) => !known.has(pkOf(x)))).toBe(true)
   })
 
+  it('«дрип»: limit ограничивает обработку за цикл, остальные новые ждут (не помечены known)', () => {
+    const known = new Set<string>(['x'])
+    const all = items(10)
+    const r = selectTargets(all, known, true, pkOf, 3) // дрип 3 за цикл
+    expect(r.fresh.length).toBe(10)      // все 10 видны как новые
+    expect(r.process.length).toBe(3)     // обработали только 3
+    // 7 необработанных НЕ помечены → добьются в следующих циклах (никто не потерян)
+    const processed = new Set(r.process.map(pkOf))
+    expect(r.fresh.filter((x) => !processed.has(pkOf(x))).every((x) => !known.has(pkOf(x)))).toBe(true)
+  })
+
+  it('limit клампится: 0 → минимум 1; больше MAX_NEW_PER_POLL → MAX', () => {
+    const known1 = new Set<string>(['x'])
+    expect(selectTargets(items(5), known1, true, pkOf, 0).process.length).toBe(1)   // не меньше 1
+    const known2 = new Set<string>(['x'])
+    expect(selectTargets(items(MAX_NEW_PER_POLL + 5), known2, true, pkOf, 999).process.length).toBe(MAX_NEW_PER_POLL) // не больше MAX
+  })
+
   it('пустой pk (pkOf → "") исключается из новых', () => {
     const known = new Set<string>(['seed'])
     const all = [{ pk: '' }, { pk: '10' }, { pk: '' }]

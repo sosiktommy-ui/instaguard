@@ -14,7 +14,7 @@ import { acquireBrowserLock, releaseBrowserLock } from '@/lib/browserLock'
 import { loadDelivery, deliveryUnhealthy, recordDelivery, DELIVERY_SLOWDOWN_FACTOR } from '@/lib/delivery'
 import { mediaPostUrl } from '@/lib/instagram/shortcode'
 import { Queue } from 'bullmq'
-import { loadCounters, consume, warmupFactor, scaleCaps, type Counters, type ActionKind } from '@/lib/limits'
+import { loadCounters, consume, warmupFactor, scaleCaps, MAX_NEW_PER_POLL, type Counters, type ActionKind } from '@/lib/limits'
 import { activityWindow } from '@/lib/activity'
 import { getCurrentUser } from '@/lib/auth'
 import { mergeStatsMap } from '@/lib/stats'
@@ -409,6 +409,13 @@ export async function POST(req: NextRequest) {
     let cursor = (isManual ? 8 + Math.random() * 14 : 45 + Math.random() * 75) * 1000
     const nextGap = () => (45 + Math.random() * 70) * 1000
 
+    // §1.8 «Дрип» новых целей: даже если за интервал накопилось много новых (10 подписок разом),
+    // за ОДИН цикл обрабатываем лишь МАЛЕНЬКУЮ рандомную порцию (2–4), остальные остаются «свежими»
+    // и добираются в следующих циклах — так серия действий не улетает залпом (топ-сигнал бана), но
+    // никто не теряется (selectTargets помечает известными ТОЛЬКО обработанных). Ручной запуск —
+    // обрабатывает больше (до MAX_NEW_PER_POLL): пользователь явно ждёт результат.
+    const newCap = isManual ? MAX_NEW_PER_POLL : 2 + Math.floor(Math.random() * 3)
+
     // Прогрев: дневные лимиты ужимаются по возрасту основного аккаунта (свежий не срывается на полную).
     const warm = warmupFactor(account.createdAt)
     const caps = scaleCaps(warm)
@@ -637,7 +644,7 @@ export async function POST(req: NextRequest) {
           const knownPks = extractKnownPks(snapFollowers?.data)
           // Первая проверка (нет снапшота) — только фиксируем базу, НЕ обрабатываем существующих
           // подписчиков (иначе на новом аккаунте будет массовая рассылка → бан).
-          const { fresh, process } = selectTargets(followers, knownPks, hadBaseline, (f) => String(f.pk))
+          const { fresh, process } = selectTargets(followers, knownPks, hadBaseline, (f) => String(f.pk), newCap)
 
           if (isManual) {
             const msg = !hadBaseline
@@ -672,7 +679,7 @@ export async function POST(req: NextRequest) {
           const likers = selfLikes
           const hadBaseline = Boolean(snapLikesMeta)
           const knownL = extractKnownPks(snapLikesMeta?.data)
-          const { fresh, process } = selectTargets(likers, knownL, hadBaseline, (l) => String(l.pk))
+          const { fresh, process } = selectTargets(likers, knownL, hadBaseline, (l) => String(l.pk), newCap)
 
           await prisma.$transaction([
             prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'LIKES' } }),
@@ -711,7 +718,7 @@ export async function POST(req: NextRequest) {
         }
         const hadBaseline = Boolean(snapStoryMeta)
         const knownS = extractKnownPks(snapStoryMeta?.data)
-        const { fresh, process } = selectTargets(events, knownS, hadBaseline, (e) => (e.pk ? String(e.pk) : ''))
+        const { fresh, process } = selectTargets(events, knownS, hadBaseline, (e) => (e.pk ? String(e.pk) : ''), newCap)
 
         await prisma.$transaction([
           prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'STORY' } }),
@@ -742,7 +749,7 @@ export async function POST(req: NextRequest) {
         const knownC = extractKnownPks(snapCommentsMeta?.data)
         // Первая проверка (нет снапшота) — только фиксируем базу, НЕ реагируем на старые комменты,
         // иначе бот разом ответит на все существующие. Реагируем только на появившиеся после базы.
-        const { fresh, process: toProcess } = selectTargets(comments, knownC, hadBaseline, (c) => String(c.pk))
+        const { fresh, process: toProcess } = selectTargets(comments, knownC, hadBaseline, (c) => String(c.pk), newCap)
 
         await prisma.$transaction([
           prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'COMMENTS' } }),
@@ -786,7 +793,10 @@ export async function POST(req: NextRequest) {
             const errors: string[] = []
             const incFired: Record<string, number> = {}   // «сработало» (попытки)
             const incDone: Record<string, number> = {}    // «выполнено» (успехи)
-            const postUrl = mediaPostUrl(c.media_id)
+            // Ответ в комментах требует URL поста. media_id берётся из уведомления (self-events);
+            // если его нет — НЕ строим битый `/p//` (навигация туда всегда проваливала реплай),
+            // а честно помечаем реплай невозможным (см. лог ниже).
+            const postUrl = c.media_id ? mediaPostUrl(c.media_id) : ''
 
             // Проверка подписки: если автор НЕ проходит гейт — только коммент-приглашение, стоп
             if (gateCfg) {
@@ -794,7 +804,9 @@ export async function POST(req: NextRequest) {
 
               if (!ok) {
                 const gateText = gateCfg.inviteText.replace(/\{\{username\}\}/gi, c.username)
-                if (gateText && use('comment')) {
+                if (gateText && !postUrl) {
+                  errors.push('коммент-приглашение: не удалось определить пост для ответа (в уведомлении нет media_id)')
+                } else if (gateText && use('comment')) {
                   incFired.comment = (incFired.comment || 0) + 1
                   try {
                     { const r = await browserReply(bctx(), postUrl, gateText); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не отправлен') }
@@ -810,7 +822,11 @@ export async function POST(req: NextRequest) {
             if (!gatedStop) {
               if (reply) {
                 const variants: string[] = (reply.replies ?? []).filter(Boolean)
-                if (variants.length && use('comment')) {
+                if (!variants.length) {
+                  errors.push('ответ в комментах: не задан ни один вариант ответа (добавьте текст в кампании)')
+                } else if (!postUrl) {
+                  errors.push('ответ в комментах: не удалось определить пост для ответа (в уведомлении нет media_id)')
+                } else if (use('comment')) {
                   incFired.comment = (incFired.comment || 0) + 1
                   const pick = variants[Math.floor(Math.random() * variants.length)].replace(/\{\{username\}\}/gi, c.username)
                   try {
@@ -818,7 +834,7 @@ export async function POST(req: NextRequest) {
                     fired = true; incDone.comment = (incDone.comment || 0) + 1
                   }
                   catch (e: any) { errors.push(`ответ: ${e.message}`) }
-                }
+                } else { errors.push('ответ в комментах: дневной лимит комментариев исчерпан') }
               }
               if (doLikePosts && use('like', COMMENT_LIKE_POSTS)) {
                 incFired.like = (incFired.like || 0) + 1
@@ -836,14 +852,16 @@ export async function POST(req: NextRequest) {
                 // реализован (нужен клик по коммент-нити, [A4]). Новые кампании его не создают.
                 errors.push('лайк коммента: не поддерживается (legacy-тип, используйте «Лайк постов»)')
               }
-              if (doFollow && use('follow')) {
-                incFired.follow = (incFired.follow || 0) + 1
-                await randDelay(2, 5)
-                try {
-                  { const r = await browserFollow(bctx(), c.username); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не подписан') }
-                  fired = true; incDone.follow = (incDone.follow || 0) + 1
-                }
-                catch (e: any) { errors.push(`подписка: ${e.message}`) }
+              if (doFollow) {
+                if (use('follow')) {
+                  incFired.follow = (incFired.follow || 0) + 1
+                  await randDelay(2, 5)
+                  try {
+                    { const r = await browserFollow(bctx(), c.username); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не подписан') }
+                    fired = true; incDone.follow = (incDone.follow || 0) + 1
+                  }
+                  catch (e: any) { errors.push(`подписка: ${e.message}`) }
+                } else { errors.push('подписка: дневной лимит подписок исчерпан') }
               }
               // Меж-потоковый дедуп директа (как в handleTargets): если этому автору директ
               // в цикле уже уходил (напр. он же новый подписчик) — не дублируем. Проверка ДО use.

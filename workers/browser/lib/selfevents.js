@@ -7,7 +7,7 @@
 // follow; превью поста → like/comment). Актор (username) берём из ссылки на профиль (/username/) —
 // это язык-независимо. При raw=true возвращаем сырой текст/строки панели — для сверки на живом.
 import { jitter, preActionBrowse } from './human.js'
-import { gotoResilient, hasSessionCookie } from './browser.js'
+import { gotoResilient, hasSessionCookie, safeStorageState } from './browser.js'
 import { normalizeNews, classifyRow } from './newsparse.js'   // чистый разбор (юнит-тестится)
 
 const IG_APP_ID = '936619743392459'
@@ -217,7 +217,7 @@ export async function readSelfEvents(context, { amount = 30, raw = false } = {})
       if (ev.length) { events = ev.slice(0, amount); source = 'dom' }
     }
 
-    const out = { events, storageState: await context.storageState() }
+    const out = { events, storageState: await safeStorageState(context) }
     if (!events.length && apiError) out.error = apiError
     if (raw) out.raw = { source, panelOpened, capturedReq: capturedReq ? { url: capturedReq.url, method: capturedReq.method || 'GET' } : null, intercepted: captured ? { topKeys: Object.keys(captured), new: (captured.new_stories || []).length, old: (captured.old_stories || []).length } : null, rows: rowsDump, sample, apiError }
     return out

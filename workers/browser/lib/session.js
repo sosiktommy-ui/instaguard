@@ -7,6 +7,7 @@
 // исполняет. Fallback при закрытой личке (follow+like) исполняется В ТОМ ЖЕ визите, если
 // Next.js разрешил флагами задачи (бюджет он уже зарезервировал).
 import { sendDM, followUser, likeUser, viewStories } from './actions.js'
+import { safeStorageState } from './browser.js'
 import { warmupFeed, jitter } from './human.js'
 
 const DEAD = /login_required|сессия недейств|checkpoint|challenge/i
@@ -64,5 +65,5 @@ export async function runVisit(context, { tasks = [], warmup = true } = {}) {
     if (!brk) await jitter(1500, 5000) // человеческая пауза между задачами визита
   }
 
-  return { done, closed, errors, brk, storageState: await context.storageState() }
+  return { done, closed, errors, brk, storageState: await safeStorageState(context) }
 }

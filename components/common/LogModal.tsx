@@ -44,6 +44,7 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
   title: string; subtitle?: string; accountId: string; matchText?: string; onClose: () => void
 }) {
   const [logs, setLogs] = useState<LogEntry[] | null>(null)
+  const [filter, setFilter] = useState<'all' | 'success' | 'issues' | 'info'>('all')
 
   const load = () => {
     setLogs(null)
@@ -55,9 +56,24 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
 
   useEffect(() => { load() }, [accountId])
 
-  const filtered = (logs ?? []).filter((l) => !matchText || l.message.includes(matchText))
-  const okCount = filtered.filter((l) => l.level === 'SUCCESS').length
-  const issueCount = filtered.filter((l) => l.level === 'ERROR' || l.level === 'WARN').length
+  const scoped = (logs ?? []).filter((l) => !matchText || l.message.includes(matchText))
+  const okCount = scoped.filter((l) => l.level === 'SUCCESS').length
+  const issueCount = scoped.filter((l) => l.level === 'ERROR' || l.level === 'WARN').length
+  const infoCount = scoped.filter((l) => l.level === 'INFO').length
+
+  // Фильтр по категории (по запросу: «хорошие логи» vs «плохие ошибки» + инфо).
+  const filtered = scoped.filter((l) =>
+    filter === 'all' ? true
+    : filter === 'success' ? l.level === 'SUCCESS'
+    : filter === 'issues' ? (l.level === 'ERROR' || l.level === 'WARN')
+    : l.level === 'INFO')
+
+  const TABS: { key: typeof filter; label: string; count: number; color?: string }[] = [
+    { key: 'all', label: 'Все', count: scoped.length },
+    { key: 'success', label: 'Успех', count: okCount, color: '#34c759' },
+    { key: 'issues', label: 'Ошибки', count: issueCount, color: '#ff3b30' },
+    { key: 'info', label: 'Инфо', count: infoCount, color: '#8e8e93' },
+  ]
 
   const groups: { label: string; items: LogEntry[] }[] = []
   for (const l of filtered) {
@@ -86,12 +102,17 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
           </div>
         </div>
 
-        {logs !== null && filtered.length > 0 && (
-          <div className="flex items-center gap-3 px-5 py-2.5 border-b border-black/[0.05] text-[12px] shrink-0">
-            <span className="flex items-center gap-1.5 text-ok font-medium"><CheckCircle2 className="w-3.5 h-3.5" /> {okCount} успешно</span>
-            {issueCount > 0
-              ? <span className="flex items-center gap-1.5 text-bad font-medium"><AlertCircle className="w-3.5 h-3.5" /> {issueCount} с ошибками</span>
-              : <span className="flex items-center gap-1.5 text-subt">без ошибок</span>}
+        {logs !== null && scoped.length > 0 && (
+          <div className="flex items-center gap-1.5 px-5 py-2.5 border-b border-black/[0.05] shrink-0 overflow-x-auto">
+            {TABS.map((t) => (
+              <button key={t.key} onClick={() => setFilter(t.key)}
+                className={cn('flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium whitespace-nowrap transition-colors',
+                  filter === t.key ? 'bg-brand/10 text-brand' : 'text-subt hover:bg-black/[0.03]')}>
+                {t.color && <span className="w-1.5 h-1.5 rounded-full" style={{ background: t.color }} />}
+                {t.label}
+                <span className={cn('text-[11px]', filter === t.key ? 'text-brand/70' : 'text-subt/60')}>{t.count}</span>
+              </button>
+            ))}
           </div>
         )}
 
@@ -101,7 +122,7 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
           ) : filtered.length === 0 ? (
             <div className="py-14 flex flex-col items-center text-center gap-2.5">
               <div className="w-12 h-12 rounded-2xl bg-canvas flex items-center justify-center"><ScrollText className="w-5 h-5 text-subt" /></div>
-              <div className="text-[13px] text-subt">Пока тихо — записей нет</div>
+              <div className="text-[13px] text-subt">{scoped.length > 0 ? 'В этой категории записей нет' : 'Пока тихо — записей нет'}</div>
             </div>
           ) : (
             <div className="space-y-4">

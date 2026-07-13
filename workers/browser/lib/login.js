@@ -3,7 +3,7 @@
 // жизнью контекста (хранение между /login и /login/checkpoint) — на server.js.
 import crypto from 'crypto'
 import { SEL, URLS } from './selectors.js'
-import { firstVisible, firstVisibleAnyFrame, clickByText, pageHasText, hasSessionCookie, gotoResilient } from './browser.js'
+import { firstVisible, firstVisibleAnyFrame, clickByText, pageHasText, hasSessionCookie, gotoResilient, safeStorageState } from './browser.js'
 import { humanType, jitter, idleMouse, warmupFeed, humanClick } from './human.js'
 
 const LOGIN_URL = 'https://www.instagram.com/accounts/login/'
@@ -228,7 +228,7 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
     if (await hasSessionCookie(context)) {
       await dismissInterstitials(page)
       const uname = (await extractUsername(page)) || username
-      const storageState = await context.storageState()
+      const storageState = await safeStorageState(context)
       return { ok: true, username: uname, storageState }
     }
 
@@ -252,7 +252,7 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
           if (await hasSessionCookie(context)) {
             await dismissInterstitials(page)
             const uname = (await extractUsername(page)) || username
-            return { ok: true, username: uname, storageState: await context.storageState() }
+            return { ok: true, username: uname, storageState: await safeStorageState(context) }
           }
         }
       }
@@ -325,7 +325,7 @@ export async function resumeCode(context, { code }) {
     // Вдруг уже вошли (кука появилась).
     if (await hasSessionCookie(context)) {
       const uname = (await extractUsername(page)) || 'unknown'
-      return { ok: true, username: uname, storageState: await context.storageState() }
+      return { ok: true, username: uname, storageState: await safeStorageState(context) }
     }
     // Не нашли поле — приложим СКРИН + DOM-дамп реального экрана подтверждения, чтобы
     // сразу видеть настоящее имя/тип поля (как сделали для формы входа), а не гадать.
@@ -345,7 +345,7 @@ export async function resumeCode(context, { code }) {
     if (await hasSessionCookie(context)) {
       await dismissInterstitials(page)
       const uname = (await extractUsername(page)) || 'unknown'
-      return { ok: true, username: uname, storageState: await context.storageState() }
+      return { ok: true, username: uname, storageState: await safeStorageState(context) }
     }
     const err = await firstVisible(page, SEL.loginError, 400)
     if (err) {
@@ -396,7 +396,7 @@ export async function loginByState(context) {
       await fail(page, 'session_rejected: кука есть, но сервер Instagram показал форму входа (сессия истекла/поддельная/чужой аккаунт ИЛИ гео-несовпадение прокси). Нужен прокси в стране аккаунта или свежая сессия.')
     }
   }
-  return { ok: true, username: uname || 'unknown', storageState: await context.storageState() }
+  return { ok: true, username: uname || 'unknown', storageState: await safeStorageState(context) }
 }
 
 export async function testSession(context) {
@@ -422,9 +422,9 @@ export async function warmupSession(context) {
     await warmupFeed(page) // навигация на главную + человекоподобный скролл (human.js)
     const alive = await hasSessionCookie(context)
     if (alive) await dismissInterstitials(page).catch(() => {})
-    return { alive, storageState: await context.storageState() }
+    return { alive, storageState: await safeStorageState(context) }
   } catch {
     // Сбой прогрева не должен ронять цикл — вернём текущее состояние и «жива по куке».
-    return { alive: await hasSessionCookie(context).catch(() => false), storageState: await context.storageState().catch(() => null) }
+    return { alive: await hasSessionCookie(context).catch(() => false), storageState: await safeStorageState(context).catch(() => null) }
   }
 }

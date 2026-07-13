@@ -1,7 +1,7 @@
 // Действия аккаунта через браузер. См. plan.md §4.6. Каждое возвращает обновлённый
 // storageState (сессия «дозревает»). Работают по username (навигация /{username}/).
 import { SEL } from './selectors.js'
-import { firstVisible, clickByText, findByText, pageHasText, hasSessionCookie, gotoResilient } from './browser.js'
+import { firstVisible, clickByText, findByText, pageHasText, hasSessionCookie, gotoResilient, safeStorageState } from './browser.js'
 import { humanType, jitter, idleMouse, preActionBrowse, humanClick } from './human.js'
 
 async function openProfile(context, username) {
@@ -105,7 +105,7 @@ export async function sendDM(context, { toUsername, text, image, dryRun }) {
       await clickByText(page, SEL.messageButton, { timeout: 6000 })
       composer = Boolean(await firstVisible(page, SEL.dmTextbox, 8000))
     }
-    return { ok: btn, dryRun: true, closed: !btn, reached: { messageButton: btn, composer }, storageState: await context.storageState() }
+    return { ok: btn, dryRun: true, closed: !btn, reached: { messageButton: btn, composer }, storageState: await safeStorageState(context) }
   }
 
   // Кнопка «Message» на профиле. Нет → личка закрыта/ограничена.
@@ -148,7 +148,7 @@ export async function sendDM(context, { toUsername, text, image, dryRun }) {
   }
 
   // Сессия «дозрела» в любом исходе — возвращаем storageState (недоставка текста = транзиент, ретрай).
-  const storageState = await context.storageState()
+  const storageState = await safeStorageState(context)
   if (text && !delivered) return { ok: false, delivered: false, error: deliverErr, storageState }
   return { ok: true, delivered: true, photo, error: deliverErr, storageState }
 }
@@ -159,17 +159,17 @@ export async function followUser(context, { targetUsername, dryRun }) {
   const page = await openProfile(context, targetUsername)
 
   if (await pageHasText(page, SEL.followingState)) {
-    return { ok: true, already: true, dryRun: dryRun || undefined, storageState: await context.storageState() }
+    return { ok: true, already: true, dryRun: dryRun || undefined, storageState: await safeStorageState(context) }
   }
   // §10.3 dry-run: проверяем присутствие кнопки «Подписаться», НЕ кликаем.
   if (dryRun) {
     const btn = await findByText(page, SEL.followButton, { timeout: 8000 })
-    return { ok: btn, dryRun: true, reached: { followButton: btn }, storageState: await context.storageState() }
+    return { ok: btn, dryRun: true, reached: { followButton: btn }, storageState: await safeStorageState(context) }
   }
   const clicked = await clickByText(page, SEL.followButton, { timeout: 8000 })
   if (!clicked) return { ok: false, error: 'follow_button_not_found: кнопка «Подписаться» не найдена' }
   await jitter(900, 1800)
-  return { ok: true, storageState: await context.storageState() }
+  return { ok: true, storageState: await safeStorageState(context) }
 }
 
 // ── Лайк последних постов ─────────────────────────────────────────────────────
@@ -192,7 +192,7 @@ export async function likeUser(context, { targetUsername, count = 1, dryRun }) {
       const b = page.locator('div[role="button"]:has(svg[aria-label="Like"]), div[role="button"]:has(svg[aria-label="Нравится"])').first()
       likeBtn = await b.isVisible().catch(() => false)
     } catch {}
-    return { ok: likeBtn, dryRun: true, reached: { posts: postLinks.length, likeButton: likeBtn }, storageState: await context.storageState() }
+    return { ok: likeBtn, dryRun: true, reached: { posts: postLinks.length, likeButton: likeBtn }, storageState: await safeStorageState(context) }
   }
 
   let liked = 0
@@ -208,7 +208,7 @@ export async function likeUser(context, { targetUsername, count = 1, dryRun }) {
       }
     } catch {}
   }
-  return { ok: liked > 0, liked, storageState: await context.storageState() }
+  return { ok: liked > 0, liked, storageState: await safeStorageState(context) }
 }
 
 // ── Сторис: просмотр (+опц. лайк) ─────────────────────────────────────────────
@@ -225,7 +225,7 @@ export async function viewStories(context, { targetUsername, like = false, dryRu
   if (!isViewer) return { ok: false, viewed, liked, dryRun: dryRun || undefined, error: 'no_stories: активных сторис нет' }
 
   // §10.3 dry-run: убеждаемся, что вьюер сторис открылся, но НЕ лайкаем и не пролистываем дальше.
-  if (dryRun) return { ok: true, dryRun: true, reached: { storyViewer: true }, viewed: 1, liked: 0, storageState: await context.storageState() }
+  if (dryRun) return { ok: true, dryRun: true, reached: { storyViewer: true }, viewed: 1, liked: 0, storageState: await safeStorageState(context) }
 
   // Пролистать несколько кадров.
   for (let i = 0; i < 4; i++) {
@@ -240,7 +240,7 @@ export async function viewStories(context, { targetUsername, like = false, dryRu
     await page.keyboard.press('ArrowRight').catch(() => {})
     if (!page.url().includes('/stories/')) break
   }
-  return { ok: true, viewed, liked, storageState: await context.storageState() }
+  return { ok: true, viewed, liked, storageState: await safeStorageState(context) }
 }
 
 // ── Комментарий к посту ───────────────────────────────────────────────────────
@@ -254,14 +254,14 @@ export async function commentPost(context, { postUrl, text, dryRun }) {
   const box = await firstVisible(page, SEL.commentBox, 10000)
   if (!box) return { ok: false, dryRun: dryRun || undefined, error: 'comment_box_not_found: поле комментария недоступно' }
   // §10.3 dry-run: поле комментария найдено — НЕ печатаем и не публикуем.
-  if (dryRun) return { ok: true, dryRun: true, reached: { commentBox: true }, storageState: await context.storageState() }
+  if (dryRun) return { ok: true, dryRun: true, reached: { commentBox: true }, storageState: await safeStorageState(context) }
   await box.click({ delay: 50 })
   await humanType(box, text)
   await jitter(500, 1100)
   const posted = await clickByText(page, SEL.commentPost, { timeout: 4000 })
   if (!posted) await box.press('Enter')
   await jitter(1200, 2200)
-  return { ok: true, storageState: await context.storageState() }
+  return { ok: true, storageState: await safeStorageState(context) }
 }
 
 // Ответ в комментариях — для Фазы 2 трактуем как обычный коммент к посту
@@ -322,5 +322,5 @@ export async function readStoryEvents(context, { amount = 10 } = {}) {
     return out
   }, amount)
 
-  return { events: Array.isArray(events) ? events : [], storageState: await context.storageState() }
+  return { events: Array.isArray(events) ? events : [], storageState: await safeStorageState(context) }
 }

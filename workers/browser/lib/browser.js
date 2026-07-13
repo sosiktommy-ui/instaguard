@@ -181,6 +181,13 @@ export async function closeContextSafe(context) {
   try { await context?.close() } catch {}
 }
 
+// context.storageState() бросает "Target page, context or browser has been closed", если контекст
+// уже закрыт (краш браузера / дохлый прокси оборвал соединение / гонка закрытия). Тогда возвращаем
+// undefined, а не роняем ВСЁ действие криптовой ошибкой — сессия просто не «дозреет» в этот раз.
+export async function safeStorageState(context) {
+  try { return await context.storageState() } catch { return undefined }
+}
+
 /**
  * Навигация с ретраями на СЕТЕВЫЕ сбои (ротирующие/резидентные прокси часто моргают
  * и восстанавливаются — техника из Python-воркера, `_login_with_retry`,
