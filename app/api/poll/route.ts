@@ -36,7 +36,9 @@ const LIKERS_MEDIA_COUNT = 3
 const LIKERS_PER_MEDIA = 50
 // Сколько тредов директа читать на предмет ответов/упоминаний в сторис
 const STORY_EVENTS_AMOUNT = 15
-const SELF_EVENTS_AMOUNT = 30   // plan4: сколько историй news/inbox читать за проверку
+const SELF_EVENTS_AMOUNT = 60   // plan4: сколько историй news/inbox читать за проверку (шире окно —
+                                // при всплеске (много подписок/комментов разом) не теряем старые события;
+                                // сами действия всё равно ограничены дневными лимитами + «дрипом»)
 const ACCEPT_REQUESTS_LIMIT = 10 // §13.11: сколько входящих заявок в подписчики подтверждать за цикл (ban-safety)
 // Глубина скрейпа подписчиков/подписок ОСНОВНОГО черновым для проверки гейта.
 // Держим НЕБОЛЬШОЙ (свежая порция + накопленный снапшот подписчиков): 900+900 с
@@ -383,6 +385,9 @@ export async function POST(req: NextRequest) {
     // Прокси обязателен и не задан → НЕ работаем этим аккаунтом (защита от мгновенного бана).
     // Отключается тумблером «Работать без прокси» в Настройках.
     if (proxyRequired(account.userId) && !account.proxy) {
+      // Бот ПОСМОТРЕЛ аккаунт (но без прокси не действует) — отмечаем время проверки, чтобы в
+      // Настройках «Последняя проверка» была честной (бот жив и проверяет), а не «6 ч назад».
+      await prisma.instagramAccount.update({ where: { id: account.id }, data: { lastChecked: new Date() } }).catch(() => null)
       summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, triggersFound: account.triggersAsResponder.length, totalComments: 0, newComments: 0, commentActions: 0, skipped: 'no-proxy' })
       continue
     }
@@ -413,7 +418,7 @@ export async function POST(req: NextRequest) {
     // Честно метим CHALLENGE (нужен повторный вход браузером) и пропускаем — без инкремента ошибок.
     // Аккаунт с browserState (нормальный браузерный вход) сюда не попадает; все тут — status ACTIVE.
     if (!account.browserState) {
-      await prisma.instagramAccount.update({ where: { id: account.id }, data: { status: 'CHALLENGE' } }).catch(() => null)
+      await prisma.instagramAccount.update({ where: { id: account.id }, data: { status: 'CHALLENGE', lastChecked: new Date() } }).catch(() => null)
       await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: '⚠️ Нет браузерной сессии — переподключите аккаунт (вход браузером). Действия не выполняются, пока нет browserState.' } }).catch(() => null)
       summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, triggersFound: triggers.length, totalComments: 0, newComments: 0, commentActions: 0, skipped: 'no-browser-session' })
       continue
@@ -425,6 +430,10 @@ export async function POST(req: NextRequest) {
     if (!isManual) {
       const aw = activityWindow(account.timezoneId, account.username)
       if (!aw.active) {
+        // Тихие часы (ночь/выходной по таймзоне аккаунта) — бот СОЗНАТЕЛЬНО молчит (анти-бан, §1.6).
+        // Но проверку он выполнил → отмечаем lastChecked, чтобы «Последняя проверка» не выглядела
+        // «зависшей» на 6 ч (первое утреннее действие сдвинется максимум на 1 интервал — естественно).
+        await prisma.instagramAccount.update({ where: { id: account.id }, data: { lastChecked: new Date() } }).catch(() => null)
         summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, triggersFound: triggers.length, totalComments: 0, newComments: 0, commentActions: 0, skipped: aw.reason ?? 'quiet-hours' })
         continue
       }
