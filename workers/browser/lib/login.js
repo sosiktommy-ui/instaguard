@@ -8,6 +8,16 @@ import { humanType, jitter, idleMouse, warmupFeed, humanClick } from './human.js
 
 const LOGIN_URL = 'https://www.instagram.com/accounts/login/'
 
+// Instagram на экране «incorrect login» НЕ различает «реально неверный пароль» и «верный пароль,
+// но вход временно ограничен после частых попыток с разных IP/устройств» (анти-брутфорс маскируется
+// под тот же текст). Поэтому сообщение называет ОБЕ причины и что делать — не врём «пароль неверный».
+const BAD_CREDS_MSG =
+  'bad_password: Instagram показал «неверный логин/пароль». Это либо реально неверные данные, ' +
+  'ЛИБО (если пароль точно верный) временное ограничение входа после частых попыток с разных IP/устройств — ' +
+  'IG маскирует анти-брутфорс тем же текстом. Что делать: не входить повторно (каждая попытка усугубляет), ' +
+  'подождать несколько часов, использовать ОДИН стабильный резидентный/мобильный прокси, а лучше — войти вручную ' +
+  'с доверенного телефона, подтвердить, и подключить аккаунт по КУКАМ (готовая сессия не триггерит новый вход).'
+
 // ── TOTP (2FA-ключ base32 → 6-значный код), без внешних зависимостей ──
 function base32Decode(s) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
@@ -283,7 +293,7 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
     const err = await firstVisible(page, SEL.loginError, 500)
     if (err) {
       const txt = (await err.textContent().catch(() => '')) || ''
-      if (/incorrect|неверн|wasn't right|couldn't find/i.test(txt)) await fail(page, 'bad_password: ' + txt.trim())
+      if (/incorrect|неверн|wasn't right|couldn't find|login information you entered/i.test(txt)) await fail(page, BAD_CREDS_MSG + ' — ' + txt.trim())
       // иная ошибка формы — вернём текст со скрином
       await fail(page, 'unknown: ' + txt.trim())
     }
@@ -291,7 +301,7 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
     // см. selectors.js badCredsText) — доп. проверка по ВИДИМОМУ ТЕКСТУ страницы напрямую,
     // не завязана на конкретный селектор контейнера.
     if (await pageHasText(page, SEL.badCredsText)) {
-      await fail(page, 'bad_password: Instagram сообщил «неверный логин/пароль» (обнаружено по тексту страницы, не по контейнеру ошибки)')
+      await fail(page, BAD_CREDS_MSG)
     }
   }
 
