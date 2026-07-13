@@ -187,6 +187,10 @@ export function browserComment(ctx: Ctx, postUrl: string, text: string, dryRun?:
 export function browserReply(ctx: Ctx, postUrl: string, text: string, dryRun?: boolean) {
   return browserFetch<ActionResult>('/reply-comment', { ...ctx, postUrl, text, dryRun })
 }
+// Канареечный тест: прокомментировать последний пост цели (канарейка → пост основного).
+export function browserCommentLatest(ctx: Ctx, targetUsername: string, text: string, dryRun?: boolean) {
+  return browserFetch<ActionResult>('/comment-latest', { ...ctx, targetUsername, text, dryRun })
+}
 
 // ── Сессия-визит (Фаза II §1.1): все задачи на цель в ОДНОМ контексте воркера. ──
 export interface VisitTask { type: 'dm' | 'follow' | 'like' | 'story' | 'comment'; target: string; text?: string; image?: string; count?: number; storyLike?: boolean; postUrl?: string; fallbackFollow?: boolean; fallbackLike?: boolean }

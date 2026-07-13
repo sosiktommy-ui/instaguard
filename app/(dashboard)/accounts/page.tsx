@@ -169,6 +169,24 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
     finally { setProbing(false) }
   }
 
+  // Канареечный сквозной тест (Фаза E): ЭТОТ аккаунт РЕАЛЬНО подписывается/комментирует/лайкает
+  // указанный аккаунт → у того срабатывают триггеры. ⚠️ реальные действия — только свои тест-акки.
+  const [canarying, setCanarying] = useState(false)
+  const runCanary = async () => {
+    if (!ra?.id) { setProbeOut('нет id аккаунта'); return }
+    const target = window.prompt(`Канареечный тест: @${acc.username} РЕАЛЬНО подпишется, прокомментирует и лайкнет указанный аккаунт (чтобы у того сработали триггеры).\n\nUsername аккаунта-цели:`, '')
+    if (!target || !target.trim()) return
+    setCanarying(true); setProbeOut('Канарейка работает (подписка → комментарий → лайк)… это займёт ~30–60с')
+    try {
+      const r = await fetch('/api/canary-test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ canaryId: ra.id, target: target.trim(), actions: ['follow', 'comment', 'like'] }),
+      })
+      setProbeOut(JSON.stringify(await r.json(), null, 2))
+    } catch (e: any) { setProbeOut('ошибка: ' + String(e?.message ?? e)) }
+    finally { setCanarying(false) }
+  }
+
   // §13.11 — авто-приём заявок в подписчики (для закрытых/приватных аккаунтов).
   const [autoAccept, setAutoAccept] = useState(Boolean(ra?.autoAcceptFollowers))
   const [savingAuto, setSavingAuto] = useState(false)
@@ -237,6 +255,7 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
           <div className="absolute inset-0 bg-gradient-to-br from-[#feda75]/15 via-[#d62976]/12 to-[#4f5bd5]/15 pointer-events-none" />
           <div className="absolute top-4 right-4 z-10 flex items-center gap-1">
             <button onClick={runProbe} disabled={probing} title="Проба уведомлений (debug: news/inbox)" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">🔔</button>
+            <button onClick={runCanary} disabled={canarying} title="Канареечный тест: этот аккаунт РЕАЛЬНО подпишется/прокомментирует/лайкнет указанный аккаунт (для проверки триггеров у цели)" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">🧪</button>
             {onOpenLog && (
               <button onClick={onOpenLog} title="Открыть лог" className="p-1.5 text-subt hover:text-brand transition-colors"><ScrollText size={18} /></button>
             )}

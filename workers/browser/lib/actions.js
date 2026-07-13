@@ -273,6 +273,19 @@ export async function replyComment(context, { postUrl, text, dryRun }) {
   return commentPost(context, { postUrl, text, dryRun })
 }
 
+// Комментарий к ПОСЛЕДНЕМУ посту цели (для канареечного теста: канарейка комментирует пост
+// основного, чтобы у основного сработал триггер «Новый комментарий»). Находит первый /p/ в сетке
+// профиля и комментирует его. 0 постов у цели = невозможно (не ошибка).
+export async function commentLatestPost(context, { targetUsername, text, dryRun }) {
+  await requireSession(context)
+  const page = await openProfile(context, targetUsername)
+  const postLinks = await page.locator('a[href*="/p/"]').evaluateAll(
+    (els) => Array.from(new Set(els.map((e) => e.getAttribute('href')).filter(Boolean))).slice(0, 3)
+  ).catch(() => [])
+  if (!postLinks.length) return { ok: false, impossible: true, error: 'no_posts: у цели нет постов для комментария' }
+  return commentPost(context, { postUrl: `https://www.instagram.com${postLinks[0]}`, text, dryRun })
+}
+
 // ── §13.11 Авто-приём заявок в подписчики (для ЗАКРЫТЫХ/приватных аккаунтов) ─────
 // Приватный аккаунт получает не «нового подписчика», а «заявку на подписку» — пока её не
 // подтвердить, человек не подписчик и триггер «Новая подписка» по нему не сработает. Читаем
