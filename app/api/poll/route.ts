@@ -17,7 +17,7 @@ import { Queue } from 'bullmq'
 import { loadCounters, consume, warmupFactor, scaleCaps, MAX_NEW_PER_POLL, type Counters, type ActionKind } from '@/lib/limits'
 import { activityWindow } from '@/lib/activity'
 import { getCurrentUser } from '@/lib/auth'
-import { mergeStatsMap } from '@/lib/stats'
+import { mergeStatsMap, logMeta } from '@/lib/stats'
 import { matchPhrase } from '@/lib/match'
 import { selectTargets } from '@/lib/targets'
 
@@ -217,11 +217,13 @@ async function runFollowerActionsInline(job: any) {
       if (impossible.length) parts.push(`невозможно: ${impossible.join('; ')}`)
       const tail = parts.length ? ` (${parts.join('; ')})` : ''
       const level = success ? (hardError ? 'WARN' : 'SUCCESS') : (hardError ? 'ERROR' : 'WARN')
+      // Обогащаем строку журнала типом триггера и выполненными действиями (для колонок в LogModal)
+      const meta = logMeta(job.triggerType, success ? Object.keys(r.incDone) : [])
       const message = success
-        ? `Сработал триггер «${job.triggerName}» → @${job.followerUsername}${tail}`
+        ? `Сработал триггер «${job.triggerName}» → @${job.followerUsername}${meta}${tail}`
         : (hardError
-          ? `Триггер «${job.triggerName}» → @${job.followerUsername}: действия не выполнены${tail}`
-          : `Триггер «${job.triggerName}» → @${job.followerUsername}: действие невозможно${tail}`)
+          ? `Триггер «${job.triggerName}» → @${job.followerUsername}: действия не выполнены${meta}${tail}`
+          : `Триггер «${job.triggerName}» → @${job.followerUsername}: действие невозможно${meta}${tail}`)
       await Promise.all([
         prisma.log.create({ data: { accountId: job.accountId, level, message } }),
         // «Срабатывание» (fireCount) — при реально выполненном действии ИЛИ когда действие было
@@ -564,7 +566,7 @@ export async function POST(req: NextRequest) {
             browserState: account.browserState,
             engine: 'browser' as const, ownerUsername: account.username, accountId: account.id,
             locale: account.locale ?? undefined, timezoneId: account.timezoneId ?? undefined,
-            triggerId: trigger.id, triggerName: trigger.name,
+            triggerId: trigger.id, triggerName: trigger.name, triggerType: trigger.triggerType,
             followerPk: target.pk, followerUsername: target.username,
             text: text.trim(), image: willDM ? image : undefined,
             doFollow: willFollow, doLike: willLike, likeCount,
@@ -984,11 +986,12 @@ export async function POST(req: NextRequest) {
               if (impossible.length) parts.push(`невозможно: ${impossible.join('; ')}`)
               const tail = parts.length ? ` (${parts.join('; ')})` : ''
               const level = fired ? (hardError ? 'WARN' : 'SUCCESS') : (hardError ? 'ERROR' : 'WARN')
+              const cmtMeta = logMeta('NEW_COMMENT', fired ? Object.keys(incDone) : [])
               const message = fired
-                ? `Коммент @${c.username} → «${trigger.name}»${gatedStop ? ' (не подписан → приглашение)' : ''}${tail}`
+                ? `Коммент @${c.username} → «${trigger.name}»${gatedStop ? ' (не подписан → приглашение)' : ''}${cmtMeta}${tail}`
                 : (hardError
-                  ? `Коммент @${c.username} → «${trigger.name}»: действия не выполнены${tail}`
-                  : `Коммент @${c.username} → «${trigger.name}»: действие невозможно${tail}`)
+                  ? `Коммент @${c.username} → «${trigger.name}»: действия не выполнены${cmtMeta}${tail}`
+                  : `Коммент @${c.username} → «${trigger.name}»: действие невозможно${cmtMeta}${tail}`)
               await Promise.all([
                 prisma.log.create({ data: { accountId: account.id, level, message } }),
                 // fireCount — при выполненном действии ИЛИ «невозможно» без ошибок (§13.10).

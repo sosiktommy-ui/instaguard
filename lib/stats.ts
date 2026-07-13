@@ -12,6 +12,21 @@
 
 export const ACTION_KEYS = ['dm', 'like', 'follow', 'story', 'comment'] as const
 export type ActionKey = (typeof ACTION_KEYS)[number]
+
+// Человекочитаемые подписи действий и типов триггеров — для журнала (LogModal)
+// и обогащения текста лога при срабатывании (poll/instrumentation).
+export const ACTION_LABELS: Record<string, string> = {
+  dm: 'директ', like: 'лайк', follow: 'подписка', story: 'сторис', comment: 'коммент',
+}
+export const TRIGGER_TYPE_LABELS: Record<string, string> = {
+  NEW_FOLLOWER: 'Новая подписка', NEW_COMMENT: 'Комментарий', NEW_LIKE: 'Лайк', STORY_MENTION: 'Ответ на сторис',
+}
+// Собирает хвост « · тип: … · сделано: …» для строки журнала (парсится в LogModal).
+export function logMeta(triggerType?: string, doneKeys?: string[]): string {
+  const t = triggerType ? TRIGGER_TYPE_LABELS[triggerType] : ''
+  const done = (doneKeys ?? []).map((k) => ACTION_LABELS[k] ?? k).filter(Boolean).join(', ')
+  return `${t ? ` · тип: ${t}` : ''}${done ? ` · сделано: ${done}` : ''}`
+}
 export interface ActionStat {
   fired: number
   done: number

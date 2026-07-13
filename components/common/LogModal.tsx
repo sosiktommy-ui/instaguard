@@ -34,6 +34,8 @@ interface Parsed {
   kind: 'trigger' | 'event'
   campaign?: string           // имя кампании из «…»
   account?: string            // @username
+  triggerType?: string        // тип триггера («Новая подписка» и т.п.) из «· тип: …»
+  done: string[]              // выполненные действия («директ», «лайк») из «· сделано: …»
   outcome?: { label: string; tone: 'ok' | 'bad' | 'warn' }
   reason?: string             // причина в скобках / уточнение
   text: string                // исходное сообщение (для event и как запасной вид)
@@ -44,6 +46,10 @@ function parseLog(l: LogEntry): Parsed {
   const campaign = msg.match(/«([^»]+)»/)?.[1]
   const account = msg.match(/@([A-Za-z0-9._]+)/)?.[1]
   const isTrigger = /триггер|коммент/i.test(msg) && !!campaign && !!account
+  // Обогащённые поля (новые логи): «· тип: X · сделано: a, b»
+  const triggerType = msg.match(/·\s*тип:\s*([^·(]+)/)?.[1]?.trim()
+  const doneRaw = msg.match(/·\s*сделано:\s*([^(·]+)/)?.[1]?.trim()
+  const done = doneRaw ? doneRaw.split(',').map((s) => s.trim()).filter(Boolean) : []
   // причина: последняя скобка, либо явные уточнения
   const paren = [...msg.matchAll(/\(([^)]+)\)/g)].map((m) => m[1]).pop()
   const notFollowed = /не подписан/i.test(msg) ? 'не подписан → приглашение' : undefined
@@ -56,7 +62,12 @@ function parseLog(l: LogEntry): Parsed {
     else if (/невозможн/i.test(msg)) outcome = { label: 'невозможно', tone: 'warn' }
     else outcome = { label: LEVEL_META[l.level].label, tone: l.level === 'ERROR' ? 'bad' : l.level === 'WARN' ? 'warn' : 'ok' }
   }
-  return { kind: isTrigger ? 'trigger' : 'event', campaign, account, outcome, reason, text: msg }
+  return { kind: isTrigger ? 'trigger' : 'event', campaign, account, triggerType, done, outcome, reason, text: msg }
+}
+
+// Цвета чипов действий — в тон 3D-диаграмме статистики
+const ACTION_COLOR: Record<string, string> = {
+  директ: '#7C5CFC', лайк: '#F59E0B', подписка: '#22C55E', сторис: '#38BDF8', коммент: '#FF5CA8', ответ: '#FF5CA8',
 }
 
 const TONE: Record<'ok' | 'bad' | 'warn', { fg: string; bg: string }> = {
@@ -205,10 +216,10 @@ function LogCard({ l, p, index }: { l: LogEntry; p: Parsed; index: number }) {
       {/* цветная кромка по уровню */}
       <span className="absolute left-0 top-0 bottom-0 w-[3px] rounded-full" style={{ background: m.color }} />
 
-      {/* верх: подпись + время */}
+      {/* верх: для триггера — только время (у колонок свои подписи); для события — подпись + время */}
       <div className="flex items-center justify-between mb-2 pl-1.5">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-subt/70">
-          {p.kind === 'trigger' ? 'Триггер' : 'Событие'}
+          {p.kind === 'trigger' ? '' : 'Событие'}
         </span>
         <span className="flex items-center gap-1.5 text-[11px] text-subt shrink-0">
           <span className="w-1.5 h-1.5 rounded-full" style={{ background: m.color }} />
@@ -218,23 +229,47 @@ function LogCard({ l, p, index }: { l: LogEntry; p: Parsed; index: number }) {
 
       {p.kind === 'trigger' ? (
         <div className="pl-1.5">
-          {/* триггер → результат */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="inline-flex items-center max-w-[46%] px-2.5 py-1 rounded-lg text-[12px] font-medium bg-brand/10 text-brand truncate" title={p.campaign}>
-              {p.campaign ?? 'кампания'}
-            </span>
-            <ArrowRight className="w-3.5 h-3.5 text-subt/50 shrink-0" />
-            {p.outcome && (
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] font-medium"
-                style={{ color: TONE[p.outcome.tone].fg, background: TONE[p.outcome.tone].bg }}>
-                <span className="w-1.5 h-1.5 rounded-full" style={{ background: TONE[p.outcome.tone].fg }} />
-                {p.outcome.label}
+          {/* две колонки: ТРИГГЕР | ДЕЙСТВИЕ, у каждой значение + аккаунт снизу */}
+          <div className="grid grid-cols-[1fr_auto_1fr] items-start gap-2">
+            {/* ТРИГГЕР */}
+            <div className="min-w-0">
+              <div className="text-[9.5px] font-semibold uppercase tracking-wider text-subt/60 mb-1">Триггер</div>
+              <span className="inline-flex max-w-full px-2 py-1 rounded-lg text-[12px] font-medium bg-brand/10 text-brand truncate" title={p.campaign}>
+                {p.triggerType ?? p.campaign ?? 'триггер'}
               </span>
-            )}
+              {p.campaign && p.triggerType && <div className="text-[11px] text-subt truncate mt-0.5" title={p.campaign}>{p.campaign}</div>}
+              {p.account && <div className="mt-1.5 text-[12.5px] font-semibold text-ink/80 truncate">@{p.account}</div>}
+            </div>
+
+            <ArrowRight className="w-4 h-4 text-subt/40 shrink-0 mt-6" />
+
+            {/* ДЕЙСТВИЕ */}
+            <div className="min-w-0">
+              <div className="text-[9.5px] font-semibold uppercase tracking-wider text-subt/60 mb-1">Действие</div>
+              {p.done.length > 0 ? (
+                <div className="flex flex-wrap gap-1">
+                  {p.done.map((a, k) => {
+                    const c = ACTION_COLOR[a.toLowerCase()] ?? '#8b93a1'
+                    return (
+                      <span key={k} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[12px] font-medium"
+                        style={{ color: c, background: `${c}1f` }}>
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ background: c }} />{a}
+                      </span>
+                    )
+                  })}
+                </div>
+              ) : p.outcome ? (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[12px] font-medium"
+                  style={{ color: TONE[p.outcome.tone].fg, background: TONE[p.outcome.tone].bg }}>
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: TONE[p.outcome.tone].fg }} />
+                  {p.outcome.label}
+                </span>
+              ) : null}
+              {p.account && <div className="mt-1.5 text-[12.5px] font-semibold text-ink/80 truncate">@{p.account}</div>}
+            </div>
           </div>
-          {/* аккаунт снизу */}
-          {p.account && <div className="mt-2 text-[13px] font-semibold text-ink/80">@{p.account}</div>}
-          {/* причина, если не выполнено */}
+
+          {/* причина, если что-то не выполнено — во всю ширину */}
           {p.reason && p.outcome?.tone !== 'ok' && (
             <div className="mt-2 flex items-start gap-1.5 text-[11.5px] rounded-lg px-2 py-1.5"
               style={{ color: TONE[p.outcome?.tone ?? 'warn'].fg, background: TONE[p.outcome?.tone ?? 'warn'].bg }}>

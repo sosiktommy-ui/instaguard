@@ -1,4 +1,4 @@
-import { mergeStatsMap } from './lib/stats'
+import { mergeStatsMap, logMeta } from './lib/stats'
 import { runFollowerActionsBrowser } from './lib/browser/actions'
 import { acquireBrowserLock, releaseBrowserLock } from './lib/browserLock'
 import { recordDelivery } from './lib/delivery'
@@ -77,11 +77,12 @@ export async function register() {
                 if (impossible.length) parts.push(`невозможно: ${impossible.join('; ')}`)
                 const tail = parts.length ? ` (${parts.join('; ')})` : ''
                 const level = success ? (hardError ? 'WARN' : 'SUCCESS') : (hardError ? 'ERROR' : 'WARN')
+                const meta = logMeta(d.triggerType, success ? Object.keys(r.incDone) : [])
                 const message = success
-                  ? `Сработал триггер «${d.triggerName}» → @${d.followerUsername}${tail}`
+                  ? `Сработал триггер «${d.triggerName}» → @${d.followerUsername}${meta}${tail}`
                   : (hardError
-                    ? `Триггер «${d.triggerName}» → @${d.followerUsername}: действия не выполнены${tail}`
-                    : `Триггер «${d.triggerName}» → @${d.followerUsername}: действие невозможно${tail}`)
+                    ? `Триггер «${d.triggerName}» → @${d.followerUsername}: действия не выполнены${meta}${tail}`
+                    : `Триггер «${d.triggerName}» → @${d.followerUsername}: действие невозможно${meta}${tail}`)
                 await Promise.all([
                   prisma.log.create({ data: { accountId: d.accountId, level, message } }),
                   // fireCount — при выполненном действии ИЛИ при «невозможно» без ошибок (§13.10);
