@@ -21,8 +21,6 @@ import { mergeStatsMap } from '@/lib/stats'
 import { matchPhrase } from '@/lib/match'
 import { selectTargets } from '@/lib/targets'
 
-// Сколько последних постов автора комментария лайкать (действие «Лайк» в триггере «Комментарий»)
-const COMMENT_LIKE_POSTS = 3
 // Интервал авто-проверки одного аккаунта — настройка владельца pollIntervalHours (дефолт 3ч),
 // применяется через intervalMsOf() в цикле поллинга (заменил прежний фиксированный кулдаун).
 // Комментарии проверяем реже — раз в 60 минут (они меняются медленнее)
@@ -823,14 +821,19 @@ export async function POST(req: NextRequest) {
               : legacyGate ? { mode: 'followed_by' as GateMode, inviteText: String(legacyGate.text ?? '') }
               : null
             // «Лайк» в триггере комментарий = лайкнуть посты автора (LIKE_MEDIA); LIKE_COMMENT — легаси (лайк коммента)
-            const doLikePosts = actions.some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
+            const likeAct = actions.find((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
+            const doLikePosts = Boolean(likeAct)
             const likeCmt = actions.some((a: any) => a.type === 'LIKE_COMMENT' && isOn(a))
             const doFollow = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
             const storiesAct = actions.find((a: any) => a.type === 'VIEW_STORIES' && isOn(a))
+            // §13.10 — сколько постов лайкать (1..10) / кадров сторис смотреть (1..20).
+            const likeCount = Math.min(10, Math.max(1, Number(likeAct?.count) || 1))
+            const storyCount = Math.min(20, Math.max(1, Number(storiesAct?.count) || 4))
 
             let fired = false
             let gatedStop = false
             const errors: string[] = []
+            const impossible: string[] = []                // §13.10 — 0 постов/0 сторис (не ошибка)
             const incFired: Record<string, number> = {}   // «сработало» (попытки)
             const incDone: Record<string, number> = {}    // «выполнено» (успехи)
             // Ответ в комментах требует URL поста. media_id берётся из уведомления (self-events);
@@ -858,8 +861,43 @@ export async function POST(req: NextRequest) {
               }
             }
 
-            // Подписан (или проверки нет): действия с паузами между ними + дневной лимит
+            // Подписан (или проверки нет): §13.9 — ФИКСИРОВАННЫЙ порядок действий с паузами между
+            // ними + дневной лимит: подписка → лайк → коммент-ответ → сторис → ДИРЕКТ (последним).
             if (!gatedStop) {
+              // 1) Подписка — первой (на случай закрытого аккаунта / SMS при взаимной подписке).
+              if (doFollow) {
+                if (use('follow')) {
+                  incFired.follow = (incFired.follow || 0) + 1
+                  await randDelay(2, 5)
+                  try {
+                    { const r = await browserFollow(bctx(), c.username); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не подписан') }
+                    fired = true; incDone.follow = (incDone.follow || 0) + 1
+                  }
+                  catch (e: any) { errors.push(`подписка: ${e.message}`) }
+                } else { errors.push('подписка: дневной лимит подписок исчерпан') }
+              }
+              // 2) Лайк постов автора — §13.10: ОДИН бюджет на цель (не по постам), лайкаем до N;
+              //    0 постов у автора = НЕВОЗМОЖНО (не ошибка).
+              if (doLikePosts && use('like')) {
+                incFired.like = (incFired.like || 0) + 1
+                await randDelay(2, 5)
+                try {
+                  const r = await browserLike(bctx(), c.username, likeCount)
+                  if (r.browserState) cState = r.browserState
+                  if (r.ok) { fired = true; incDone.like = (incDone.like || 0) + 1 }
+                  else if ((r as any).impossible) impossible.push('лайк: у аккаунта нет постов')
+                  else throw new Error(r.error ?? 'не лайкнуто')
+                }
+                catch (e: any) { errors.push(`лайк постов: ${e.message}`) }
+              }
+              if (likeCmt && use('like')) {
+                incFired.like = (incFired.like || 0) + 1
+                await randDelay(1, 3)
+                // LIKE_COMMENT — legacy-тип (лайк КОНКРЕТНОГО коммента): браузерным движком не
+                // реализован (нужен клик по коммент-нити, [A4]). Новые кампании его не создают.
+                errors.push('лайк коммента: не поддерживается (legacy-тип, используйте «Лайк постов»)')
+              }
+              // 3) Ответ в комментариях под МОИМ постом.
               if (reply) {
                 const variants: string[] = (reply.replies ?? []).filter(Boolean)
                 if (!variants.length) {
@@ -876,35 +914,22 @@ export async function POST(req: NextRequest) {
                   catch (e: any) { errors.push(`ответ: ${e.message}`) }
                 } else { errors.push('ответ в комментах: дневной лимит комментариев исчерпан') }
               }
-              if (doLikePosts && use('like', COMMENT_LIKE_POSTS)) {
-                incFired.like = (incFired.like || 0) + 1
-                await randDelay(2, 5)
+              // 4) Сторис — §13.10: смотрим до N кадров; 0 активных сторис = НЕВОЗМОЖНО (не ошибка).
+              if (storiesAct && use('story')) {
+                incFired.story = (incFired.story || 0) + 1
+                await randDelay(3, 7)
                 try {
-                  { const r = await browserLike(bctx(), c.username, COMMENT_LIKE_POSTS); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не лайкнуто') }
-                  fired = true; incDone.like = (incDone.like || 0) + 1
+                  const r = await browserStories(bctx(), c.username, Boolean(storiesAct.like), storyCount)
+                  if (r.browserState) cState = r.browserState
+                  if (r.ok) { fired = true; incDone.story = (incDone.story || 0) + 1 }
+                  else if ((r as any).impossible) impossible.push('сторис: нет активных сторис')
+                  else throw new Error(r.error ?? 'не просмотрено')
                 }
-                catch (e: any) { errors.push(`лайк постов: ${e.message}`) }
+                catch (e: any) { errors.push(`сторис: ${e.message}`) }
               }
-              if (likeCmt && use('like')) {
-                incFired.like = (incFired.like || 0) + 1
-                await randDelay(1, 3)
-                // LIKE_COMMENT — legacy-тип (лайк КОНКРЕТНОГО коммента): браузерным движком не
-                // реализован (нужен клик по коммент-нити, [A4]). Новые кампании его не создают.
-                errors.push('лайк коммента: не поддерживается (legacy-тип, используйте «Лайк постов»)')
-              }
-              if (doFollow) {
-                if (use('follow')) {
-                  incFired.follow = (incFired.follow || 0) + 1
-                  await randDelay(2, 5)
-                  try {
-                    { const r = await browserFollow(bctx(), c.username); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не подписан') }
-                    fired = true; incDone.follow = (incDone.follow || 0) + 1
-                  }
-                  catch (e: any) { errors.push(`подписка: ${e.message}`) }
-                } else { errors.push('подписка: дневной лимит подписок исчерпан') }
-              }
-              // Меж-потоковый дедуп директа (как в handleTargets): если этому автору директ
-              // в цикле уже уходил (напр. он же новый подписчик) — не дублируем. Проверка ДО use.
+              // 5) ДИРЕКТ — последним, после «прогрева» цели. Идёт НЕЗАВИСИМО от исхода прошлых
+              //    действий. Меж-потоковый дедуп: если директ этому автору в цикле уже уходил
+              //    (напр. он же новый подписчик) — не дублируем. Проверка ДО use.
               if (dm?.templates?.[0] && !alreadyDmed(c.username) && use('dm')) {
                 markDmed(c.username)
                 incFired.dm = (incFired.dm || 0) + 1
@@ -930,32 +955,33 @@ export async function POST(req: NextRequest) {
                   errors.push(`директ: ${e.message}`)
                 }
               }
-              if (storiesAct && use('story')) {
-                incFired.story = (incFired.story || 0) + 1
-                await randDelay(3, 7)
-                try {
-                  const r = await browserStories(bctx(), c.username, Boolean(storiesAct.like)); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не просмотрено')
-                  fired = true; incDone.story = (incDone.story || 0) + 1
-                }
-                catch (e: any) { errors.push(`сторис: ${e.message}`) }
-              }
             }
 
             cmtDmTried += incFired.dm || 0   // §4.6 — учёт доставки директов коммент-потока
             cmtDmOk += incDone.dm || 0
             const attempted = Object.keys(incFired).length > 0
+            const hardError = errors.length > 0
+            // §13.10 — «невозможно» (0 постов/0 сторис) не ошибка; засчитываем срабатывание, если
+            // что-то выполнено ИЛИ единственная помеха — невозможность действия (без реальных ошибок).
+            const firedOrImpossible = fired || (impossible.length > 0 && !hardError)
             if (attempted) {
-              const level = fired ? (errors.length ? 'WARN' : 'SUCCESS') : 'ERROR'
+              const parts: string[] = []
+              if (errors.length) parts.push(errors.join('; '))
+              if (impossible.length) parts.push(`невозможно: ${impossible.join('; ')}`)
+              const tail = parts.length ? ` (${parts.join('; ')})` : ''
+              const level = fired ? (hardError ? 'WARN' : 'SUCCESS') : (hardError ? 'ERROR' : 'WARN')
               const message = fired
-                ? `Коммент @${c.username} → «${trigger.name}»${gatedStop ? ' (не подписан → приглашение)' : ''}${errors.length ? ` (частично: ${errors.join('; ')})` : ''}`
-                : `Коммент @${c.username} → «${trigger.name}»: действия не выполнены${errors.length ? ` (${errors.join('; ')})` : ''}`
+                ? `Коммент @${c.username} → «${trigger.name}»${gatedStop ? ' (не подписан → приглашение)' : ''}${tail}`
+                : (hardError
+                  ? `Коммент @${c.username} → «${trigger.name}»: действия не выполнены${tail}`
+                  : `Коммент @${c.username} → «${trigger.name}»: действие невозможно${tail}`)
               await Promise.all([
                 prisma.log.create({ data: { accountId: account.id, level, message } }),
-                // fireCount — только при РЕАЛЬНО выполненном действии (fired), не по попытке.
-                prisma.triggerRule.update({ where: { id: trigger.id }, data: { ...(fired ? { fireCount: { increment: 1 } } : {}), stats: await mergeStats(trigger.id, incFired, incDone) } }),
+                // fireCount — при выполненном действии ИЛИ «невозможно» без ошибок (§13.10).
+                prisma.triggerRule.update({ where: { id: trigger.id }, data: { ...(firedOrImpossible ? { fireCount: { increment: 1 } } : {}), stats: await mergeStats(trigger.id, incFired, incDone) } }),
                 ...(useBrowserForComments && cState ? [prisma.instagramAccount.update({ where: { id: account.id }, data: { browserState: cState as any } })] : []),
               ])
-              if (fired) { s.commentActions++; firedForComment = true }
+              if (firedOrImpossible) { s.commentActions++; firedForComment = true }
             }
           }
           // [A2] Пауза МЕЖДУ комментами (как inline-путь потока подписчиков, randDelay 40–90с):
