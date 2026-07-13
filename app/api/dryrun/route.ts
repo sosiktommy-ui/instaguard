@@ -98,7 +98,7 @@ export async function POST(req: Request) {
       if (want.includes('dm')) await run('dm', () => browserDM(ctx, target, '', undefined, true))
       if (want.includes('follow')) await run('follow', () => browserFollow(ctx, target, true))
       if (want.includes('like')) await run('like', () => browserLike(ctx, target, 1, true))
-      if (want.includes('story')) await run('story', () => browserStories(ctx, target, false, true))
+      if (want.includes('story')) await run('story', () => browserStories(ctx, target, false, 4, true))
     }
   } else {
     report.checks.actions = { skipped: 'сессия не жива — сначала вход' }

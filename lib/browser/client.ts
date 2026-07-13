@@ -178,8 +178,8 @@ export function browserFollow(ctx: Ctx, targetUsername: string, dryRun?: boolean
 export function browserLike(ctx: Ctx, targetUsername: string, count = 1, dryRun?: boolean) {
   return browserFetch<ActionResult>('/like', { ...ctx, targetUsername, count, dryRun })
 }
-export function browserStories(ctx: Ctx, targetUsername: string, like = false, dryRun?: boolean) {
-  return browserFetch<ActionResult>('/stories', { ...ctx, targetUsername, like, dryRun })
+export function browserStories(ctx: Ctx, targetUsername: string, like = false, count = 4, dryRun?: boolean) {
+  return browserFetch<ActionResult>('/stories', { ...ctx, targetUsername, like, count, dryRun })
 }
 export function browserComment(ctx: Ctx, postUrl: string, text: string, dryRun?: boolean) {
   return browserFetch<ActionResult>('/comment', { ...ctx, postUrl, text, dryRun })
@@ -189,8 +189,9 @@ export function browserReply(ctx: Ctx, postUrl: string, text: string, dryRun?: b
 }
 
 // ── Сессия-визит (Фаза II §1.1): все задачи на цель в ОДНОМ контексте воркера. ──
-export interface VisitTask { type: 'dm' | 'follow' | 'like' | 'story'; target: string; text?: string; image?: string; count?: number; storyLike?: boolean; fallbackFollow?: boolean; fallbackLike?: boolean }
-export interface VisitResult { done: Record<string, number>; closed?: boolean; errors?: string[]; brk?: 'CHALLENGE' | 'PAUSED'; browserState?: object }
+export interface VisitTask { type: 'dm' | 'follow' | 'like' | 'story' | 'comment'; target: string; text?: string; image?: string; count?: number; storyLike?: boolean; postUrl?: string; fallbackFollow?: boolean; fallbackLike?: boolean }
+// impossible — действия, НЕвыполнимые не по вине бота (0 постов для лайка / 0 активных сторис): §13.10.
+export interface VisitResult { done: Record<string, number>; impossible?: string[]; closed?: boolean; errors?: string[]; brk?: 'CHALLENGE' | 'PAUSED'; browserState?: object }
 export function browserRunVisit(ctx: Ctx, tasks: VisitTask[]) {
   return browserFetch<VisitResult>('/session/run', { ...ctx, tasks })
 }

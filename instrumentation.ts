@@ -56,7 +56,8 @@ export async function register() {
                 browserState: (fresh?.browserState ?? d.browserState) as any, ownerUsername: d.ownerUsername, proxy: d.proxy,
                 locale: d.locale, timezoneId: d.timezoneId,
                 followerUsername: d.followerUsername, text: d.text || undefined, image: d.image || undefined,
-                doFollow: d.doFollow, doLike: d.doLike, viewStories: d.viewStories, storyLike: d.storyLike,
+                doFollow: d.doFollow, doLike: d.doLike, likeCount: d.likeCount, viewStories: d.viewStories,
+                storyLike: d.storyLike, storyCount: d.storyCount,
                 fallbackFollow: d.fallbackFollow, fallbackLike: d.fallbackLike,
               })
               if (r.browserState) await prisma.instagramAccount.update({ where: { id: d.accountId }, data: { browserState: r.browserState as any } }).catch(() => null)
@@ -64,17 +65,28 @@ export async function register() {
               if (r.incFired.dm) await recordDelivery(prisma, d.accountId, r.incFired.dm, r.incDone.dm || 0, Date.now())
               const attempted = Object.keys(r.incFired).length > 0
               const success = Object.keys(r.incDone).length > 0
+              const impossible = r.impossible ?? []
+              const hardError = r.errors.length > 0
+              // §13.10 — «невозможно» (0 постов/0 сторис) НЕ ошибка; триггер сработал, если что-то
+              // выполнено ИЛИ единственная помеха — невозможность действия (без реальных ошибок).
+              const fired = success || (impossible.length > 0 && !hardError)
               if (attempted) {
                 const cur = await prisma.triggerRule.findUnique({ where: { id: d.triggerId }, select: { stats: true } }).catch(() => null)
-                const level = success ? (r.errors.length ? 'WARN' : 'SUCCESS') : 'ERROR'
+                const parts: string[] = []
+                if (r.errors.length) parts.push(r.errors.join('; '))
+                if (impossible.length) parts.push(`невозможно: ${impossible.join('; ')}`)
+                const tail = parts.length ? ` (${parts.join('; ')})` : ''
+                const level = success ? (hardError ? 'WARN' : 'SUCCESS') : (hardError ? 'ERROR' : 'WARN')
                 const message = success
-                  ? `Сработал триггер «${d.triggerName}» → @${d.followerUsername}${r.errors.length ? ` (частично: ${r.errors.join('; ')})` : ''}`
-                  : `Триггер «${d.triggerName}» → @${d.followerUsername}: действия не выполнены${r.errors.length ? ` (${r.errors.join('; ')})` : ''}`
+                  ? `Сработал триггер «${d.triggerName}» → @${d.followerUsername}${tail}`
+                  : (hardError
+                    ? `Триггер «${d.triggerName}» → @${d.followerUsername}: действия не выполнены${tail}`
+                    : `Триггер «${d.triggerName}» → @${d.followerUsername}: действие невозможно${tail}`)
                 await Promise.all([
                   prisma.log.create({ data: { accountId: d.accountId, level, message } }),
-                  // fireCount («срабатывание») — ТОЛЬКО при реально выполненном действии (success),
-                  // не по факту попытки: иначе провал (директ не ушёл) ложно читался как «сработал».
-                  prisma.triggerRule.update({ where: { id: d.triggerId }, data: { ...(success ? { fireCount: { increment: 1 } } : {}), stats: mergeStatsMap(cur?.stats ?? {}, r.incFired, r.incDone) as any } }),
+                  // fireCount — при выполненном действии ИЛИ при «невозможно» без ошибок (§13.10);
+                  // реальный провал (директ не ушёл / таймаут) не считается.
+                  prisma.triggerRule.update({ where: { id: d.triggerId }, data: { ...(fired ? { fireCount: { increment: 1 } } : {}), stats: mergeStatsMap(cur?.stats ?? {}, r.incFired, r.incDone) as any } }),
                 ])
               }
               if (r.brk) await prisma.instagramAccount.update({ where: { id: d.accountId }, data: { status: r.brk as any } }).catch(() => null)

@@ -282,7 +282,7 @@ function actionRoute(fn) {
 app.post('/dm', actionRoute((ctx, b) => sendDM(ctx, { toUsername: b.toUsername, text: b.text, image: b.image, dryRun: b.dryRun })))
 app.post('/follow', actionRoute((ctx, b) => followUser(ctx, { targetUsername: b.targetUsername, dryRun: b.dryRun })))
 app.post('/like', actionRoute((ctx, b) => likeUser(ctx, { targetUsername: b.targetUsername, count: b.count, dryRun: b.dryRun })))
-app.post('/stories', actionRoute((ctx, b) => viewStories(ctx, { targetUsername: b.targetUsername, like: b.like, dryRun: b.dryRun })))
+app.post('/stories', actionRoute((ctx, b) => viewStories(ctx, { targetUsername: b.targetUsername, like: b.like, count: b.count, dryRun: b.dryRun })))
 app.post('/comment', actionRoute((ctx, b) => commentPost(ctx, { postUrl: b.postUrl, text: b.text, dryRun: b.dryRun })))
 app.post('/reply-comment', actionRoute((ctx, b) => replyComment(ctx, { postUrl: b.postUrl, text: b.text, dryRun: b.dryRun })))
 // Стори-события основного (ответы на сторис + упоминания) — чтение директа своим браузером.

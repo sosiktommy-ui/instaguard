@@ -198,7 +198,8 @@ async function runFollowerActionsInline(job: any) {
       browserState: job.browserState, ownerUsername: job.ownerUsername, proxy: job.proxy,
       locale: job.locale, timezoneId: job.timezoneId,
       followerUsername: job.followerUsername, text: job.text || undefined, image: job.image || undefined,
-      doFollow: job.doFollow, doLike: job.doLike, viewStories: job.viewStories, storyLike: job.storyLike,
+      doFollow: job.doFollow, doLike: job.doLike, likeCount: job.likeCount, viewStories: job.viewStories,
+      storyLike: job.storyLike, storyCount: job.storyCount,
       fallbackFollow: job.fallbackFollow, fallbackLike: job.fallbackLike,
     })
     if (r.browserState) await prisma.instagramAccount.update({ where: { id: job.accountId }, data: { browserState: r.browserState as any } }).catch(() => null)
@@ -206,17 +207,28 @@ async function runFollowerActionsInline(job: any) {
     if (r.incFired.dm) await recordDelivery(prisma, job.accountId, r.incFired.dm, r.incDone.dm || 0, Date.now())
     const attempted = Object.keys(r.incFired).length > 0
     const success = Object.keys(r.incDone).length > 0
+    const impossible = r.impossible ?? []
+    const hardError = r.errors.length > 0
+    // §13.10 — «невозможно» (0 постов/0 сторис) НЕ ошибка. Триггер СРАБОТАЛ, если что-то выполнено
+    // ИЛИ единственное, что «помешало» — невозможность действия (без реальных ошибок).
+    const fired = success || (impossible.length > 0 && !hardError)
     if (attempted) {
-      const level = success ? (r.errors.length ? 'WARN' : 'SUCCESS') : 'ERROR'
+      const parts: string[] = []
+      if (r.errors.length) parts.push(r.errors.join('; '))
+      if (impossible.length) parts.push(`невозможно: ${impossible.join('; ')}`)
+      const tail = parts.length ? ` (${parts.join('; ')})` : ''
+      const level = success ? (hardError ? 'WARN' : 'SUCCESS') : (hardError ? 'ERROR' : 'WARN')
       const message = success
-        ? `Сработал триггер «${job.triggerName}» → @${job.followerUsername}${r.errors.length ? ` (частично: ${r.errors.join('; ')})` : ''}`
-        : `Триггер «${job.triggerName}» → @${job.followerUsername}: действия не выполнены${r.errors.length ? ` (${r.errors.join('; ')})` : ''}`
+        ? `Сработал триггер «${job.triggerName}» → @${job.followerUsername}${tail}`
+        : (hardError
+          ? `Триггер «${job.triggerName}» → @${job.followerUsername}: действия не выполнены${tail}`
+          : `Триггер «${job.triggerName}» → @${job.followerUsername}: действие невозможно${tail}`)
       await Promise.all([
         prisma.log.create({ data: { accountId: job.accountId, level, message } }),
-        // «Срабатывание» (fireCount) считаем ТОЛЬКО когда реально что-то ВЫПОЛНЕНО (success),
-        // а не по факту попытки — иначе провал (директ не ушёл) ложно читался как «сработал».
-        // stats пишем всегда (там раздельно попытки/выполнено), чтобы провал был виден.
-        prisma.triggerRule.update({ where: { id: job.triggerId }, data: { ...(success ? { fireCount: { increment: 1 } } : {}), stats: await mergeStats(job.triggerId, r.incFired, r.incDone) } }),
+        // «Срабатывание» (fireCount) — при реально выполненном действии ИЛИ когда действие было
+        // невозможным (нет постов/сторис) без ошибок (§13.10). Провал (директ не ушёл / таймаут) —
+        // НЕ считается. stats пишем всегда (раздельно попытки/выполнено), чтобы всё было видно.
+        prisma.triggerRule.update({ where: { id: job.triggerId }, data: { ...(fired ? { fireCount: { increment: 1 } } : {}), stats: await mergeStats(job.triggerId, r.incFired, r.incDone) } }),
       ])
     }
     if (r.brk) await prisma.instagramAccount.update({ where: { id: job.accountId }, data: { status: r.brk } }).catch(() => null)
@@ -505,9 +517,13 @@ export async function POST(req: NextRequest) {
         const isOn = (a: any) => a && a.enabled !== false
         const msgAction = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
         const doFollowT = actions.some((a: any) => a.type === 'FOLLOW_BACK' && isOn(a))
-        const doLikeT = actions.some((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
+        const likeAct = actions.find((a: any) => a.type === 'LIKE_MEDIA' && isOn(a))
+        const doLikeT = Boolean(likeAct)
         const storiesAct = actions.find((a: any) => a.type === 'VIEW_STORIES' && isOn(a))
         if (!msgAction?.templates?.[0] && !doFollowT && !doLikeT && !storiesAct) continue
+        // §13.10 — сколько постов лайкать (1..10) / сколько кадров сторис смотреть (1..20).
+        const likeCount = Math.min(10, Math.max(1, Number(likeAct?.count) || 1))
+        const storyCount = Math.min(20, Math.max(1, Number(storiesAct?.count) || 4))
 
         const template: string = msgAction?.templates?.[0] ?? ''
         const link = msgAction?.link
@@ -552,8 +568,8 @@ export async function POST(req: NextRequest) {
             triggerId: trigger.id, triggerName: trigger.name,
             followerPk: target.pk, followerUsername: target.username,
             text: text.trim(), image: willDM ? image : undefined,
-            doFollow: willFollow, doLike: willLike,
-            viewStories: willStory, storyLike: Boolean(storiesAct?.like), proxy: account.proxy,
+            doFollow: willFollow, doLike: willLike, likeCount,
+            viewStories: willStory, storyLike: Boolean(storiesAct?.like), storyCount, proxy: account.proxy,
             fallbackFollow, fallbackLike,
             // Все действия выполняет основной своей браузерной сессией (browserState).
           }
