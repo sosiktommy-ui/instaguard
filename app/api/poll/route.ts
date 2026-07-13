@@ -336,6 +336,30 @@ export async function POST(req: NextRequest) {
   for (const account of accounts) {
     if (!account.sessionData && !account.browserState) continue
 
+    // Число подписчиков (ПУБЛИЧНЫЕ данные через HikerAPI — прокси/сессия НЕ нужны) обновляем
+    // РАНО, ДО гейтов действий: иначе аккаунт, пропущенный по тихим часам/интервалу/мёртвому
+    // прокси, никогда не обновлял бы счётчик, и метрика «Подписчики»/спарклайн пустовали. Раз в
+    // день на аккаунт (или по ручному запросу). Сбой не критичен — не трогает статус/цикл.
+    {
+      const day0 = new Date().toISOString().slice(0, 10)
+      const hist0 = Array.isArray(account.followersHistory) ? (account.followersHistory as any[]) : []
+      const haveToday0 = hist0.length > 0 && hist0[hist0.length - 1]?.d === day0 && account.followers != null
+      if (scraperConfigured() && (isManual || !haveToday0)) {
+        try {
+          const n = (await scrapeUserInfo(account.username)).follower_count
+          if (typeof n === 'number') {
+            const hist = [...hist0]
+            const last = hist[hist.length - 1]
+            if (last && last.d === day0) last.n = n; else hist.push({ d: day0, n })
+            const trimmed = hist.slice(-30)
+            await prisma.instagramAccount.update({ where: { id: account.id }, data: { followers: n, followersHistory: trimmed as any } }).catch(() => null)
+            ;(account as any).followers = n            // in-memory → поздний блок не тянет повторно
+            ;(account as any).followersHistory = trimmed
+          }
+        } catch { /* метрика подписчиков не критична */ }
+      }
+    }
+
     // Владельцу нужен скрейпер-API (parsingSource 'api'/'drafts_then_api'), но ключ не задан —
     // уже уведомили выше, этого конкретного аккаунта просто пропускаем.
     if (blockedIds.has(account.id)) {
