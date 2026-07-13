@@ -39,6 +39,10 @@ export const SEL = {
     'Sorry, your password was incorrect', 'password was incorrect',
     "The username you entered doesn't belong to an account",
     'incorrect. Please double check your',
+    // Новый формат Instagram (2026): «The login information you entered is incorrect. Find your account…»
+    // — часть, не завязанная на #slfErrorAlert; без неё код ловил таймаут «network» вместо честного bad_password.
+    'The login information you entered is incorrect', 'login information you entered',
+    'информация для входа неверна', 'введённые данные для входа неверны',
   ],
   // Промежуточный экран (logged-out домашняя / «продолжить») — открыть форму входа
   logInLink: ['Log in', 'Log In', 'Войти', 'Log In', 'Log in with credentials'],
