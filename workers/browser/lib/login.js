@@ -125,8 +125,9 @@ async function findLoginForm(page) {
   passInput = userInput ? await firstVisible(page, SEL.loginPassword, 3000) : null
   if (userInput && passInput) return { userInput, passInput }
 
-  // 3) Последняя попытка — принудительный повторный заход на страницу входа + ожидание формы.
-  await gotoResilient(page, LOGIN_URL, { timeout: 20000, retries: 1, backoffMs: [2500] }).catch(() => {})
+  // 3) Последняя попытка — ОДИН заход на deep-URL входа (именно его часть IP отбивает
+  //    мгновенным ERR_HTTP_RESPONSE_CODE_FAILURE, поэтому НЕ долбим: retries:0 = одна попытка).
+  await gotoResilient(page, LOGIN_URL, { timeout: 20000, retries: 0, backoffMs: [] }).catch(() => {})
   await dismissCookieBanner(page)
   await waitForm(page, 20000)
   userInput = await firstVisible(page, SEL.loginUsername, 4000)
@@ -185,17 +186,13 @@ export async function extractUsername(page) {
  */
 export async function attemptLogin(context, { username, password, totpSecret }) {
   const page = await context.newPage()
-  // Прогрев соединения: сперва домашняя (легче), потом /accounts/login/. Холодный заход СРАЗУ на
-  // deep-URL логина через резидентный прокси часто ловит ERR_HTTP_RESPONSE_CODE_FAILURE (прокси
-  // моргает на первом коннекте к новому хосту); после домашней туннель уже установлен, и вход
-  // проходит. Домашняя best-effort — её сбой не критичен, идём к логину в любом случае.
-  await gotoResilient(page, 'https://www.instagram.com/', { timeout: 30000, retries: 2, backoffMs: [3000, 6000] }).catch(() => {})
-  await jitter(800, 1600)
-  // Таймауты урезаны относительно дефолта gotoResilient — вход и так многофазный
-  // (набор текста + ожидание исхода до 28с), нужен запас в общем бюджете Next.js-клиента (180с).
-  // Больше ретраев/пауза: резидентный прокси может моргнуть на первой навигации
-  // (ERR_HTTP_RESPONSE_CODE_FAILURE / таймаут) и восстановиться через пару секунд.
-  await gotoResilient(page, LOGIN_URL, { timeout: 30000, retries: 4, backoffMs: [3000, 6000, 10000, 15000] })
+  // Заходим на ДОМАШНЮЮ (наименее блокируемый URL), а к форме входа идём по ссылке «Log in»
+  // внутри findLoginForm (client-side переход, как человек). Холодный заход СРАЗУ на deep-URL
+  // /accounts/login/ у части резидентных IP Instagram отбивает мгновенным ERR_HTTP_RESPONSE_CODE_FAILURE
+  // (это ОТВЕТ-ошибка, а не медленная загрузка — потому частые ретраи не помогают и лишь злят IG).
+  // Патиент-ретраи: мало попыток, ДЛИННЫЕ паузы (даём IP «остыть», не долбим). Долгий per-attempt
+  // таймаут (45с) — на случай реально медленного прокси (успеет догрузиться, а не «сорвётся раньше»).
+  await gotoResilient(page, 'https://www.instagram.com/', { timeout: 45000, retries: 2, backoffMs: [10000, 25000] })
   await dismissCookieBanner(page)
   await idleMouse(page)
 
