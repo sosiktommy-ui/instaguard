@@ -184,6 +184,8 @@ interface Draft {
   actLikeComment: boolean; actCommentReply: boolean
   // сторис (общее для всех событий)
   actStories: boolean; storyView: boolean; storyLike: boolean
+  // §13.10 — сколько последних постов лайкать (1..10) / сколько кадров сторис смотреть (1..20)
+  likeCount: number; storyFrames: number
   // проверка подписки перед DM (комментарий/лайк/сторис)
   dmGate: boolean; dmGateMode: GateMode; cmtGateText: string
   name: string; message: string
@@ -201,6 +203,7 @@ const DEFAULT_DRAFT: Draft = {
   actDM: true, actLike: false, actFollow: false,
   actLikeComment: false, actCommentReply: false,
   actStories: false, storyView: true, storyLike: false,
+  likeCount: 1, storyFrames: 4,
   dmGate: false, dmGateMode: 'followed_by', cmtGateText: 'Подпишись, чтобы я смог написать тебе в директ 💌',
   name: '',
   message: 'Привет, @{{username}}! Вижу, ты заинтересован в наших мероприятиях. Скажи, чем могу помочь? 🙌',
@@ -229,13 +232,16 @@ function buildActions(d: Draft): any[] {
     // Гейт подписки: для комментария — с текстом-приглашением; для лайка/сторис — просто пропуск DM
     gate: d.dmGate ? { mode: d.dmGateMode, inviteText: d.type === 'COMMENT' ? d.cmtGateText : undefined } : undefined,
   })
-  const stories = () => ({ type: 'VIEW_STORIES', enabled: true, like: d.storyLike })
+  const clampLike = Math.min(10, Math.max(1, Math.round(d.likeCount) || 1))
+  const clampFrames = Math.min(20, Math.max(1, Math.round(d.storyFrames) || 4))
+  const stories = () => ({ type: 'VIEW_STORIES', enabled: true, like: d.storyLike, count: clampFrames })
+  const likeMediaAct = () => ({ type: 'LIKE_MEDIA', enabled: true, count: clampLike })
 
   if (d.type === 'COMMENT') {
     if (d.actDM) actions.push(msg())
     if (d.actCommentReply) actions.push({ type: 'REPLY_COMMENT', enabled: true, replies: d.commentReplies.map((x) => x.trim()).filter(Boolean) })
     // «Лайк» в комментарии = зайти к автору и лайкнуть его посты
-    if (d.actLikeComment) actions.push({ type: 'LIKE_MEDIA', enabled: true })
+    if (d.actLikeComment) actions.push(likeMediaAct())
     if (d.actFollow) actions.push({ type: 'FOLLOW_BACK', enabled: true })
     if (d.actStories && (d.storyView || d.storyLike)) actions.push(stories())
     return actions
@@ -243,7 +249,7 @@ function buildActions(d: Draft): any[] {
 
   // FOLLOW / LIKE / STORY
   if (d.actDM) actions.push(msg())
-  if (d.actLike) actions.push({ type: 'LIKE_MEDIA', enabled: true })
+  if (d.actLike) actions.push(likeMediaAct())
   if (d.actFollow) actions.push({ type: 'FOLLOW_BACK', enabled: true })
   if (d.actStories && (d.storyView || d.storyLike)) actions.push(stories())
   return actions
@@ -258,7 +264,8 @@ function draftFromTrigger(t: DbTrigger): Draft {
   const msg = acts.find((a) => a.type === 'SEND_MESSAGE' && on(a))
   const reply = acts.find((a) => a.type === 'REPLY_COMMENT' && on(a))
   const legacyGate = acts.find((a) => a.type === 'COMMENT_GATE' && on(a))
-  const likeMedia = acts.some((a) => a.type === 'LIKE_MEDIA' && on(a))
+  const likeMediaAct = acts.find((a) => a.type === 'LIKE_MEDIA' && on(a))
+  const likeMedia = Boolean(likeMediaAct)
   const follow = acts.some((a) => a.type === 'FOLLOW_BACK' && on(a))
   const story = acts.find((a) => a.type === 'VIEW_STORIES' && on(a))
   const gate = msg?.gate ?? (legacyGate ? { mode: 'followed_by', inviteText: legacyGate.text ?? '' } : null)
@@ -277,6 +284,8 @@ function draftFromTrigger(t: DbTrigger): Draft {
     actStories: Boolean(story),
     storyView: story ? true : DEFAULT_DRAFT.storyView,
     storyLike: Boolean(story?.like),
+    likeCount: Math.min(10, Math.max(1, Number(likeMediaAct?.count) || 1)),
+    storyFrames: Math.min(20, Math.max(1, Number(story?.count) || 4)),
     dmGate: Boolean(gate),
     dmGateMode: (gate?.mode === 'mutual' ? 'mutual' : 'followed_by'),
     cmtGateText: gate?.inviteText || DEFAULT_DRAFT.cmtGateText,
@@ -588,7 +597,30 @@ function StoriesBlock({ d, set }: { d: Draft; set: <K extends keyof Draft>(k: K,
     <Group title="Сторис" icon={Clapperboard} accent="#ff9f0a" defaultOpen={false}>
       <CheckRow on={d.storyView} onChange={(v) => set('storyView', v)} icon={Eye} label="Просмотреть сторис пользователя" />
       <CheckRow on={d.storyLike} onChange={(v) => { set('storyLike', v); if (v) set('storyView', true) }} icon={Heart} label="Пролайкать просмотренные сторис" />
+      <div className="flex items-center gap-2 mt-1.5 pl-1 text-[12.5px]">
+        <span className="text-subt">Сколько кадров сторис смотреть:</span>
+        <input type="number" min={1} max={20} value={d.storyFrames}
+          onChange={(e) => set('storyFrames', Math.min(20, Math.max(1, Math.round(Number(e.target.value) || 1))))}
+          className="field w-16 py-1.5 text-center text-[13px]" />
+      </div>
+      <div className="text-[10.5px] text-subt mt-1 pl-1 leading-snug">Если активных сторис нет — не ошибка (действие «невозможно»); если посмотрели хотя бы 1 — засчитано.</div>
     </Group>
+  )
+}
+
+// Настройка действия «Лайк»: сколько последних постов лайкать (§13.10)
+function LikeBlock({ d, set }: { d: Draft; set: <K extends keyof Draft>(k: K, v: Draft[K]) => void }) {
+  return (
+    <div className="rounded-2xl bg-canvas px-4 py-3">
+      <div className="flex items-center gap-2 text-[12.5px]">
+        <Heart className="w-3.5 h-3.5 text-[#ff2d92]" />
+        <span className="text-subt">Лайкнуть последних постов:</span>
+        <input type="number" min={1} max={10} value={d.likeCount}
+          onChange={(e) => set('likeCount', Math.min(10, Math.max(1, Math.round(Number(e.target.value) || 1))))}
+          className="field w-16 py-1.5 text-center text-[13px]" />
+      </div>
+      <div className="text-[10.5px] text-subt mt-1.5 leading-snug">Если постов меньше — лайкнет сколько есть (всё равно засчитано как 1 действие). 0 постов — не ошибка, действие «невозможно».</div>
+    </div>
   )
 }
 
@@ -943,6 +975,7 @@ function CreateForm({
                     </>
                   )}
 
+                  {d.actLikeComment && <LikeBlock d={d} set={set} />}
                   {d.actStories && <StoriesBlock d={d} set={set} />}
                 </>
               ) : (
@@ -956,6 +989,7 @@ function CreateForm({
                     </Group>
                   )}
                   {d.actFollow && d.type === 'FOLLOW' && <div className="text-[10.5px] text-subt -mt-1">↳ Подписаться в ответ на нового подписчика</div>}
+                  {d.actLike && <LikeBlock d={d} set={set} />}
                   {d.actStories && <StoriesBlock d={d} set={set} />}
                 </>
               )}
