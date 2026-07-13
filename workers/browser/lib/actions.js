@@ -181,7 +181,8 @@ export async function likeUser(context, { targetUsername, count = 1, dryRun }) {
   const postLinks = await page.locator('a[href*="/p/"]').evaluateAll(
     (els) => Array.from(new Set(els.map((e) => e.getAttribute('href')).filter(Boolean))).slice(0, 6)
   ).catch(() => [])
-  if (!postLinks.length) return { ok: false, liked: 0, dryRun: dryRun || undefined, error: 'no_posts: у аккаунта нет постов для лайка' }
+  // 0 постов = действие НЕВОЗМОЖНО (не ошибка бота): у цели просто нечего лайкать (§13.10).
+  if (!postLinks.length) return { ok: false, liked: 0, impossible: true, dryRun: dryRun || undefined, error: 'no_posts: у аккаунта нет постов для лайка' }
 
   // §10.3 dry-run: открываем первый пост, проверяем, что кнопка «Нравится» на месте, НЕ лайкаем.
   if (dryRun) {
@@ -212,23 +213,25 @@ export async function likeUser(context, { targetUsername, count = 1, dryRun }) {
 }
 
 // ── Сторис: просмотр (+опц. лайк) ─────────────────────────────────────────────
-export async function viewStories(context, { targetUsername, like = false, dryRun }) {
+export async function viewStories(context, { targetUsername, like = false, count = 4, dryRun }) {
   await requireSession(context)
   const page = await context.newPage()
   await preActionBrowse(page) // §1.2: прогрев ленты перед просмотром сторис
   await gotoResilient(page, `https://www.instagram.com/stories/${targetUsername}/`, { timeout: 30000, retries: 1, backoffMs: [2000] })
   await jitter(1500, 2800)
 
-  // Если сторис нет — редирект на профиль/пусто.
+  // Если сторис нет — редирект на профиль/пусто. 0 активных сторис = действие НЕВОЗМОЖНО
+  // (не ошибка бота), а не «провал» (§13.10).
   let viewed = 0, liked = 0
   const isViewer = page.url().includes('/stories/')
-  if (!isViewer) return { ok: false, viewed, liked, dryRun: dryRun || undefined, error: 'no_stories: активных сторис нет' }
+  if (!isViewer) return { ok: false, viewed, liked, impossible: true, dryRun: dryRun || undefined, error: 'no_stories: активных сторис нет' }
 
   // §10.3 dry-run: убеждаемся, что вьюер сторис открылся, но НЕ лайкаем и не пролистываем дальше.
   if (dryRun) return { ok: true, dryRun: true, reached: { storyViewer: true }, viewed: 1, liked: 0, storageState: await safeStorageState(context) }
 
-  // Пролистать несколько кадров.
-  for (let i = 0; i < 4; i++) {
+  // §13.10 — пролистать до N кадров (сколько выбрано в кампании); реально просмотренные = viewed.
+  const frames = Math.max(1, count)
+  for (let i = 0; i < frames; i++) {
     viewed++
     if (like) {
       try {
