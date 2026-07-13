@@ -48,6 +48,14 @@ export const SEL = {
     'Подождите несколько минут', 'try again later', 'Sorry, something went wrong',
     'Page Not Found', 'reported activity',
   ],
+  // «Подтвердите вход на другом устройстве» (device-approval): ждём подтверждения в приложении,
+  // НЕ таймаутим. Мультиязычно — берём заметные фразы обоих экранов (англ./рус.).
+  deviceApprovalText: [
+    'Check your notifications on another device', 'Waiting for approval',
+    'Approve from the other device', 'Approve the login', 'approve the login to continue',
+    'Проверьте уведомления', 'Подтвердите, что это вы', 'на другом устройстве',
+    'Ожидание подтверждения', 'Подтвердите вход',
+  ],
 
   // Диалоги после входа
   notNowButtons: ['Not Now', 'Not now', 'Не сейчас', 'Cancel', 'Отмена'],
@@ -94,4 +102,6 @@ export const URLS = {
   challenge: ['/challenge/', '/auth_platform/codeentry'],
   twoFactor: ['/accounts/login/two_factor', 'two_factor'],
   suspended: ['/accounts/suspended', '/challenge/action/'],
+  // «Подтвердите вход на другом устройстве» (device-approval, БЕЗ кода — approve на телефоне).
+  deviceApproval: ['/auth_platform/afad', 'auth_platform/afad', '/auth_platform/review'],
 }

@@ -220,8 +220,9 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
   if (submit) await humanClick(page, submit)   // §1.3: человеческий подвод курсора к «Войти»
   else await passInput.press('Enter')
 
-  // Ждём исход до ~28с.
-  const deadline = Date.now() + 28000
+  // Ждём исход до ~28с (при device-approval дедлайн продлевается — см. ниже).
+  let deadline = Date.now() + 28000
+  let approvalExtended = false
   while (Date.now() < deadline) {
     await page.waitForTimeout(700)
 
@@ -266,6 +267,16 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
       return { needsCheckpoint: true, channel }
     }
 
+    // «Подтвердите вход на другом устройстве» (device-approval, БЕЗ кода): пользователь approve'ит
+    // в приложении Instagram. НЕ таймаутим и НЕ логаутим — ждём ДОЛЬШЕ (человеку нужно взять телефон
+    // и подтвердить); как только подтвердил — появится sessionid и вход завершится успехом (проверка
+    // hasSessionCookie в начале цикла). Дедлайн продлеваем ОДИН раз до ~2.5 мин (в бюджете клиента 180с).
+    if (urlHas(url, URLS.deviceApproval) || (await pageHasText(page, SEL.deviceApprovalText))) {
+      if (!approvalExtended) { approvalExtended = true; deadline = Date.now() + 135000 }  // ~2.25 мин, в бюджете клиента 180с
+      await page.waitForTimeout(2500)   // не долбим DOM часто — просто ждём подтверждения
+      continue
+    }
+
     const err = await firstVisible(page, SEL.loginError, 500)
     if (err) {
       const txt = (await err.textContent().catch(() => '')) || ''
@@ -285,6 +296,12 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
   // чтобы следующий необъяснённый провал сразу показал реальный текст/структуру, а не
   // расплывчатое «unknown»/«network».
   if (await firstVisible(page, SEL.codeInput, 500)) return { needsCheckpoint: true, channel: null }
+  // Ждали подтверждения на устройстве, но его так и не пришло за ~2.5 мин — НЕ «ошибка входа»,
+  // а «не успел подтвердить». Понятное сообщение + повтор (не «network», из-за которого раньше
+  // казалось, что вход сломался, хотя нужно было просто нажать «Это я» в приложении).
+  if (approvalExtended) {
+    await fail(page, 'approval_pending: Instagram ждёт подтверждения входа В ПРИЛОЖЕНИИ («Это вы?» → подтвердите), затем нажмите «Войти» ещё раз. Вход не выполнен только потому, что подтверждение не пришло вовремя.')
+  }
   const dom = await domSummary(page)
   console.error('[login] исход не распознан за отведённое время, DOM-дамп:', JSON.stringify(dom))
   const domTxt = dom ? ` · фреймов: ${dom.frameCount}, инпуты по фреймам: ${JSON.stringify(dom.frames.map((f) => ({ url: f.url.slice(0, 60), forms: f.forms, inputs: f.inputs })))}` : ''
