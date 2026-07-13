@@ -211,7 +211,7 @@ export async function gotoResilient(page, url, { timeout = 60000, retries = 3, b
       if (i < retries) await new Promise((r) => setTimeout(r, backoffMs[i] ?? 8000))
     }
   }
-  throw new Error(`network: прокси не доходит до Instagram (${String(lastErr?.message ?? 'таймаут').slice(0, 140)})`)
+  throw new Error(`network: прокси моргнул — Instagram не ответил за ${retries + 1} попыток (резидентные прокси иногда сбоят на коннекте; повторите вход через пару секунд или смените прокси). ${String(lastErr?.message ?? 'таймаут').slice(0, 120)}`)
 }
 
 // ── DOM-хелперы: перебор вариантов селекторов, первый видимый ──────────────────

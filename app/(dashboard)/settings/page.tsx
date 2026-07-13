@@ -161,7 +161,7 @@ function SettingsScreen() {
           </div>
         </div>
         <select value={s.pollIntervalHours} onChange={(e) => patch({ pollIntervalHours: Number(e.target.value) })}
-          className="field py-2 text-[14px] shrink-0">
+          className="shrink-0 w-40 bg-canvas border border-line/70 rounded-2xl px-4 py-2.5 text-[14px] text-ink outline-none cursor-pointer focus:border-brand">
           {[1, 2, 3, 6, 12, 24, 48].map((h) => (
             <option key={h} value={h}>{h === 24 ? 'раз в сутки' : h === 48 ? 'раз в 2 суток' : `каждые ${h} ч`}</option>
           ))}

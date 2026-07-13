@@ -185,11 +185,17 @@ export async function extractUsername(page) {
  */
 export async function attemptLogin(context, { username, password, totpSecret }) {
   const page = await context.newPage()
+  // Прогрев соединения: сперва домашняя (легче), потом /accounts/login/. Холодный заход СРАЗУ на
+  // deep-URL логина через резидентный прокси часто ловит ERR_HTTP_RESPONSE_CODE_FAILURE (прокси
+  // моргает на первом коннекте к новому хосту); после домашней туннель уже установлен, и вход
+  // проходит. Домашняя best-effort — её сбой не критичен, идём к логину в любом случае.
+  await gotoResilient(page, 'https://www.instagram.com/', { timeout: 30000, retries: 2, backoffMs: [3000, 6000] }).catch(() => {})
+  await jitter(800, 1600)
   // Таймауты урезаны относительно дефолта gotoResilient — вход и так многофазный
-  // (набор текста + ожидание исхода до 28с), нужен запас в общем бюджете Next.js-клиента (120с).
+  // (набор текста + ожидание исхода до 28с), нужен запас в общем бюджете Next.js-клиента (180с).
   // Больше ретраев/пауза: резидентный прокси может моргнуть на первой навигации
   // (ERR_HTTP_RESPONSE_CODE_FAILURE / таймаут) и восстановиться через пару секунд.
-  await gotoResilient(page, LOGIN_URL, { timeout: 30000, retries: 3, backoffMs: [3000, 6000, 12000] })
+  await gotoResilient(page, LOGIN_URL, { timeout: 30000, retries: 4, backoffMs: [3000, 6000, 10000, 15000] })
   await dismissCookieBanner(page)
   await idleMouse(page)
 
