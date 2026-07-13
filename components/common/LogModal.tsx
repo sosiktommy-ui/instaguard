@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { X, CheckCircle2, AlertCircle, AlertTriangle, Info, ScrollText, RefreshCw, ArrowRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { TRIGGER_TYPE_LABELS } from '@/lib/stats'
 
 interface LogEntry { id: string; level: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS'; message: string; createdAt: string }
 
@@ -92,6 +93,8 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
   const [logs, setLogs] = useState<LogEntry[] | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [range, setRange] = useState<Range>('30d')
+  // Кампания → тип триггера: чтобы даже у старых логов (без «· тип:») слева показывать ТИП
+  const [typeMap, setTypeMap] = useState<Record<string, string>>({})
 
   const load = () => {
     setLogs(null)
@@ -102,6 +105,18 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
   }
 
   useEffect(() => { load() }, [accountId])
+
+  // Подтягиваем кампании владельца → строим карту «имя кампании» → «Тип триггера»
+  useEffect(() => {
+    fetch('/api/triggers')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((arr: any[]) => {
+        const m: Record<string, string> = {}
+        for (const t of arr ?? []) if (t?.name && t?.triggerType) m[t.name] = TRIGGER_TYPE_LABELS[t.triggerType] ?? t.triggerType
+        setTypeMap(m)
+      })
+      .catch(() => {})
+  }, [])
 
   // Диапазон по времени (как на референсе: Сегодня / 7 дней / 30 дней / Всё)
   const rangeMs: Record<Range, number> = { today: 0, '7d': 7 * 864e5, '30d': 30 * 864e5, all: Infinity }
@@ -199,7 +214,7 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-              {parsed.map(({ l, p }, i) => <LogCard key={l.id} l={l} p={p} index={i} />)}
+              {parsed.map(({ l, p }, i) => <LogCard key={l.id} l={l} p={p} index={i} typeMap={typeMap} />)}
             </div>
           )}
         </div>
@@ -208,87 +223,94 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
   )
 }
 
-function LogCard({ l, p, index }: { l: LogEntry; p: Parsed; index: number }) {
+function LogCard({ l, p, index, typeMap }: { l: LogEntry; p: Parsed; index: number; typeMap: Record<string, string> }) {
   const m = LEVEL_META[l.level] ?? LEVEL_META.INFO
+  // Тип триггера: из меты нового лога → из карты кампаний (старые логи) → имя кампании (запас)
+  const triggerLabel = p.triggerType ?? (p.campaign ? typeMap[p.campaign] : undefined) ?? p.campaign ?? 'триггер'
+
   return (
-    <div className="relative rounded-2xl border border-black/[0.06] bg-white/70 backdrop-blur-sm px-3.5 py-3 overflow-hidden transition-all hover:border-black/[0.12] hover:shadow-[0_6px_20px_rgba(0,0,0,0.06)] rise"
+    <div className="relative rounded-2xl border border-black/[0.07] bg-white/80 backdrop-blur-sm pl-4 pr-3.5 py-3 overflow-hidden transition-all hover:border-black/[0.14] hover:shadow-[0_8px_24px_rgba(20,16,48,0.08)] rise"
       style={{ animationDelay: `${Math.min(index, 12) * 35}ms` }}>
       {/* цветная кромка по уровню */}
-      <span className="absolute left-0 top-0 bottom-0 w-[3px] rounded-full" style={{ background: m.color }} />
-
-      {/* верх: для триггера — только время (у колонок свои подписи); для события — подпись + время */}
-      <div className="flex items-center justify-between mb-2 pl-1.5">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-subt/70">
-          {p.kind === 'trigger' ? '' : 'Событие'}
-        </span>
-        <span className="flex items-center gap-1.5 text-[11px] text-subt shrink-0">
-          <span className="w-1.5 h-1.5 rounded-full" style={{ background: m.color }} />
-          {relTime(l.createdAt)}
-        </span>
-      </div>
+      <span className="absolute left-0 top-2.5 bottom-2.5 w-1 rounded-full" style={{ background: m.color }} />
 
       {p.kind === 'trigger' ? (
-        <div className="pl-1.5">
-          {/* две колонки: ТРИГГЕР | ДЕЙСТВИЕ, у каждой значение + аккаунт снизу */}
-          <div className="grid grid-cols-[1fr_auto_1fr] items-start gap-2">
+        <>
+          {/* время в правом верхнем углу */}
+          <span className="absolute right-3.5 top-3 flex items-center gap-1.5 text-[11px] text-subt">
+            <span className="w-1.5 h-1.5 rounded-full" style={{ background: m.color }} />{relTime(l.createdAt)}
+          </span>
+
+          {/* две колонки: ТРИГГЕР | ДЕЙСТВИЕ — метка / значение / аккаунт */}
+          <div className="grid grid-cols-[1fr_20px_1fr] items-stretch gap-1">
             {/* ТРИГГЕР */}
-            <div className="min-w-0">
-              <div className="text-[9.5px] font-semibold uppercase tracking-wider text-subt/60 mb-1">Триггер</div>
-              <span className="inline-flex max-w-full px-2 py-1 rounded-lg text-[12px] font-medium bg-brand/10 text-brand truncate" title={p.campaign}>
-                {p.triggerType ?? p.campaign ?? 'триггер'}
+            <div className="min-w-0 flex flex-col">
+              <div className="text-[9.5px] font-bold uppercase tracking-[0.08em] text-subt/55 mb-1.5">Триггер</div>
+              <span className="inline-flex self-start max-w-full items-center h-[26px] px-2.5 rounded-lg text-[12.5px] font-semibold bg-brand/10 text-brand truncate" title={p.campaign}>
+                {triggerLabel}
               </span>
-              {p.campaign && p.triggerType && <div className="text-[11px] text-subt truncate mt-0.5" title={p.campaign}>{p.campaign}</div>}
-              {p.account && <div className="mt-1.5 text-[12.5px] font-semibold text-ink/80 truncate">@{p.account}</div>}
+              <div className="mt-auto pt-2 text-[12.5px] font-semibold text-ink/75 truncate">{p.account ? `@${p.account}` : '—'}</div>
             </div>
 
-            <ArrowRight className="w-4 h-4 text-subt/40 shrink-0 mt-6" />
+            {/* разделитель со стрелкой */}
+            <div className="relative flex items-center justify-center">
+              <span className="absolute inset-y-1 left-1/2 w-px bg-black/[0.06]" />
+              <span className="relative z-10 w-5 h-5 rounded-full bg-white border border-black/[0.08] flex items-center justify-center shadow-sm">
+                <ArrowRight className="w-3 h-3 text-subt/50" />
+              </span>
+            </div>
 
             {/* ДЕЙСТВИЕ */}
-            <div className="min-w-0">
-              <div className="text-[9.5px] font-semibold uppercase tracking-wider text-subt/60 mb-1">Действие</div>
-              {p.done.length > 0 ? (
-                <div className="flex flex-wrap gap-1">
-                  {p.done.map((a, k) => {
+            <div className="min-w-0 flex flex-col pl-1">
+              <div className="text-[9.5px] font-bold uppercase tracking-[0.08em] text-subt/55 mb-1.5">Действие</div>
+              <div className="flex flex-wrap gap-1">
+                {p.done.length > 0 ? (
+                  p.done.map((a, k) => {
                     const c = ACTION_COLOR[a.toLowerCase()] ?? '#8b93a1'
                     return (
-                      <span key={k} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[12px] font-medium"
-                        style={{ color: c, background: `${c}1f` }}>
+                      <span key={k} className="inline-flex items-center gap-1 h-[26px] px-2.5 rounded-lg text-[12.5px] font-semibold capitalize" style={{ color: c, background: `${c}1f` }}>
                         <span className="w-1.5 h-1.5 rounded-full" style={{ background: c }} />{a}
                       </span>
                     )
-                  })}
-                </div>
-              ) : p.outcome ? (
-                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[12px] font-medium"
-                  style={{ color: TONE[p.outcome.tone].fg, background: TONE[p.outcome.tone].bg }}>
-                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: TONE[p.outcome.tone].fg }} />
-                  {p.outcome.label}
-                </span>
-              ) : null}
-              {p.account && <div className="mt-1.5 text-[12.5px] font-semibold text-ink/80 truncate">@{p.account}</div>}
+                  })
+                ) : p.outcome ? (
+                  <span className="inline-flex items-center gap-1 h-[26px] px-2.5 rounded-lg text-[12.5px] font-semibold" style={{ color: TONE[p.outcome.tone].fg, background: TONE[p.outcome.tone].bg }}>
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: TONE[p.outcome.tone].fg }} />{p.outcome.label}
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-auto pt-2 text-[12.5px] font-semibold text-ink/75 truncate">{p.account ? `@${p.account}` : '—'}</div>
             </div>
           </div>
 
           {/* причина, если что-то не выполнено — во всю ширину */}
           {p.reason && p.outcome?.tone !== 'ok' && (
-            <div className="mt-2 flex items-start gap-1.5 text-[11.5px] rounded-lg px-2 py-1.5"
+            <div className="mt-2.5 flex items-start gap-1.5 text-[11.5px] rounded-lg px-2.5 py-1.5"
               style={{ color: TONE[p.outcome?.tone ?? 'warn'].fg, background: TONE[p.outcome?.tone ?? 'warn'].bg }}>
               <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-[1px]" />
               <span className="leading-snug">{p.reason}</span>
             </div>
           )}
-        </div>
+        </>
       ) : (
         /* обычное событие (инфо/сессия/прогрев) */
-        <div className="pl-1.5 flex items-start gap-2">
-          <span className="w-5 h-5 rounded-lg flex items-center justify-center shrink-0 mt-[1px]" style={{ background: `${m.color}22` }}>
-            <m.Icon className="w-3 h-3" style={{ color: m.color }} />
-          </span>
-          <div className="min-w-0">
-            <div className="text-[12.5px] text-ink/85 leading-snug">{p.text}</div>
-            {p.account && <div className="mt-1 text-[12px] text-subt">@{p.account}</div>}
+        <>
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[9.5px] font-bold uppercase tracking-[0.08em] text-subt/55">Событие</span>
+            <span className="flex items-center gap-1.5 text-[11px] text-subt shrink-0">
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: m.color }} />{relTime(l.createdAt)}
+            </span>
           </div>
-        </div>
+          <div className="flex items-start gap-2">
+            <span className="w-5 h-5 rounded-lg flex items-center justify-center shrink-0 mt-[1px]" style={{ background: `${m.color}22` }}>
+              <m.Icon className="w-3 h-3" style={{ color: m.color }} />
+            </span>
+            <div className="min-w-0">
+              <div className="text-[12.5px] text-ink/85 leading-snug">{p.text}</div>
+              {p.account && <div className="mt-1 text-[12px] text-subt">@{p.account}</div>}
+            </div>
+          </div>
+        </>
       )}
     </div>
   )
