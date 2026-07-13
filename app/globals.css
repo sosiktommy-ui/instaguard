@@ -205,6 +205,10 @@
 .mx-row { transition: transform 0.18s cubic-bezier(0.16,1,0.3,1), background-color 0.18s ease; }
 .mx-row:hover { transform: translateY(-1px); }
 
+/* Скрыть полосу прокрутки у горизонтальных рядов фильтров (журнал и т.п.) */
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
 @media (prefers-reduced-motion: reduce) {
   .rise { animation: none !important; opacity: 1 !important; transform: none !important; }
   .rm-bob { animation: none !important; }
