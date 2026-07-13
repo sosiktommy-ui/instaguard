@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Play, Pause, Trash2, X, Globe, Users, Zap, Send, UserPlus, RefreshCw, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp, Info, ScrollText, Cookie } from 'lucide-react'
+import { Plus, Play, Pause, Trash2, X, Globe, Users, Zap, Send, UserPlus, Loader2, RotateCcw, Pencil, Check, MessageCircle, Heart, Clapperboard, UserCheck, Activity, Calendar, TrendingUp, Info, ScrollText, Cookie } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { AddAccountModal } from '@/components/accounts/AddAccountModal'
 import { ImportCookiesModal } from '@/components/accounts/ImportCookiesModal'
@@ -421,7 +421,6 @@ function Accounts() {
   const [showImport, setShowImport] = useState(false)
   const [realAccounts, setReal]     = useState<RealAccount[]>([])
   const [allowNoDrafts, setAllowNoDrafts] = useState(false)  // из /api/settings — для индекса безопасности
-  const [polling, setPolling]       = useState(false)
   const [pollMsg, setPollMsg]       = useState('')
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set())
   const [editProxyId, setEditProxyId]   = useState<string | null>(null)
@@ -466,37 +465,6 @@ function Accounts() {
     }
   }
 
-  const handlePoll = async () => {
-    setPolling(true)
-    setPollMsg('')
-    try {
-      // manual: true — ставим действия в очередь с разнесёнными задержками (безопасно от бана)
-      const res = await fetch('/api/poll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manual: true }) })
-      const data = await res.json()
-      if (data.ok) {
-        const sum = (k: string) => data.summary?.reduce((s: number, r: any) => s + (r[k] ?? 0), 0) ?? 0
-        const totalDms = data.summary?.reduce((s: number, r: any) => s + (r.dmsQueued ?? r.dmsSent ?? 0), 0) ?? 0
-        const parts = [
-          `Подписчиков: ${sum('totalFollowers')}`,
-          `новых: ${sum('newFollowers')}`,
-          `запланировано: ${totalDms}`,
-        ]
-        if (sum('totalComments') > 0 || sum('newComments') > 0) {
-          parts.push(`комментов: ${sum('totalComments')}`, `новых: ${sum('newComments')}`, `действий: ${sum('commentActions')}`)
-        }
-        if (sum('limited') > 0) parts.push(`лимит дня: ${sum('limited')}`)
-        setPollMsg(parts.join(' | ') + ' — отправка с задержками')
-        loadRealAccounts()
-      } else {
-        setPollMsg(data.error ?? 'Ошибка')
-      }
-    } catch {
-      setPollMsg('Ошибка сети')
-    } finally {
-      setPolling(false)
-    }
-  }
-
   const handleDelete = async (id: string, _username: string) => {
     setLoadingIds((s) => new Set(s).add(id))
     try {
@@ -518,7 +486,7 @@ function Accounts() {
   const handleResetSnapshot = async (id: string) => {
     const res = await fetch(`/api/accounts/${id}/reset-snapshot`, { method: 'DELETE' }).catch(() => null)
     setPollMsg(res && res.ok
-      ? 'Сброшено ✓ При следующей «Проверить подписчиков» текущие подписчики будут обработаны как новые (сработают триггеры, в пределах дневных лимитов).'
+      ? 'Сброшено ✓ При следующей авто-проверке текущие подписчики будут обработаны как новые (сработают триггеры, в пределах дневных лимитов).'
       : 'Не удалось сбросить снапшот')
   }
 
@@ -575,10 +543,6 @@ function Accounts() {
   return (
     <div className="space-y-6">
       <PageHeader icon={Users} color={TONE.brand} title="Основные аккаунты" subtitle="Отправляют директ, лайк и подписку — вход и действия через реальный браузер">
-        <Button variant="secondary" onClick={handlePoll} disabled={polling}>
-          {polling ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-          {polling ? 'Проверка…' : 'Проверить подписчиков'}
-        </Button>
         <Button variant="secondary" onClick={() => setShowImport(true)}><Cookie className="w-4 h-4" /> Импорт списком</Button>
         <Button onClick={() => setShowAdd(true)}><Plus className="w-4 h-4" /> Добавить</Button>
       </PageHeader>

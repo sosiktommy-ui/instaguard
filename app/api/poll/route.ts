@@ -23,8 +23,8 @@ import { selectTargets } from '@/lib/targets'
 
 // Сколько последних постов автора комментария лайкать (действие «Лайк» в триггере «Комментарий»)
 const COMMENT_LIKE_POSTS = 3
-// Минимум 20 минут между автоматическими проверками одного аккаунта
-const POLL_COOLDOWN_MS = 20 * 60 * 1000
+// Интервал авто-проверки одного аккаунта — настройка владельца pollIntervalHours (дефолт 3ч),
+// применяется через intervalMsOf() в цикле поллинга (заменил прежний фиксированный кулдаун).
 // Комментарии проверяем реже — раз в 60 минут (они меняются медленнее)
 const COMMENT_COOLDOWN_MS = 60 * 60 * 1000
 // Лайки и стори-события — тоже реже подписчиков
@@ -302,10 +302,13 @@ export async function POST(req: NextRequest) {
   // черновым) остаются LEGACY no-op — черновые теперь только парсят, не действуют.
   const ownerIds = [...new Set(accounts.map((a) => a.userId))]
   const settingsRows = ownerIds.length
-    ? await prisma.userSettings.findMany({ where: { userId: { in: ownerIds } }, select: { userId: true, allowNoProxy: true, parsingSource: true } })
+    ? await prisma.userSettings.findMany({ where: { userId: { in: ownerIds } }, select: { userId: true, allowNoProxy: true, parsingSource: true, pollIntervalHours: true } })
     : []
   const allowNoProxy = new Map(settingsRows.map((r) => [r.userId, r.allowNoProxy]))
   const parsingSourceOf = new Map(settingsRows.map((r) => [r.userId, r.parsingSource ?? 'api']))
+  // §10 настраиваемый интервал авто-проверки (раз в N часов на аккаунт). Дефолт 3ч; кламп 1..168.
+  const intervalMsOf = (userId: string) =>
+    Math.max(1, Math.min(168, settingsRows.find((r) => r.userId === userId)?.pollIntervalHours ?? 3)) * 60 * 60 * 1000
   // Прокси обязателен, если владелец НЕ включил «Работать без прокси» (по умолчанию — обязателен).
   const proxyRequired = (userId: string) => !allowNoProxy.get(userId)
 
@@ -347,10 +350,11 @@ export async function POST(req: NextRequest) {
       continue
     }
 
-    // Кулдаун: пропускаем авто-поллинг если аккаунт проверялся недавно
+    // §10 Интервал авто-проверки: пропускаем, если аккаунт проверялся раньше, чем N часов назад
+    // (N — настройка владельца «Интервал авто-проверки», дефолт 3ч). Ручной запуск игнорирует.
     if (!isManual && account.lastChecked) {
       const elapsed = Date.now() - account.lastChecked.getTime()
-      if (elapsed < POLL_COOLDOWN_MS) {
+      if (elapsed < intervalMsOf(account.userId)) {
         summary.push({ accountId: account.id, totalFollowers: 0, newFollowers: 0, dmsQueued: 0, triggersFound: 0, totalComments: 0, newComments: 0, commentActions: 0, skipped: 'cooldown' })
         continue
       }

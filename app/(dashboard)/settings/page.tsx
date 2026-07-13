@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { ShieldAlert, Globe, ChevronDown, List, Users, BarChart3, Settings as SettingsIcon, HelpCircle } from 'lucide-react'
+import { ShieldAlert, Globe, ChevronDown, List, Users, BarChart3, Settings as SettingsIcon, HelpCircle, Clock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import ClientOnly from '@/components/common/ClientOnly'
 import { PageHeader } from '@/components/common/PageHeader'
@@ -28,7 +28,7 @@ const HELP: { icon: any; color: string; title: string; text: string; features: s
     text: 'Подключённые основные Instagram-аккаунты — те, что выполняют действия.',
     features: [
       'Подключить аккаунт по логину/паролю или по куки (sessionid).',
-      '«Проверить подписчиков» — ручной запуск проверки и постановка действий в очередь.',
+      'Проверка триггеров и запуск действий — автоматически по «Интервалу авто-проверки» (Настройки).',
       'Статус (активен / пауза / бан), «Индекс безопасности» (риск бана), дневная загрузка лимитов.',
       'Детали аккаунта: спарклайн прироста подписчиков, разбивка действий, кампании.',
       'Сменить прокси и раздел, поставить на паузу, сбросить снапшот, удалить.',
@@ -68,7 +68,7 @@ const HELP: { icon: any; color: string; title: string; text: string; features: s
 
 interface Settings {
   accountsPerProxy: number; allowNoProxy: boolean; allowNoDrafts: boolean; likeByDraft: boolean; storyByDraft: boolean
-  parsingSource: string; actionEngine: string; browserHeadful: boolean
+  parsingSource: string; actionEngine: string; browserHeadful: boolean; pollIntervalHours: number
 }
 
 // Радио-группа: список карточек-вариантов (заголовок + пояснение)
@@ -106,7 +106,7 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void 
 }
 
 function SettingsScreen() {
-  const [s, setS] = useState<Settings>({ accountsPerProxy: 3, allowNoProxy: false, allowNoDrafts: false, likeByDraft: false, storyByDraft: false, parsingSource: 'api', actionEngine: 'browser', browserHeadful: false })
+  const [s, setS] = useState<Settings>({ accountsPerProxy: 3, allowNoProxy: false, allowNoDrafts: false, likeByDraft: false, storyByDraft: false, parsingSource: 'api', actionEngine: 'browser', browserHeadful: false, pollIntervalHours: 3 })
   const [capInput, setCapInput] = useState('3')
   const [msg, setMsg] = useState('')
   const [openHelp, setOpenHelp] = useState<number | null>(null)
@@ -149,6 +149,24 @@ function SettingsScreen() {
       {/* plan4: «Источник парсинга» (черновые/API) убран из UI — события берутся из СВОИХ
           уведомлений основного аккаунта (self-events). Переключатель скрыт; parsingSource
           остаётся в БД как no-op до полного перехода. */}
+
+      <div className={rowCls}>
+        <IconTile icon={Clock} color={TONE.brand} size={40} />
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold text-[15px]">Интервал авто-проверки</div>
+          <div className="text-[13px] text-subt mt-1 leading-relaxed">
+            Как часто бот сам проверяет аккаунты на срабатывания триггеров и запускает действия.
+            Реже — безопаснее и естественнее (живой человек не проверяет ленту каждые 5 минут).
+            Ручной проверки больше нет — всё идёт по этому интервалу автоматически.
+          </div>
+        </div>
+        <select value={s.pollIntervalHours} onChange={(e) => patch({ pollIntervalHours: Number(e.target.value) })}
+          className="field py-2 text-[14px] shrink-0">
+          {[1, 2, 3, 6, 12, 24, 48].map((h) => (
+            <option key={h} value={h}>{h === 24 ? 'раз в сутки' : h === 48 ? 'раз в 2 суток' : `каждые ${h} ч`}</option>
+          ))}
+        </select>
+      </div>
 
       <div className={rowCls}>
         <IconTile icon={Globe} color={TONE.ok} size={40} />

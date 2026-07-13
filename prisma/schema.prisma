@@ -37,6 +37,7 @@ model UserSettings {
   accountsPerProxy Int     @default(3)      // сколько аккаунтов авто-вешать на один пуловый прокси
   allowNoProxy     Boolean @default(false)  // разрешить работу аккаунтов без прокси (риск бана)
   allowNoDrafts    Boolean @default(false)  // разрешить основным парсить самим, когда нет черновых
+  pollIntervalHours Int    @default(3)      // §10 авто-проверка триггеров: раз в N часов на аккаунт
 
   // Переход на браузерную автоматизацию («эмуль»). См. plan.md §3/§5/§7.6.
   parsingSource  String  @default("api")     // "api" | "drafts" | "drafts_then_api" — источник парсинга

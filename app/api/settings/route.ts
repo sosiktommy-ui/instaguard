@@ -7,7 +7,7 @@ const ENGINE = ['browser', 'legacy']
 
 const DEFAULTS = {
   accountsPerProxy: 3, allowNoProxy: false, allowNoDrafts: false, likeByDraft: false, storyByDraft: false,
-  parsingSource: 'api', actionEngine: 'browser', browserHeadful: false,
+  parsingSource: 'api', actionEngine: 'browser', browserHeadful: false, pollIntervalHours: 3,
 }
 
 export async function GET() {
@@ -24,6 +24,7 @@ export async function GET() {
       parsingSource: s?.parsingSource ?? DEFAULTS.parsingSource,
       actionEngine: s?.actionEngine ?? DEFAULTS.actionEngine,
       browserHeadful: s?.browserHeadful ?? DEFAULTS.browserHeadful,
+      pollIntervalHours: s?.pollIntervalHours ?? DEFAULTS.pollIntervalHours,
     })
   } catch {
     return NextResponse.json(DEFAULTS)
@@ -36,7 +37,7 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json().catch(() => ({}))
   const data: {
     accountsPerProxy?: number; allowNoProxy?: boolean; allowNoDrafts?: boolean; likeByDraft?: boolean; storyByDraft?: boolean
-    parsingSource?: string; actionEngine?: string; browserHeadful?: boolean
+    parsingSource?: string; actionEngine?: string; browserHeadful?: boolean; pollIntervalHours?: number
   } = {}
   if (body.accountsPerProxy !== undefined) data.accountsPerProxy = Math.max(1, Math.min(100, Math.round(Number(body.accountsPerProxy) || 3)))
   if (typeof body.allowNoProxy === 'boolean') data.allowNoProxy = body.allowNoProxy
@@ -46,6 +47,7 @@ export async function PATCH(req: NextRequest) {
   if (typeof body.parsingSource === 'string' && PARSING.includes(body.parsingSource)) data.parsingSource = body.parsingSource
   if (typeof body.actionEngine === 'string' && ENGINE.includes(body.actionEngine)) data.actionEngine = body.actionEngine
   if (typeof body.browserHeadful === 'boolean') data.browserHeadful = body.browserHeadful
+  if (body.pollIntervalHours !== undefined) data.pollIntervalHours = Math.max(1, Math.min(168, Math.round(Number(body.pollIntervalHours) || 3)))
 
   const s = await prisma.userSettings.upsert({
     where: { userId: user.id },
@@ -56,5 +58,6 @@ export async function PATCH(req: NextRequest) {
     ok: true, accountsPerProxy: s.accountsPerProxy, allowNoProxy: s.allowNoProxy, allowNoDrafts: s.allowNoDrafts,
     likeByDraft: s.likeByDraft, storyByDraft: s.storyByDraft,
     parsingSource: s.parsingSource, actionEngine: s.actionEngine, browserHeadful: s.browserHeadful,
+    pollIntervalHours: s.pollIntervalHours,
   })
 }
