@@ -61,7 +61,7 @@ function parseLog(l: LogEntry): Parsed {
     if (l.level === 'SUCCESS') outcome = { label: 'выполнено', tone: 'ok' }
     else if (/не выполнен/i.test(msg)) outcome = { label: 'не выполнено', tone: l.level === 'ERROR' ? 'bad' : 'warn' }
     else if (/невозможн/i.test(msg)) outcome = { label: 'невозможно', tone: 'warn' }
-    else outcome = { label: LEVEL_META[l.level].label, tone: l.level === 'ERROR' ? 'bad' : l.level === 'WARN' ? 'warn' : 'ok' }
+    else outcome = { label: l.level === 'ERROR' ? 'ошибка' : l.level === 'WARN' ? 'частично' : 'выполнено', tone: l.level === 'ERROR' ? 'bad' : l.level === 'WARN' ? 'warn' : 'ok' }
   }
   return { kind: isTrigger ? 'trigger' : 'event', campaign, account, triggerType, done, outcome, reason, text: msg }
 }
@@ -69,6 +69,11 @@ function parseLog(l: LogEntry): Parsed {
 // Цвета чипов действий — в тон 3D-диаграмме статистики
 const ACTION_COLOR: Record<string, string> = {
   директ: '#7C5CFC', лайк: '#F59E0B', подписка: '#22C55E', сторис: '#38BDF8', коммент: '#FF5CA8', ответ: '#FF5CA8',
+}
+// Тип действия кампании (TriggerRule.actions[].type) → подпись для колонки «Действие».
+// Позволяет показать РЕАЛЬНОЕ действие даже у старых логов (где нет «· сделано:»).
+const CONFIG_ACTION_LABELS: Record<string, string> = {
+  SEND_MESSAGE: 'Директ', FOLLOW_BACK: 'Подписка', LIKE_MEDIA: 'Лайк', VIEW_STORIES: 'Сторис', REPLY_COMMENT: 'Коммент',
 }
 
 const TONE: Record<'ok' | 'bad' | 'warn', { fg: string; bg: string }> = {
@@ -93,8 +98,9 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
   const [logs, setLogs] = useState<LogEntry[] | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [range, setRange] = useState<Range>('30d')
-  // Кампания → тип триггера: чтобы даже у старых логов (без «· тип:») слева показывать ТИП
-  const [typeMap, setTypeMap] = useState<Record<string, string>>({})
+  // Кампания → {тип триггера, настроенные действия}: чтобы даже у старых логов
+  // (без «· тип:»/«· сделано:») слева показывать ТИП, а справа — реальные ДЕЙСТВИЯ.
+  const [campMeta, setCampMeta] = useState<Record<string, { type?: string; actions: string[] }>>({})
 
   const load = () => {
     setLogs(null)
@@ -106,14 +112,22 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
 
   useEffect(() => { load() }, [accountId])
 
-  // Подтягиваем кампании владельца → строим карту «имя кампании» → «Тип триггера»
+  // Подтягиваем кампании владельца → карта «имя кампании» → {тип, настроенные действия}
   useEffect(() => {
     fetch('/api/triggers')
       .then((r) => (r.ok ? r.json() : []))
       .then((arr: any[]) => {
-        const m: Record<string, string> = {}
-        for (const t of arr ?? []) if (t?.name && t?.triggerType) m[t.name] = TRIGGER_TYPE_LABELS[t.triggerType] ?? t.triggerType
-        setTypeMap(m)
+        const m: Record<string, { type?: string; actions: string[] }> = {}
+        for (const t of arr ?? []) {
+          if (!t?.name) continue
+          const acts = Array.isArray(t.actions) ? t.actions : []
+          const labels = acts
+            .filter((a: any) => a && a.enabled !== false)
+            .map((a: any) => CONFIG_ACTION_LABELS[a.type])
+            .filter((x: string | undefined): x is string => Boolean(x))
+          m[t.name] = { type: t.triggerType ? (TRIGGER_TYPE_LABELS[t.triggerType] ?? t.triggerType) : undefined, actions: Array.from(new Set(labels)) }
+        }
+        setCampMeta(m)
       })
       .catch(() => {})
   }, [])
@@ -214,7 +228,7 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-              {parsed.map(({ l, p }, i) => <LogCard key={l.id} l={l} p={p} index={i} typeMap={typeMap} />)}
+              {parsed.map(({ l, p }, i) => <LogCard key={l.id} l={l} p={p} index={i} campMeta={campMeta} />)}
             </div>
           )}
         </div>
@@ -223,10 +237,19 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
   )
 }
 
-function LogCard({ l, p, index, typeMap }: { l: LogEntry; p: Parsed; index: number; typeMap: Record<string, string> }) {
+function LogCard({ l, p, index, campMeta }: { l: LogEntry; p: Parsed; index: number; campMeta: Record<string, { type?: string; actions: string[] }> }) {
   const m = LEVEL_META[l.level] ?? LEVEL_META.INFO
+  const cm = p.campaign ? campMeta[p.campaign] : undefined
   // Тип триггера: из меты нового лога → из карты кампаний (старые логи) → имя кампании (запас)
-  const triggerLabel = p.triggerType ?? (p.campaign ? typeMap[p.campaign] : undefined) ?? p.campaign ?? 'триггер'
+  const triggerLabel = p.triggerType ?? cm?.type ?? p.campaign ?? 'триггер'
+
+  // Что показать в колонке ДЕЙСТВИЕ:
+  //  1) реальные выполненные действия (новые логи, «· сделано:») — самое точное;
+  //  2) явный провал (ERROR / «не выполнено» / «невозможно») → красный/янтарный чип-исход;
+  //  3) иначе (успех/частично у старых логов) → настроенные действия кампании (Лайк/Директ…).
+  const hardFail = /не выполнен|невозможн/i.test(p.text) && p.done.length === 0
+  const actionChips = p.done.length > 0 ? p.done : (hardFail ? [] : (cm?.actions ?? []))
+  const showOutcome = actionChips.length === 0 && !!p.outcome
 
   return (
     <div className="relative rounded-2xl border border-black/[0.07] bg-white/80 backdrop-blur-sm pl-4 pr-3.5 py-3 overflow-hidden transition-all hover:border-black/[0.14] hover:shadow-[0_8px_24px_rgba(20,16,48,0.08)] rise"
@@ -264,8 +287,8 @@ function LogCard({ l, p, index, typeMap }: { l: LogEntry; p: Parsed; index: numb
             <div className="min-w-0 flex flex-col pl-1">
               <div className="text-[9.5px] font-bold uppercase tracking-[0.08em] text-subt/55 mb-1.5">Действие</div>
               <div className="flex flex-wrap gap-1">
-                {p.done.length > 0 ? (
-                  p.done.map((a, k) => {
+                {actionChips.length > 0 ? (
+                  actionChips.map((a, k) => {
                     const c = ACTION_COLOR[a.toLowerCase()] ?? '#8b93a1'
                     return (
                       <span key={k} className="inline-flex items-center gap-1 h-[26px] px-2.5 rounded-lg text-[12.5px] font-semibold capitalize" style={{ color: c, background: `${c}1f` }}>
@@ -273,11 +296,13 @@ function LogCard({ l, p, index, typeMap }: { l: LogEntry; p: Parsed; index: numb
                       </span>
                     )
                   })
-                ) : p.outcome ? (
+                ) : showOutcome && p.outcome ? (
                   <span className="inline-flex items-center gap-1 h-[26px] px-2.5 rounded-lg text-[12.5px] font-semibold" style={{ color: TONE[p.outcome.tone].fg, background: TONE[p.outcome.tone].bg }}>
                     <span className="w-1.5 h-1.5 rounded-full" style={{ background: TONE[p.outcome.tone].fg }} />{p.outcome.label}
                   </span>
-                ) : null}
+                ) : (
+                  <span className="text-[12.5px] text-subt/60">—</span>
+                )}
               </div>
               <div className="mt-auto pt-2 text-[12.5px] font-semibold text-ink/75 truncate">{p.account ? `@${p.account}` : '—'}</div>
             </div>
