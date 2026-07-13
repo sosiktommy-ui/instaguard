@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { ShieldAlert, Globe, ChevronDown, List, Users, BarChart3, Settings as SettingsIcon, HelpCircle, Clock } from 'lucide-react'
+import { ShieldAlert, Globe, ChevronDown, List, Users, BarChart3, Settings as SettingsIcon, HelpCircle, Clock, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import ClientOnly from '@/components/common/ClientOnly'
 import { PageHeader } from '@/components/common/PageHeader'
@@ -105,17 +105,56 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void 
   )
 }
 
+function timeAgo(iso: string | null): string {
+  if (!iso) return 'ещё не проверялось'
+  const t = new Date(iso).getTime()
+  if (!Number.isFinite(t)) return '—'
+  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000))
+  if (sec < 60) return 'только что'
+  const m = Math.floor(sec / 60); if (m < 60) return `${m} мин назад`
+  const h = Math.floor(m / 60); if (h < 24) return `${h} ч назад`
+  const d = Math.floor(h / 24); return `${d} дн назад`
+}
+
 function SettingsScreen() {
   const [s, setS] = useState<Settings>({ accountsPerProxy: 3, allowNoProxy: false, allowNoDrafts: false, likeByDraft: false, storyByDraft: false, parsingSource: 'api', actionEngine: 'browser', browserHeadful: false, pollIntervalHours: 3 })
   const [capInput, setCapInput] = useState('3')
   const [msg, setMsg] = useState('')
   const [openHelp, setOpenHelp] = useState<number | null>(null)
   const [showHelp, setShowHelp] = useState(false)   // весь блок «Что где находится» — свёрнут по умолчанию
+  const [lastCheck, setLastCheck] = useState<string | null>(null)
+  const [checking, setChecking] = useState(false)
 
   const load = useCallback(async () => {
     try { const r = await fetch('/api/settings'); if (r.ok) { const d = await r.json(); setS(d); setCapInput(String(d.accountsPerProxy ?? 3)) } } catch {}
   }, [])
-  useEffect(() => { load() }, [load])
+  // Последняя проверка = самый свежий lastChecked среди аккаунтов владельца.
+  const loadLastCheck = useCallback(async () => {
+    try {
+      const r = await fetch('/api/accounts')
+      if (!r.ok) return
+      const arr = await r.json()
+      const times = (Array.isArray(arr) ? arr : [])
+        .map((a: any) => a?.lastChecked).filter(Boolean)
+        .map((x: string) => new Date(x).getTime()).filter((n: number) => Number.isFinite(n))
+      setLastCheck(times.length ? new Date(Math.max(...times)).toISOString() : null)
+    } catch {}
+  }, [])
+  useEffect(() => { load(); loadLastCheck() }, [load, loadLastCheck])
+
+  // «Проверить сейчас» — ручной поллинг (isManual: игнорирует интервал/тихие часы, действия сразу).
+  const runNow = useCallback(async () => {
+    setChecking(true); setMsg('Запускаю проверку…')
+    try {
+      const r = await fetch('/api/poll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manual: true }) })
+      const d = await r.json().catch(() => ({}))
+      if (r.ok && d?.busy) setMsg('Проверка уже выполняется — подождите завершения.')
+      else if (r.ok) setMsg('Проверка выполнена.')
+      else setMsg('Не удалось запустить проверку.')
+    } catch { setMsg('Ошибка сети при запуске проверки.') }
+    await loadLastCheck()
+    setChecking(false)
+  }, [loadLastCheck])
 
   const patch = async (data: Partial<Settings>) => {
     setS((p) => ({ ...p, ...data }))   // оптимистично
@@ -157,7 +196,16 @@ function SettingsScreen() {
           <div className="text-[13px] text-subt mt-1 leading-relaxed">
             Как часто бот сам проверяет аккаунты на срабатывания триггеров и запускает действия.
             Реже — безопаснее и естественнее (живой человек не проверяет ленту каждые 5 минут).
-            Ручной проверки больше нет — всё идёт по этому интервалу автоматически.
+            Можно проверить и вручную кнопкой ниже — не дожидаясь интервала.
+          </div>
+          <div className="mt-3 flex items-center gap-3 flex-wrap">
+            <span className="text-[12.5px] text-subt">
+              Последняя проверка: <span className="text-ink font-medium">{timeAgo(lastCheck)}</span>
+            </span>
+            <Button size="sm" variant="secondary" onClick={runNow} disabled={checking}>
+              <RefreshCw className={cn('w-3.5 h-3.5', checking && 'animate-spin')} />
+              {checking ? 'Проверяю…' : 'Проверить сейчас'}
+            </Button>
           </div>
         </div>
         <select value={s.pollIntervalHours} onChange={(e) => patch({ pollIntervalHours: Number(e.target.value) })}
