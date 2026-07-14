@@ -700,7 +700,14 @@ export async function POST(req: NextRequest) {
             selfFollows = evs.filter((e) => e.type === 'follow').map((e) => ({ pk: e.pk, username: e.username }))
             selfFollows.forEach((f) => selfFollowedPks.add(String(f.pk)))   // засеиваем гейт: только что подписавшиеся точно followed_by
             selfLikes = evs.filter((e) => e.type === 'like').map((e) => ({ pk: e.pk, username: e.username }))
-            selfComments = evs.filter((e) => e.type === 'comment').map((e) => ({ pk: `${e.pk}_${e.media_id ?? ''}`, user_pk: e.pk, username: e.username, text: e.text ?? '', media_id: e.media_id ?? '' }))
+            selfComments = evs.filter((e) => e.type === 'comment').map((e) => {
+              // Ключ дедупа — по КАЖДОМУ комменту (не по паре автор+пост): у нового коммента другой ts
+              // (а если ts нет — отличаем по тексту). Иначе повторный коммент того же автора на том же
+              // посте считался «дублем» и оставался без ответа. `user_pk` держим отдельно — по нему
+              // решаем, делать ли одноразовое приветствие (подписка/директ/лайк/сторис).
+              const disc = e.ts != null ? String(e.ts) : (e.text ?? '').slice(0, 32)
+              return { pk: `${e.pk}_${e.media_id ?? ''}_${disc}`, user_pk: e.pk, username: e.username, text: e.text ?? '', media_id: e.media_id ?? '' }
+            })
             // Диагностика (только ручная проверка, чтобы не засорять авто-логи): что реально
             // прочитано из уведомлений. Если тут «подписки 0», а подписчик точно новый —
             // проблема в ЧТЕНИИ/разборе уведомлений (self-events), а не в действиях.
@@ -862,10 +869,23 @@ export async function POST(req: NextRequest) {
         {
         const comments = selfComments   // plan4: комментарии к моим постам из self-events (type=comment)
         const hadBaseline = Boolean(snapCommentsMeta)
-        const knownC = extractKnownPks(snapCommentsMeta?.data)
+        // В снапшоте COMMENTS держим ДВА вида ключей:
+        //  • c:<commentKey> — на какой КОММЕНТ уже отвечали (дедуп ОТВЕТА — по каждому комменту);
+        //  • u:<user_pk>    — кому ПРИВЕТСТВИЕ (подписка/лайк/сторис/директ) уже сделано (одноразовое).
+        // МИГРАЦИЯ: старые ключи вида `<user_pk>_<media>` = автор уже обработан → в greeted (чтобы после
+        // деплоя НЕ пере-подписываться/не слать директ повторно). Новый ответ на новый коммент при этом
+        // всё равно уйдёт (это и просили), а спам-действия (директ/подписка) — нет.
+        const rawKnownC = extractKnownPks(snapCommentsMeta?.data)
+        const knownC = new Set<string>()          // обработанные КОММЕНТЫ (ключи c:)
+        const greeted = new Set<string>()         // user_pk, кому приветствие уже сделано
+        for (const k of rawKnownC) {
+          if (k.startsWith('c:')) knownC.add(k)
+          else if (k.startsWith('u:')) greeted.add(k.slice(2))
+          else { const up = k.split('_')[0]; if (up) greeted.add(up) }   // миграция старого формата
+        }
         // Первая проверка (нет снапшота) — только фиксируем базу, НЕ реагируем на старые комменты,
         // иначе бот разом ответит на все существующие. Реагируем только на появившиеся после базы.
-        const { fresh, process: toProcess } = selectTargets(comments, knownC, hadBaseline, (c) => String(c.pk), newCap)
+        const { fresh, process: toProcess } = selectTargets(comments, knownC, hadBaseline, (c) => `c:${c.pk}`, newCap)
         const failedComments = new Set<string>()   // §2.3 — транзиентно провалившиеся комменты (ретрай)
 
         if (isManual) {
@@ -890,6 +910,11 @@ export async function POST(req: NextRequest) {
           if (sessionDead) break   // аккаунт остановлен (бан/челлендж) — не обрабатываем дальше в этом цикле
           let firedForComment = false
           let matchedAny = false   // приняла ли текст коммента хоть одна кампания (для диагностики)
+          // Приветствие (подписка/лайк/сторис/директ) — ОДИН раз на человека. На повторные комменты
+          // делаем ТОЛЬКО ответ. alreadyGreeted фиксируем ДО обработки; greetAttempted — было ли
+          // приветствие реально запущено (по нему добавим автора в greeted после обработки).
+          const alreadyGreeted = greeted.has(String(c.user_pk))
+          let greetAttempted = false
           try {
           for (const trigger of commentTriggers) {
             const actions = (trigger.actions ?? []) as any[]
@@ -928,8 +953,11 @@ export async function POST(req: NextRequest) {
             // а честно помечаем реплай невозможным (см. лог ниже).
             const postUrl = c.media_id ? mediaPostUrl(c.media_id) : ''
 
-            // Проверка подписки: если автор НЕ проходит гейт — только коммент-приглашение, стоп
-            if (gateCfg) {
+            // Проверка подписки: если автор НЕ проходит гейт — только коммент-приглашение, стоп.
+            // Только для НЕ приветствованных: повторному комментатору приглашение не шлём (он уже
+            // получал приветствие/приглашение) — на его новый коммент пойдёт обычный ответ ниже.
+            if (gateCfg && !alreadyGreeted) {
+              greetAttempted = true
               const ok = await passesGateFor(c.user_pk, gateCfg.mode)
 
               if (!ok) {
@@ -955,7 +983,9 @@ export async function POST(req: NextRequest) {
             // ними + дневной лимит: подписка → лайк → коммент-ответ → сторис → ДИРЕКТ (последним).
             if (!gatedStop) {
               // 1) Подписка — первой (на случай закрытого аккаунта / SMS при взаимной подписке).
-              if (doFollow) {
+              //    ОДНОРАЗОВО на человека: повторному комментатору не переподписываемся.
+              if (doFollow && !alreadyGreeted) {
+                greetAttempted = true
                 if (use('follow')) {
                   incFired.follow = (incFired.follow || 0) + 1
                   await randDelay(2, 5)
@@ -968,7 +998,8 @@ export async function POST(req: NextRequest) {
               }
               // 2) Лайк постов автора — §13.10: ОДИН бюджет на цель (не по постам), лайкаем до N;
               //    0 постов у автора = НЕВОЗМОЖНО (не ошибка).
-              if (doLikePosts && use('like')) {
+              if (doLikePosts && !alreadyGreeted && use('like')) {
+                greetAttempted = true
                 incFired.like = (incFired.like || 0) + 1
                 await randDelay(2, 5)
                 try {
@@ -1007,7 +1038,8 @@ export async function POST(req: NextRequest) {
                 } else { errors.push('ответ в комментах: дневной лимит комментариев исчерпан') }
               }
               // 4) Сторис — §13.10: смотрим до N кадров; 0 активных сторис = НЕВОЗМОЖНО (не ошибка).
-              if (storiesAct && use('story')) {
+              if (storiesAct && !alreadyGreeted && use('story')) {
+                greetAttempted = true
                 incFired.story = (incFired.story || 0) + 1
                 await randDelay(3, 7)
                 try {
@@ -1022,7 +1054,8 @@ export async function POST(req: NextRequest) {
               // 5) ДИРЕКТ — последним, после «прогрева» цели. Идёт НЕЗАВИСИМО от исхода прошлых
               //    действий. Меж-потоковый дедуп: если директ этому автору в цикле уже уходил
               //    (напр. он же новый подписчик) — не дублируем. Проверка ДО use.
-              if (dm?.templates?.[0] && !alreadyDmed(c.username) && use('dm')) {
+              if (dm?.templates?.[0] && !alreadyGreeted && !alreadyDmed(c.username) && use('dm')) {
+                greetAttempted = true
                 markDmed(c.username)
                 incFired.dm = (incFired.dm || 0) + 1
                 await randDelay(3, 8)
@@ -1078,9 +1111,11 @@ export async function POST(req: NextRequest) {
             }
           }
           if (isManual && !matchedAny) await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: `Коммент @${c.username}: «${(c.text || '').slice(0, 60)}» не подошёл под условие «Сигнал» ни одной кампании «Комментарий» — кампания реагирует только на заданные фразы (настройка «На что реагировать»).` } }).catch(() => null)
+          // Приветствие сделано (или запущено) → автор в greeted: повторные комменты получат ТОЛЬКО ответ.
+          if (!alreadyGreeted && greetAttempted) greeted.add(String(c.user_pk))
           } catch (e: any) {
             const m = String(e?.message ?? e)
-            failedComments.add(String(c.pk))   // не теряем цель — добьётся в след. цикле
+            failedComments.add(`c:${c.pk}`)   // не теряем цель — добьётся в след. цикле (ключ c: как в knownC)
             const st = statusFromError(m)        // CHALLENGE/PAUSED = бан/челлендж/лимит Instagram
             if (st) {
               // Реальное ограничение/бан аккаунта — останавливаем аккаунт и прекращаем цикл (не долбим).
@@ -1104,9 +1139,12 @@ export async function POST(req: NextRequest) {
         if (cmtDmTried) await recordDelivery(prisma, account.id, cmtDmTried, cmtDmOk, Date.now())
         // §2.3 — снапшот комментов сохраняем ПОСЛЕ обработки (без провалившихся) — не теряем цели.
         failedComments.forEach((pk) => knownC.delete(pk))
+        // Храним оба вида ключей: c:<коммент> (капим по объёму) + u:<автор> (кому приветствие сделано —
+        // НЕ капим, иначе автор «забудется» и получит повторный директ/подписку).
+        const commentSnapshot = [...capPks(knownC, SNAPSHOT_MAX), ...Array.from(greeted, (u) => `u:${u}`)]
         await prisma.$transaction([
           prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'COMMENTS' } }),
-          prisma.snapshot.create({ data: { accountId: account.id, type: 'COMMENTS', data: capPks(knownC, SNAPSHOT_MAX) } }),
+          prisma.snapshot.create({ data: { accountId: account.id, type: 'COMMENTS', data: commentSnapshot } }),
         ])
         }
       }
