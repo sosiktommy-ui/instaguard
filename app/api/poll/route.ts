@@ -673,6 +673,7 @@ export async function POST(req: NextRequest) {
       // §1.1 — «сессия мертва» (нет sessionid → нужен повторный вход). Ловим на любом браузерном
       // шаге (авто-приём / уведомления / прогрев) и один раз помечаем аккаунт «Требует входа».
       let sessionDead = false
+      let notifReadError: string | null = null   // реальная причина сбоя чтения уведомлений (для прозрачности ручной проверки)
       const SESSION_DEAD = (m: string) => /login_required|сессия недейств|нужен повторный вход|checkpoint|подтвердите вход/i.test(String(m || ''))
       let selfFollows: { pk: string; username: string }[] = []
       let selfLikes: { pk: string; username: string }[] = []
@@ -702,7 +703,10 @@ export async function POST(req: NextRequest) {
             if (se.browserState) liveState = se.browserState
             if (se.error) {
               if (SESSION_DEAD(se.error)) sessionDead = true   // мёртвая сессия — сообщим один раз ниже
-              else await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: 'Уведомления не прочитаны — временный сбой, повторим автоматически.' } }).catch(() => null)
+              else {
+                notifReadError = se.error
+                await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: isManual ? `Уведомления не прочитаны: ${se.error}` : 'Уведомления не прочитаны — временный сбой, повторим автоматически.' } }).catch(() => null)
+              }
             }
             const evs = se.events ?? []
             selfFollows = evs.filter((e) => e.type === 'follow').map((e) => ({ pk: e.pk, username: e.username }))
@@ -715,7 +719,10 @@ export async function POST(req: NextRequest) {
           } catch (e: any) {
             const m = String(e?.message ?? e)
             if (SESSION_DEAD(m)) sessionDead = true   // мёртвая сессия — сообщим один раз ниже
-            else await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: 'Уведомления не прочитаны — временный сбой, повторим автоматически.' } }).catch(() => null)
+            else {
+              notifReadError = m
+              await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: isManual ? `Уведомления не прочитаны: ${m}` : 'Уведомления не прочитаны — временный сбой, повторим автоматически.' } }).catch(() => null)
+            }
           }
         } else {
           skipBrowserSection = true
@@ -1116,6 +1123,16 @@ export async function POST(req: NextRequest) {
         where: { id: account.id },
         data: { lastChecked: new Date(), errorCount: 0, limits: counters as any, ...(liveState && liveState !== originalState ? { browserState: liveState as any } : {}), ...(realFollowers !== undefined ? { followers: realFollowers, followersHistory } : {}), ...(parseBlocked !== undefined ? { parseBlocked } : {}) },
       })
+      // Ручная проверка — ПОНЯТНЫЙ итог по аккаунту (чтобы «Проверить сейчас» не был чёрным ящиком:
+      // видно, что проверка ДОШЛА до аккаунта и что именно случилось — детект отложен / сбой чтения /
+      // сколько новых событий). Пишем всегда на isManual, даже когда нового ничего нет.
+      if (isManual) {
+        let outcome: string
+        if (!canDetect) outcome = skipBrowserSection ? 'сессия занята другим процессом — детект отложен' : 'детект не выполнен'
+        else if (notifReadError) outcome = `не удалось прочитать уведомления (${notifReadError})`
+        else outcome = `уведомления прочитаны (подписки ${selfFollows.length}, комменты ${selfComments.length}${selfLikes.length ? `, лайки ${selfLikes.length}` : ''}); новые — обработаны, старые пропущены`
+        await prisma.log.create({ data: { accountId: account.id, level: notifReadError ? 'WARN' : 'INFO', message: `Ручная проверка завершена — ${outcome}.` } }).catch(() => null)
+      }
       summary.push(s)
     } catch (e: any) {
       // Предохранитель: challenge/бан/ограничение → останавливаем аккаунт, чтобы не долбить его
@@ -1170,7 +1187,29 @@ export async function POST(req: NextRequest) {
 
   if (dmQueue) await dmQueue.close()
 
-  return NextResponse.json({ ok: true, summary })
+  // Ручной запуск («Проверить сейчас») — понятный итог для кнопки в Настройках, чтобы он НЕ был
+  // чёрным ящиком. Красные (CHALLENGE/PAUSED) в выборку не попадают → тут их нет: если проверять
+  // некого, честно об этом говорим. Детали по каждому аккаунту — в его журнале.
+  let message: string | undefined
+  if (isManual) {
+    const skipCodes: Record<string, string> = {
+      cooldown: 'интервал', 'no-proxy': 'нет прокси', 'no-browser-session': 'требует входа',
+      'quiet-hours': 'тихие часы', weekend: 'выходной', 'no-scraper': 'нет API-ключа',
+    }
+    const done = summary.filter((x) => !x.skipped)
+    const skipped = summary.filter((x) => x.skipped)
+    if (!summary.length) message = 'Нет активных аккаунтов для проверки (красные/на паузе пропускаются).'
+    else {
+      const parts: string[] = [`проверено ${done.length}`]
+      if (skipped.length) {
+        const byReason = skipped.reduce((m: Record<string, number>, x) => { const r = skipCodes[x.skipped!] ?? x.skipped!; m[r] = (m[r] ?? 0) + 1; return m }, {})
+        parts.push('пропущено ' + Object.entries(byReason).map(([r, n]) => `${n} (${r})`).join(', '))
+      }
+      message = `Проверка выполнена: ${parts.join('; ')}. Подробности — в журнале аккаунта.`
+    }
+  }
+
+  return NextResponse.json({ ok: true, summary, ...(message ? { message } : {}) })
 
   } finally {
     // Снимаем аренду лока — следующий цикл сможет стартовать сразу

@@ -161,7 +161,7 @@ function SettingsScreen() {
       const r = await fetch('/api/poll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manual: true }) })
       const d = await r.json().catch(() => ({}))
       if (r.ok && d?.busy) setMsg('Проверка уже выполняется — подождите завершения.')
-      else if (r.ok) setMsg('Проверка выполнена.')
+      else if (r.ok) setMsg(d?.message || 'Проверка выполнена.')
       else setMsg('Не удалось запустить проверку.')
     } catch { setMsg('Ошибка сети при запуске проверки.') }
     await loadLastCheck()
