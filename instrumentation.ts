@@ -3,6 +3,42 @@ import { runFollowerActionsBrowser } from './lib/browser/actions'
 import { acquireBrowserLock, releaseBrowserLock } from './lib/browserLock'
 import { recordDelivery } from './lib/delivery'
 
+// ── Авто-поллинг: Redis-НЕЗАВИСИМЫЙ heartbeat ────────────────────────────────
+// Раньше авто-проверку крутил повторяющийся BullMQ-job (нужен Redis). Если Redis в
+// проде не задан/недоступен — авто-проверка молча не работала (жалоба «17 ч назад»
+// при интервале 1 ч). Теперь тик даёт простой setInterval в самом Node-процессе
+// (`next start` — долгоживущий процесс). Пер-аккаунт интервал (§10) и глобальный лок
+// (`poll:all`) в самом /api/poll защищают от лишней/двойной работы, так что частый
+// тик безопасен. BullMQ остаётся только для очереди отложенных DM (когда Redis есть).
+const POLL_TICK_MS = 30 * 60 * 1000
+let heartbeatStarted = false
+function startPollHeartbeat() {
+  if (heartbeatStarted) return
+  heartbeatStarted = true
+  const tick = async () => {
+    const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? (railwayDomain ? `https://${railwayDomain}` : null) ?? 'http://localhost:3000'
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 20 * 60 * 1000)
+    try {
+      const res = await fetch(`${baseUrl}/api/poll`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-internal-secret': process.env.INTERNAL_SECRET ?? 'instaguard-internal-cron' },
+        body: '{}', signal: ctrl.signal,
+      })
+      const data = await res.json().catch(() => ({}))
+      if (data?.busy) { console.log('[heartbeat] — пропуск: предыдущий цикл ещё идёт'); return }
+      const total = (data?.summary ?? []).reduce((s: number, r: any) => s + (r.dmsQueued ?? 0), 0)
+      console.log(`[heartbeat] ✓ авто-проверка выполнена, поставлено DM: ${total}`)
+    } catch (e: any) {
+      console.error('[heartbeat] ✗ авто-проверка не удалась:', e?.name === 'AbortError' ? 'таймаут 20 мин' : e?.message)
+    } finally { clearTimeout(timer) }
+  }
+  setTimeout(tick, 60 * 1000)        // первый прогон через минуту после старта (сервер успел подняться)
+  setInterval(tick, POLL_TICK_MS)    // далее — каждые 30 минут, независимо от Redis
+  console.log('[heartbeat] авто-проверка запущена (setInterval, каждые 30 мин)')
+}
+
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return
 
@@ -14,15 +50,18 @@ export async function register() {
     console.warn('[auth] JWT_SECRET is NOT set — using insecure fallback. Set JWT_SECRET in Railway!')
   }
 
-  // ── BullMQ: воркер отправки DM + авто-поллинг ─────────────────────────────
+  // Авто-проверка запускается ВСЕГДА (не зависит от Redis) — главный фикс «авто-проверка не работает».
+  startPollHeartbeat()
+
+  // ── BullMQ: воркер отправки отложенных DM (нужен Redis; авто-проверку он больше НЕ крутит) ──
   const redisUrl = process.env.REDIS_URL
   if (!redisUrl) {
-    console.warn('[bullmq] REDIS_URL not set — auto-poll and delayed DMs disabled')
+    console.warn('[bullmq] REDIS_URL not set — очередь отложенных DM отключена (авто-проверка работает через heartbeat)')
     return
   }
 
   try {
-    const { Worker, Queue } = await import(/* webpackIgnore: true */ 'bullmq')
+    const { Worker } = await import(/* webpackIgnore: true */ 'bullmq')
     const { PrismaClient } = await import(/* webpackIgnore: true */ '@prisma/client')
     const prisma = new PrismaClient()
     const connection = { url: redisUrl }
@@ -124,52 +163,9 @@ export async function register() {
       console.error(`[dm-worker] ✗ DM to @${followerUsername} failed:`, err.message)
     })
 
-    // ── Авто-поллинг каждые 30 минут ─────────────────────────────────────────
-    const pollQueue = new Queue('auto-poll', { connection })
-
-    // Добавляем повторяющийся job (дедуплицируется по jobId)
-    await pollQueue.add(
-      'poll-all',
-      {},
-      { repeat: { every: 30 * 60 * 1000 }, jobId: 'auto-poll-recurring' }
-    )
-
-    new Worker(
-      'auto-poll',
-      async () => {
-        const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN
-        const baseUrl = process.env.NEXT_PUBLIC_APP_URL
-          ?? (railwayDomain ? `https://${railwayDomain}` : null)
-          ?? 'http://localhost:3000'
-        // Бэкстоп-таймаут на весь цикл поллинга (сам поллинг ограничен пер-аккаунт
-        // таймаутами воркера, но подстрахуемся, чтобы job не висел вечно).
-        const ctrl = new AbortController()
-        const timer = setTimeout(() => ctrl.abort(), 20 * 60 * 1000)
-        try {
-          const res = await fetch(`${baseUrl}/api/poll`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              // Секрет для прохождения middleware (внутренний вызов без куки)
-              'x-internal-secret': process.env.INTERNAL_SECRET ?? 'instaguard-internal-cron',
-            },
-            body: '{}',
-            signal: ctrl.signal,
-          })
-          const data = await res.json()
-          if (data.busy) { console.log('[auto-poll] — пропуск: предыдущий цикл ещё идёт'); return }
-          const total = (data.summary ?? []).reduce((s: number, r: any) => s + (r.dmsQueued ?? 0), 0)
-          console.log(`[auto-poll] ✓ done, queued ${total} DMs`)
-        } catch (e: any) {
-          console.error('[auto-poll] ✗ failed:', e?.name === 'AbortError' ? 'таймаут 20 мин' : e.message)
-        } finally {
-          clearTimeout(timer)
-        }
-      },
-      { connection }
-    )
-
-    console.log('[bullmq] dm-send worker + auto-poll (every 30 min) started')
+    // Авто-поллинг теперь через Redis-независимый heartbeat (startPollHeartbeat выше) —
+    // здесь остаётся только очередь отложенных DM.
+    console.log('[bullmq] dm-send worker started (авто-проверка — через heartbeat)')
   } catch (e) {
     console.error('[bullmq] init failed:', e)
   }

@@ -34,17 +34,21 @@ async function browserFetch<T = any>(path: string, body: object): Promise<T> {
   } finally {
     clearTimeout(timer)
   }
+  // ВАЖНО: тело ответа читаем РОВНО ОДИН раз (res.text()), затем парсим как JSON. Раньше в ветке
+  // !res.ok делали res.json(), а при сбое — res.text() на УЖЕ прочитанном теле → «Body is unusable:
+  // Body has already been read», что МАСКИРОВАЛО реальную ошибку воркера (и роняло, напр., self-events).
+  const raw = await res.text().catch(() => '')
   if (!res.ok) {
-    let msg: string
+    let msg = raw || `HTTP ${res.status}`
     let diag: any = undefined
-    try { const d = await res.json(); msg = d.message ?? d.error ?? JSON.stringify(d); diag = d.diag }
-    catch { msg = await res.text() }
+    try { const d = JSON.parse(raw); msg = d.message ?? d.error ?? (raw || JSON.stringify(d)); diag = d.diag } catch { /* тело не JSON — оставляем как есть */ }
     const err = new Error(msg) as Error & { diag?: any; status?: number }
     if (diag) err.diag = diag   // скрин страницы при провале входа — прокидываем в вызывающий код (UI покажет)
     err.status = res.status     // статус — чтобы вызывающий отличил 404 (эндпоинта нет) от логической ошибки
     throw err
   }
-  return res.json()
+  try { return JSON.parse(raw) as T }
+  catch { throw new Error(`Некорректный ответ воркера (${path}): ${raw.slice(0, 120) || 'пустое тело'}`) }
 }
 
 // ── Вход ───────────────────────────────────────────────────────────────────

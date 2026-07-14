@@ -98,6 +98,7 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
   const [logs, setLogs] = useState<LogEntry[] | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [range, setRange] = useState<Range>('30d')
+  const [live, setLive] = useState(false)   // «● Live» — авто-обновление журнала каждые 4с
   // Кампания → {тип триггера, настроенные действия}: чтобы даже у старых логов
   // (без «· тип:»/«· сделано:») слева показывать ТИП, а справа — реальные ДЕЙСТВИЯ.
   const [campMeta, setCampMeta] = useState<Record<string, { type?: string; actions: string[] }>>({})
@@ -111,6 +112,19 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
   }
 
   useEffect(() => { load() }, [accountId])
+
+  // «● Live» — тихо (без спиннера) перечитываем журнал каждые 4с, чтобы наблюдать за
+  // действиями бота в реальном времени. Выключается тумблером или закрытием окна.
+  useEffect(() => {
+    if (!live) return
+    const id = setInterval(() => {
+      fetch(`/api/logs?accountId=${encodeURIComponent(accountId)}&limit=200`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => { if (Array.isArray(d)) setLogs(d) })
+        .catch(() => {})
+    }, 4000)
+    return () => clearInterval(id)
+  }, [live, accountId])
 
   // Подтягиваем кампании владельца → карта «имя кампании» → {тип, настроенные действия}
   useEffect(() => {
@@ -182,6 +196,12 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
             </div>
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            <button onClick={() => setLive((v) => !v)} title="Live — авто-обновление каждые 4с (наблюдать за ботом в реальном времени)"
+              className={cn('flex items-center gap-1.5 h-9 px-2.5 rounded-xl text-[12px] font-semibold transition-colors',
+                live ? 'bg-red-500/12 text-red-500' : 'text-subt hover:text-ink hover:bg-black/[0.04]')}>
+              <span className={cn('w-1.5 h-1.5 rounded-full', live ? 'bg-red-500 animate-pulse' : 'bg-subt/50')} />
+              Live
+            </button>
             <button onClick={load} className="w-9 h-9 flex items-center justify-center rounded-xl text-subt hover:text-ink hover:bg-black/[0.04] transition-colors" title="Обновить">
               <RefreshCw className={cn('w-4 h-4', logs === null && 'animate-spin')} />
             </button>
