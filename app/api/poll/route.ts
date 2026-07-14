@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 // Парсинг подписчиков/комментариев/лайкнувших/подписок — через скрейпер-API (замена черновых).
 // Формы ответов 1:1 совпадают со старыми getFollowers/getComments/getLikers/getFollowing.
-import { scrapeFollowers, scrapeFollowing, scrapeComments, scrapeLikers, scraperConfigured, scrapeUserInfo } from '@/lib/scraper/hiker'
+import { scrapeFollowers, scrapeFollowing, scrapeComments, scrapeLikers } from '@/lib/scraper/hiker'
 import { runFollowerActionsBrowser } from '@/lib/browser/actions'
 import {
   browserComment, browserReply, browserFollow, browserLike, browserDM, browserStories,
@@ -335,9 +335,9 @@ export async function POST(req: NextRequest) {
   // молча пропадут. Реально действовать может лишь аккаунт с browserState.
   const workingMains = accounts.filter((a) => (a.sessionData || a.browserState) && a.triggersAsResponder.length)
 
-  // plan4 (Фаза D): детект идёт через СВОИ уведомления (self-events) — HikerAPI/черновые для
-  // детекта НЕ нужны, поэтому никого не блокируем за отсутствие ключа. Скрейпер остаётся лишь
-  // опциональным источником метрики «число подписчиков» (scrapeUserInfo, деградирует мягко).
+  // plan4 (Фаза D): детект идёт через СВОИ уведомления (self-events) — HikerAPI/черновые НЕ нужны,
+  // поэтому никого не блокируем. Счётчик подписчиков тоже растёт из self-events (новые подписчики
+  // этого цикла), без HikerAPI.
   const blockedMains: typeof workingMains = []
   const blockedIds = new Set<string>()
   if (blockedMains.length) {
@@ -353,42 +353,9 @@ export async function POST(req: NextRequest) {
   for (const account of accounts) {
     if (!account.sessionData && !account.browserState) continue
 
-    // Число подписчиков (ПУБЛИЧНЫЕ данные через HikerAPI — прокси/сессия НЕ нужны) обновляем
-    // РАНО, ДО гейтов действий: иначе аккаунт, пропущенный по тихим часам/интервалу/мёртвому
-    // прокси, никогда не обновлял бы счётчик, и метрика «Подписчики»/спарклайн пустовали. Раз в
-    // день на аккаунт (или по ручному запросу). Сбой не критичен — не трогает статус/цикл.
-    {
-      const day0 = new Date().toISOString().slice(0, 10)
-      const hist0 = Array.isArray(account.followersHistory) ? (account.followersHistory as any[]) : []
-      const haveToday0 = hist0.length > 0 && hist0[hist0.length - 1]?.d === day0 && account.followers != null
-      if (scraperConfigured() && (isManual || !haveToday0)) {
-        try {
-          const n = (await scrapeUserInfo(account.username)).follower_count
-          if (typeof n === 'number') {
-            const hist = [...hist0]
-            const last = hist[hist.length - 1]
-            if (last && last.d === day0) last.n = n; else hist.push({ d: day0, n })
-            const trimmed = hist.slice(-30)
-            await prisma.instagramAccount.update({ where: { id: account.id }, data: { followers: n, followersHistory: trimmed as any } }).catch(() => null)
-            ;(account as any).followers = n            // in-memory → поздний блок не тянет повторно
-            ;(account as any).followersHistory = trimmed
-          }
-        } catch (e: any) {
-          // Метрика подписчиков НЕ критична: детект новых подписчиков идёт через self-events
-          // (свои уведомления аккаунта), а не через HikerAPI. Но молчаливый сбой = «счётчик застыл
-          // без причины» → на РУЧНОЙ проверке показываем настоящую причину (частый случай — пустой
-          // баланс HikerAPI, HTTP 402/InsufficientFunds). Авто-циклы молчат (без спама).
-          if (isManual) {
-            const raw = String(e?.message ?? e)
-            const noFunds = /InsufficientFunds|Top up|\b402\b/i.test(raw)
-            const msg = noFunds
-              ? '💳 Счётчик подписчиков заморожен: на HikerAPI закончился баланс (пополнить: hikerapi.com/billing). На поиск новых подписчиков и на действия это НЕ влияет — детект идёт через уведомления самого аккаунта.'
-              : `Счётчик подписчиков не обновлён (HikerAPI): ${raw.slice(0, 140)}. На детект новых подписчиков и действия НЕ влияет.`
-            await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: msg } }).catch(() => null)
-          }
-        }
-      }
-    }
+    // Счётчик подписчиков растёт из САМИХ уведомлений аккаунта (self-events): каждый новый
+    // подписчик, впервые замеченный в потоке ниже, прибавляется к счётчику (см. followersGained).
+    // HikerAPI/апишки/черновые для метрики НЕ используются.
 
     // Владельцу нужен скрейпер-API (parsingSource 'api'/'drafts_then_api'), но ключ не задан —
     // уже уведомили выше, этого конкретного аккаунта просто пропускаем.
@@ -650,27 +617,18 @@ export async function POST(req: NextRequest) {
       return failedPks
     }
 
-    // Реальное число подписчиков — для спарклайна нужна лишь ОДНА точка в день.
-    // Раньше запрос шёл КАЖДЫЙ цикл (до 48×/сутки на аккаунт) — лишняя нагрузка на IG.
-    // Тянем только если сегодняшней точки ещё нет (или числа вообще нет).
-    let realFollowers: number | undefined
+    // Число подписчиков растёт из САМИХ уведомлений (self-events): каждый НОВЫЙ подписчик, впервые
+    // замеченный в потоке ниже, прибавляется к followersGained → к сохранённому счётчику. HikerAPI/
+    // апишки/черновые для метрики больше НЕ используются (по решению — их нет в проекте).
+    let realFollowers: number | undefined          // итог для записи (выставляется, если счётчик менялся)
     let followersHistory: any = undefined
+    let followersGained = 0                         // сколько НОВЫХ подписчиков замечено в этом цикле
     const today = new Date().toISOString().slice(0, 10)
     const histNow = Array.isArray(account.followersHistory) ? (account.followersHistory as any[]) : []
-    const haveToday = histNow.length > 0 && histNow[histNow.length - 1].d === today && account.followers != null
-    if (isManual || !haveToday) {
-      // Реальное число подписчиков — через скрейпер-API по username (публичные данные,
-      // работают независимо от движка входа). Раньше шло через account_info мёртвого
-      // Python-воркера → всегда падало, поэтому метрика «Подписчики» и спарклайн были пусты.
-      if (scraperConfigured()) {
-        try { realFollowers = (await scrapeUserInfo(account.username)).follower_count }
-        catch {}
-      }
-    }
     // Признак «список подписчиков скрыт» (verified/приватный) — заполняется парсингом черновым ниже.
     let parseBlocked: boolean | undefined
-    // История подписчиков (одна точка в день) строится ПОСЛЕ потоков — realFollowers может
-    // прийти не только из HikerAPI (api-режим), но и из чернового (followerCount, drafts-режим).
+    // История подписчиков (одна точка в день) строится ПОСЛЕ потоков — realFollowers выставляется
+    // из followersGained (см. ниже, перед сохранением аккаунта).
     const buildFollowersHistory = () => {
       if (realFollowers === undefined) return
       const hist = [...histNow]
@@ -775,6 +733,7 @@ export async function POST(req: NextRequest) {
           const snapFollowers = account.snapshots.find((sn) => sn.type === 'FOLLOWERS')
           const hadBaseline = Boolean(snapFollowers)
           const knownPks = extractKnownPks(snapFollowers?.data)
+          const prevKnownForCount = new Set(knownPks)   // до selectTargets — для счётчика новых подписчиков
           // Первая проверка (нет снапшота) — только фиксируем базу, НЕ обрабатываем существующих
           // подписчиков (иначе на новом аккаунте будет массовая рассылка → бан).
           const { fresh, process } = selectTargets(followers, knownPks, hadBaseline, (f) => String(f.pk), newCap)
@@ -798,6 +757,16 @@ export async function POST(req: NextRequest) {
           )
           // §2.3 — транзиентно-провалившиеся цели НЕ фиксируем «известными»: добьются в след. цикле.
           failed.forEach((pk) => knownPks.delete(pk))
+
+          // Счётчик подписчиков: считаем НОВЫЕ pk, впервые попавшие в «известные» этот цикл (после
+          // снятия провалившихся) — каждый новый подписчик учитывается РОВНО ОДИН раз (устойчиво к
+          // дрип-обработке и ретраям). На базлайне (первый проход) НЕ считаем — там лишь фиксируется
+          // текущая база, а не «новые».
+          if (hadBaseline) {
+            let gained = 0
+            knownPks.forEach((pk) => { if (!prevKnownForCount.has(pk)) gained++ })
+            if (gained > 0) followersGained += gained
+          }
 
           // Снапшот сохраняем ПОСЛЕ действий (без провалившихся) — иначе таймаут визита терял цель.
           await prisma.$transaction([
@@ -1154,7 +1123,10 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      buildFollowersHistory()   // realFollowers мог прийти из чернового (drafts) — строим историю после потоков
+      // Счётчик подписчиков += замеченные этим циклом новые подписчики (self-events). Пишем только
+      // при реальном приросте, чтобы не трогать поле зря.
+      if (followersGained > 0) realFollowers = (account.followers ?? 0) + followersGained
+      buildFollowersHistory()   // одна точка истории в день (значение = актуальный счётчик)
       await prisma.instagramAccount.update({
         where: { id: account.id },
         data: { lastChecked: new Date(), errorCount: 0, limits: counters as any, ...(liveState && liveState !== originalState ? { browserState: liveState as any } : {}), ...(realFollowers !== undefined ? { followers: realFollowers, followersHistory } : {}), ...(parseBlocked !== undefined ? { parseBlocked } : {}) },
