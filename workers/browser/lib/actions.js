@@ -19,6 +19,26 @@ function requireSession(context) {
   })
 }
 
+// Клик по «сердечку» лайка (посты И сторис). Прежний селектор `div[role="button"]:has(svg[aria-label="Like"])`
+// был хрупким: (1) в сторис-вьюере обёртка НЕ div[role=button] (лайк не срабатывал вообще),
+// (2) только EN/RU (для укр./исп./порт. аккаунтов aria-label иной → 0 лайков). Теперь ищем сам
+// svg-heart по локализованному aria-label и кликаем его кликабельного предка (button|[role=button]),
+// а если обёртки нет — сам svg. Возвращает true, если лайк нажат.
+const LIKE_LABELS = ['Like', 'Нравится', 'Подобається', 'Me gusta', 'Curtir', 'J’aime', "J'aime", 'Suka', 'いいね！', '좋아요', 'Beğen']
+async function clickLikeHeart(page, root) {
+  const scope = root || page
+  for (const label of LIKE_LABELS) {
+    const heart = scope.locator(`svg[aria-label="${label}"]`).first()
+    if (await heart.isVisible().catch(() => false)) {
+      const anc = heart.locator('xpath=ancestor::*[(@role="button") or (self::button)][1]')
+      const target = (await anc.count().catch(() => 0)) ? anc.first() : heart
+      await humanClick(page, target)
+      return true
+    }
+  }
+  return false
+}
+
 // Явные индикаторы Instagram, что сообщение НЕ ушло (сеть/ограничение/сбой отправки).
 const DM_FAIL_TEXT = [
   'Not delivered', 'Не доставлено', "Couldn't send", 'Failed to send',
@@ -201,9 +221,7 @@ export async function likeUser(context, { targetUsername, count = 1, dryRun }) {
     try {
       await page.goto(`https://www.instagram.com${href}`, { waitUntil: 'domcontentloaded', timeout: 45000 })
       await jitter(1000, 2200)
-      const likeBtn = page.locator('div[role="button"]:has(svg[aria-label="Like"]), div[role="button"]:has(svg[aria-label="Нравится"])').first()
-      if (await likeBtn.isVisible().catch(() => false)) {
-        await humanClick(page, likeBtn)   // §1.3: кривой подвод курсора + смещение от центра
+      if (await clickLikeHeart(page)) {   // локализованный + любая обёртка (§1.3 humanClick внутри)
         liked++
         await jitter(1500, 3000)
       }
@@ -233,13 +251,13 @@ export async function viewStories(context, { targetUsername, like = false, count
   const frames = Math.max(1, count)
   for (let i = 0; i < frames; i++) {
     viewed++
+    // Дать кадру ОТРИСОВАТЬСЯ, прежде чем лайкать/листать — иначе первый кадр не успевал
+    // «засчитаться»/залайкаться (жалоба «посмотрел 2й, а 1й нет; лайков 0»).
+    await jitter(900, 1700)
     if (like) {
-      try {
-        const likeBtn = page.locator('div[role="button"]:has(svg[aria-label="Like"]), div[role="button"]:has(svg[aria-label="Нравится"])').first()
-        if (await likeBtn.isVisible().catch(() => false)) { await humanClick(page, likeBtn); liked++ }
-      } catch {}
+      try { if (await clickLikeHeart(page)) liked++ } catch {}
     }
-    await jitter(2000, 4000)
+    await jitter(1600, 3200)   // «человек смотрит» кадр
     await page.keyboard.press('ArrowRight').catch(() => {})
     if (!page.url().includes('/stories/')) break
   }
