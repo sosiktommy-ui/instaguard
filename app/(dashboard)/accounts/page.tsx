@@ -254,7 +254,9 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
         <div className="relative p-6 pb-5 overflow-hidden border-b border-black/[0.05]">
           <div className="absolute inset-0 bg-gradient-to-br from-[#feda75]/15 via-[#d62976]/12 to-[#4f5bd5]/15 pointer-events-none" />
           <div className="absolute top-4 right-4 z-10 flex items-center gap-1">
-            <button onClick={runProbe} disabled={probing} title="Проба уведомлений (debug: news/inbox)" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">🔔</button>
+            {process.env.NEXT_PUBLIC_DEBUG_TOOLS === '1' && (
+              <button onClick={runProbe} disabled={probing} title="Проба уведомлений (debug: news/inbox)" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">🔔</button>
+            )}
             <button onClick={runCanary} disabled={canarying} title="Канареечный тест: этот аккаунт РЕАЛЬНО подпишется/прокомментирует/лайкнет указанный аккаунт (для проверки триггеров у цели)" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">🧪</button>
             {onOpenLog && (
               <button onClick={onOpenLog} title="Открыть лог" className="p-1.5 text-subt hover:text-brand transition-colors"><ScrollText size={18} /></button>
@@ -284,8 +286,8 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
         </div>
 
         <div className="p-6 space-y-5">
-          {/* plan4 Фаза B — вывод пробы news/inbox (debug). Скопируй JSON и пришли — по нему строю парсер. */}
-          {probeOut && (
+          {/* plan4 Фаза B — вывод пробы news/inbox (debug). Скрыт за флагом NEXT_PUBLIC_DEBUG_TOOLS (релиз-safe). */}
+          {process.env.NEXT_PUBLIC_DEBUG_TOOLS === '1' && probeOut && (
             <div className="rounded-2xl bg-canvas px-4 py-3">
               <div className="text-[12px] font-semibold text-subt mb-2 flex items-center justify-between">
                 <span>🔔 Проба уведомлений (news/inbox) — скопируй и пришли</span>
