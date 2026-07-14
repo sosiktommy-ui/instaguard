@@ -181,13 +181,40 @@ async function actIdle(page) {
   if (Math.random() < 0.5) { await page.mouse.wheel(0, 200 + rnd(400)); await readingPause() }
 }
 
+// Иногда поставить лайк в ЛЕНТЕ (как живой человек листает и лайкает интересное). Клик мышью
+// (humanClick — курсор кривой + клик по координатам), лайкаем свои же ленточные посты (контент,
+// на который аккаунт подписан) — низкий риск, но живое поведение. Локализованный aria-label сердца.
+const FEED_LIKE_LABELS = ['Like', 'Нравится', 'Подобається', 'Me gusta', 'Curtir', 'J’aime', "J'aime", 'Suka', 'いいね！', '좋아요', 'Beğen']
+async function actLikeInFeed(page) {
+  if (!/^https:\/\/www\.instagram\.com\/?(\?.*)?$/.test(page.url())) await goHome(page)
+  await jitter(1000, 2400)
+  await humanScroll(page, 1, 3)                       // долистать до поста, «почитать»
+  const likes = 1 + (Math.random() < 0.25 ? 1 : 0)    // обычно 1, иногда 2 — не увлекаемся
+  for (let n = 0; n < likes; n++) {
+    let liked = false
+    for (const label of FEED_LIKE_LABELS) {
+      const heart = page.locator(`article svg[aria-label="${label}"]`).first()
+      if (await heart.isVisible().catch(() => false)) {
+        const anc = heart.locator('xpath=ancestor::*[(@role="button") or (self::button)][1]')
+        const target = (await anc.count().catch(() => 0)) ? anc.first() : heart
+        await humanClick(page, target)
+        liked = true
+        break
+      }
+    }
+    if (!liked) break
+    await readingPause()
+    if (n < likes - 1) await humanScroll(page, 1, 2)  // пролистать к следующему перед вторым лайком
+  }
+}
+
 // Взвешенный выбор активности (лента — чаще всего; остальное — приправа для разнообразия).
 const ACTIVITIES = [
   { fn: actFeed, w: 5 }, { fn: actExplore, w: 2 }, { fn: actProfilePeek, w: 2 },
-  { fn: actReels, w: 1 }, { fn: actIdle, w: 2 },
+  { fn: actReels, w: 1 }, { fn: actIdle, w: 2 }, { fn: actLikeInFeed, w: 2 },
 ]
-function pickActivity(exclude) {
-  const pool = ACTIVITIES.filter((a) => a.fn !== exclude)
+function pickActivity(exclude, allowLike) {
+  const pool = ACTIVITIES.filter((a) => a.fn !== exclude && (allowLike || a.fn !== actLikeInFeed))
   const total = pool.reduce((s, a) => s + a.w, 0)
   let r = Math.random() * total
   for (const a of pool) { r -= a.w; if (r <= 0) return a.fn }
@@ -199,11 +226,11 @@ function pickActivity(exclude) {
  * чтобы поведение не было машинно-однообразным (не «скролл ленты» 1000 раз подряд весь месяц).
  * Всё в try/catch — прогрев НИКОГДА не роняет вход/действие.
  */
-async function organicBrowse(page, count) {
+async function organicBrowse(page, count, { allowLike = false } = {}) {
   try {
     let last = null
     for (let i = 0; i < count; i++) {
-      const fn = pickActivity(last)   // не повторяем ту же активность подряд
+      const fn = pickActivity(last, allowLike)   // не повторяем ту же активность подряд
       last = fn
       try { await fn(page) } catch {}
       if (i < count - 1) await jitter(800, 2400)  // пауза между активностями
@@ -212,12 +239,15 @@ async function organicBrowse(page, count) {
 }
 
 // Богатый «прогрев» — при входе / в начале визита (§1.1) / keep-alive: 2–4 разных активности.
+// Лайки в ленте разрешены ЗДЕСЬ (нечастый прогрев: вход + keep-alive раз в ~3.5ч), чтобы аккаунт
+// иногда лайкал ленту как живой человек — но не перед каждым действием (иначе накопится много).
 export async function warmupFeed(page) {
-  await organicBrowse(page, 2 + rnd(3))
+  await organicBrowse(page, 2 + rnd(3), { allowLike: true })
 }
 
 // Лёгкий браузинг ПЕРЕД действием (§1.2), чтобы действие не шло «вхолодную»: 1–2 активности,
 // но тоже разные от раза к разу (иногда лента, иногда explore/idle) — не предсказуемо.
+// БЕЗ лайков в ленте (иначе перед каждым действием = слишком много лайков).
 export async function preActionBrowse(page) {
   await organicBrowse(page, 1 + rnd(2))
 }
