@@ -463,6 +463,7 @@ function Accounts() {
 
   const [showAdd, setShowAdd]       = useState(false)
   const [showImport, setShowImport] = useState(false)
+  const [reloginUser, setReloginUser] = useState<string | null>(null)   // §1.1 — повторный вход по протухшей сессии
   const [realAccounts, setReal]     = useState<RealAccount[]>([])
   const [allowNoDrafts, setAllowNoDrafts] = useState(false)  // из /api/settings — для индекса безопасности
   const [pollMsg, setPollMsg]       = useState('')
@@ -652,14 +653,21 @@ function Accounts() {
                     </div>
                     <div className="flex flex-col items-end gap-1.5 shrink-0">
                       <span className={cn('flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-1 rounded-full',
-                        status === 'ACTIVE' ? 'bg-ok/10 text-ok' : status === 'BLOCKED' ? 'bg-bad/10 text-bad' : 'bg-warn/10 text-warn')}>
+                        status === 'ACTIVE' ? 'bg-ok/10 text-ok' : (status === 'BLOCKED' || status === 'CHALLENGE') ? 'bg-bad/10 text-bad' : 'bg-warn/10 text-warn')}>
                         <span className={cn('w-1.5 h-1.5 rounded-full',
-                          status === 'ACTIVE' ? 'bg-ok' : status === 'BLOCKED' ? 'bg-bad' : 'bg-warn')} />
-                        {status === 'ACTIVE' ? 'Активен' : status === 'BLOCKED' ? 'Заблокирован' : 'Пауза'}
+                          status === 'ACTIVE' ? 'bg-ok' : (status === 'BLOCKED' || status === 'CHALLENGE') ? 'bg-bad' : 'bg-warn')} />
+                        {status === 'ACTIVE' ? 'Активен' : status === 'BLOCKED' ? 'Заблокирован' : status === 'CHALLENGE' ? 'Требует входа' : 'Пауза'}
                       </span>
                       {ra && <SecurityBadge acc={ra} ctx={{ ...secCtx, totalFires: st.runs }} />}
                     </div>
                   </div>
+
+                  {status === 'CHALLENGE' && ra && (
+                    <div className="mt-3 flex items-center justify-between gap-2 text-[11.5px] text-bad bg-bad/[0.08] rounded-xl px-3 py-2 leading-snug">
+                      <span className="flex items-start gap-2 min-w-0"><span className="shrink-0">⚠️</span><span>Аккаунт вышел из сессии — войдите заново, чтобы бот снова работал.</span></span>
+                      <button onClick={(e) => { e.stopPropagation(); setReloginUser(ra.username) }} className="shrink-0 px-2.5 py-1 rounded-lg bg-bad text-white text-[11.5px] font-medium hover:opacity-90 transition-opacity">Войти заново</button>
+                    </div>
+                  )}
 
                   {ra?.parseBlocked && (
                     <div className="mt-3 flex items-start gap-2 text-[11.5px] text-warn bg-warn/[0.08] rounded-xl px-3 py-2 leading-snug relative" title="Instagram показывает полный список подписчиков только владельцу такого аккаунта. Комментарии и лайки постов парсятся нормально.">
@@ -784,6 +792,7 @@ function Accounts() {
       />
 
       {showAdd && <AddAccountModal onClose={() => setShowAdd(false)} onAdded={() => loadRealAccounts()} />}
+      {reloginUser && <AddAccountModal presetUsername={reloginUser} title="Войти заново в аккаунт" subtitle="Сессия истекла — введите пароль или куки, чтобы переподключить этот аккаунт." onClose={() => setReloginUser(null)} onAdded={() => { setReloginUser(null); loadRealAccounts() }} />}
       {showImport && <ImportCookiesModal onClose={() => setShowImport(false)} onDone={() => loadRealAccounts()} />}
 
       {detail && (

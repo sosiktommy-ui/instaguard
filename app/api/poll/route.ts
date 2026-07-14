@@ -657,6 +657,10 @@ export async function POST(req: NextRequest) {
       let originalState = account.browserState
       let liveState: object | undefined = (account.browserState as object) ?? undefined
       let skipBrowserSection = false
+      // §1.1 — «сессия мертва» (нет sessionid → нужен повторный вход). Ловим на любом браузерном
+      // шаге (авто-приём / уведомления / прогрев) и один раз помечаем аккаунт «Требует входа».
+      let sessionDead = false
+      const SESSION_DEAD = (m: string) => /login_required|сессия недейств|нужен повторный вход|checkpoint|подтвердите вход/i.test(String(m || ''))
       let selfFollows: { pk: string; username: string }[] = []
       let selfLikes: { pk: string; username: string }[] = []
       let selfComments: { pk: string; user_pk: string; username: string; text: string; media_id: string }[] = []
@@ -675,13 +679,18 @@ export async function POST(req: NextRequest) {
               if (ar.approved?.length) await prisma.log.create({ data: { accountId: account.id, level: 'SUCCESS', message: `Приняты заявки в подписчики: ${ar.approved.map((u) => '@' + u.username).join(', ')} (из ${ar.pendingCount} ожидавших)` } }).catch(() => null)
               else if (isManual) await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: `Заявок в подписчики нет (ожидающих: ${ar.pendingCount})` } }).catch(() => null)
             } catch (e: any) {
-              await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Авто-приём заявок сбой: ${String(e?.message ?? e).slice(0, 120)}` } }).catch(() => null)
+              const m = String(e?.message ?? e)
+              if (SESSION_DEAD(m)) sessionDead = true   // мёртвая сессия — сообщим один раз ниже
+              else await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: 'Не удалось принять заявки в подписчики — временный сбой, повторим автоматически.' } }).catch(() => null)
             }
           }
           try {
             const se = await browserSelfEvents({ storageState: liveState as object, proxy: account.proxy ?? undefined, username: account.username, locale: account.locale ?? undefined, timezoneId: account.timezoneId ?? undefined }, { amount: SELF_EVENTS_AMOUNT })
             if (se.browserState) liveState = se.browserState
-            if (se.error) await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Уведомления (self-events) не прочитаны: ${String(se.error).slice(0, 120)}` } }).catch(() => null)
+            if (se.error) {
+              if (SESSION_DEAD(se.error)) sessionDead = true   // мёртвая сессия — сообщим один раз ниже
+              else await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: 'Уведомления не прочитаны — временный сбой, повторим автоматически.' } }).catch(() => null)
+            }
             const evs = se.events ?? []
             selfFollows = evs.filter((e) => e.type === 'follow').map((e) => ({ pk: e.pk, username: e.username }))
             selfLikes = evs.filter((e) => e.type === 'like').map((e) => ({ pk: e.pk, username: e.username }))
@@ -691,14 +700,22 @@ export async function POST(req: NextRequest) {
             // проблема в ЧТЕНИИ/разборе уведомлений (self-events), а не в действиях.
             if (isManual) await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: `Уведомления прочитаны: всего ${evs.length} (подписки ${selfFollows.length} · лайки ${selfLikes.length} · комменты ${selfComments.length})` } }).catch(() => null)
           } catch (e: any) {
-            await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Уведомления (self-events) сбой: ${String(e?.message ?? e).slice(0, 120)}` } }).catch(() => null)
+            const m = String(e?.message ?? e)
+            if (SESSION_DEAD(m)) sessionDead = true   // мёртвая сессия — сообщим один раз ниже
+            else await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: 'Уведомления не прочитаны — временный сбой, повторим автоматически.' } }).catch(() => null)
           }
         } else {
           skipBrowserSection = true
-          await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: 'Браузерная сессия занята отправкой (dm-воркер) — детект отложен до следующего цикла (§4.8).' } }).catch(() => null)
+          await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: 'Аккаунт занят отправкой сообщений — проверка отложена до следующего цикла.' } }).catch(() => null)
         }
       }
-      const canDetect = browserLockHeld && !skipBrowserSection
+      // §1.1 — сессия мертва: помечаем аккаунт «Требует входа» (видно на карточке + кнопка «Войти
+      // заново») и НЕ пытаемся действовать этим аккаунтом в этом цикле (всё равно упадёт).
+      if (sessionDead) {
+        await prisma.instagramAccount.update({ where: { id: account.id }, data: { status: 'CHALLENGE', lastChecked: new Date() } }).catch(() => null)
+        await prisma.log.create({ data: { accountId: account.id, level: 'ERROR', message: 'Аккаунт вышел из сессии Instagram — войдите заново (кнопка «Войти заново» на карточке аккаунта).' } }).catch(() => null)
+      }
+      const canDetect = browserLockHeld && !skipBrowserSection && !sessionDead
 
       // ── Поток подписчиков (детект из self-events: type=follow) ───────────────
       if (followerTriggers.length && canDetect) {
@@ -1029,7 +1046,9 @@ export async function POST(req: NextRequest) {
       // Периодический живой заход с ТОГО ЖЕ прокси: сессия дозревает (свежий browserState),
       // аккаунт греется, Instagram видит активность и не «остужает» сессию. Гейт по кулдауну
       // (метка limits.lastWarmup) — не на каждый поллинг. Сбой прогрева НЕ роняет цикл.
-      if (liveState && !skipBrowserSection) {
+      // Пропускаем прогрев, если сессия уже помечена мёртвой (§1.1) — иначе он упадёт тем же
+      // login_required и продублирует сообщение; аккаунт уже помечен «Требует входа».
+      if (liveState && !skipBrowserSection && !sessionDead) {
         const lastWarmup = Number((account.limits as any)?.lastWarmup || 0)
         if (isManual || Date.now() - lastWarmup >= WARMUP_KEEPALIVE_MS) {
           try {
@@ -1039,7 +1058,7 @@ export async function POST(req: NextRequest) {
             if (w.browserState) liveState = w.browserState
             ;(counters as any).lastWarmup = Date.now()
             if (!w.alive) {
-              await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: '⚠️ Прогрев: сессия не подтвердилась (возможно, остыла/отклонена IP). Если повторяется — нужен повторный вход.' } }).catch(() => null)
+              await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: 'Не удалось подтвердить сессию при разогреве — если повторится, войдите в аккаунт заново.' } }).catch(() => null)
             }
           } catch { /* прогрев не критичен для цикла */ }
         }

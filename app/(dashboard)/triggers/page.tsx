@@ -165,6 +165,12 @@ const PLATE_STYLE: Record<PlateState, string> = {
 }
 const PLATE_DOT: Record<PlateState, string> = { green: 'bg-ok', blue: 'bg-brand', red: 'bg-bad', yellow: 'bg-warn' }
 const PLATE_LABEL: Record<PlateState, string> = { green: 'Активно', blue: 'Готов', red: 'Проблема', yellow: 'Ошибки' }
+// §1.1 — «Требует входа»/«Заблокирован» показываем явно (а не общее «Проблема»), чтобы было понятно.
+function plateLabel(acc: DbAccount, ps: PlateState): string {
+  if (acc.status === 'CHALLENGE') return 'Требует входа'
+  if (acc.status === 'BLOCKED') return 'Заблокирован'
+  return PLATE_LABEL[ps]
+}
 const PLATE_TIP: Record<PlateState, string> = {
   green: 'Аккаунт активен, на нём есть включённые кампании — работает',
   blue: 'Аккаунт готов, но включённых кампаний пока нет',
@@ -843,7 +849,7 @@ function CreateForm({
                           <Tooltip content={PLATE_TIP[ps]}>
                             <span className="flex items-center gap-1.5 cursor-help">
                               <span className={cn('w-1.5 h-1.5 rounded-full', PLATE_DOT[ps])} />
-                              <span className="text-[10.5px] text-subt">{PLATE_LABEL[ps]}</span>
+                              <span className="text-[10.5px] text-subt">{plateLabel(a, ps)}</span>
                             </span>
                           </Tooltip>
                         </span>
@@ -1413,7 +1419,7 @@ function AccountCard({ acc, campaigns, activeTypes, onOpen, onOpenLog, index = 0
           <div className="font-semibold text-[14px] truncate">@{acc.username}</div>
           <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
             <span className={cn('w-1.5 h-1.5 rounded-full', PLATE_DOT[ps])} />
-            <span className="text-[10.5px] text-subt">{PLATE_LABEL[ps]}</span>
+            <span className="text-[10.5px] text-subt">{plateLabel(acc, ps)}</span>
             <SecurityBadge acc={acc} ctx={{ draftCount, allowNoDrafts, totalFires: fires }} />
             <Tooltip content={acc.proxy ? 'Прокси подключён' : 'Без прокси — высокий риск бана'}>
               <span className={cn('inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-md',
@@ -1689,7 +1695,7 @@ function TriggersScreen() {
           </span>
           <div className="flex-1 min-w-0">
             <div className="font-semibold text-[18px] tracking-tight truncate">@{selAcc.username}</div>
-            <div className="text-[12px] text-subt">{PLATE_LABEL[plateState(selAcc, active)]}</div>
+            <div className="text-[12px] text-subt">{plateLabel(selAcc, plateState(selAcc, active))}</div>
           </div>
           <div className="hidden sm:grid grid-cols-3 gap-3">
             {[['Кампаний', selCampaigns.length], ['Подписчиков', followers], ['Срабатываний', fires]].map(([l, v]) => (

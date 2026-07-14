@@ -42,6 +42,7 @@ export function AddAccountModal({
   title = 'Подключить аккаунт',
   subtitle,
   defaultMode = 'password',
+  presetUsername,
 }: {
   onClose: () => void
   onAdded: (username: string) => void
@@ -54,10 +55,12 @@ export function AddAccountModal({
   subtitle?: string
   /** Режим по умолчанию: для черновых удобнее 'cookies' (безопаснее для парсинга). */
   defaultMode?: AuthMode
+  /** §1.1 — повторный вход: логин заранее заполнен (upsert по username обновит существующий аккаунт). */
+  presetUsername?: string
 }) {
   const addAccount = useStore((s) => s.addAccount)
   const [mode, setMode]         = useState<AuthMode>(defaultMode)
-  const [username, setUsername] = useState('')
+  const [username, setUsername] = useState(presetUsername ?? '')
   const [password, setPassword] = useState('')
   const [totp, setTotp]         = useState('')   // 2FA-ключ (base32), если у аккаунта включена 2FA
   const [emailLogin, setEmailLogin]       = useState('')  // почта аккаунта (для авто-подтверждения кода)
