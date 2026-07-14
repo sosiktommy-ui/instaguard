@@ -17,12 +17,21 @@ export const DAILY_CAPS: Record<ActionKind, number> = {
   story: 50,    // просмотров/лайков сторис в сутки
 }
 
-// Жёсткий потолок пользовательских лимитов (защита от «фат-фингера» = гарантированный бан).
-export const CAP_MAX: Record<ActionKind, number> = { dm: 60, follow: 40, like: 120, comment: 30, story: 150 }
+// Потолок пользовательских лимитов (защита от случайной опечатки). Подняты по просьбе — можно
+// ставить высокие значения; для «совсем без лимита» есть отдельный тумблер (off, см. ниже).
+export const CAP_MAX: Record<ActionKind, number> = { dm: 500, follow: 500, like: 1000, comment: 200, story: 1000 }
 
-// Сливает пользовательский override с дефолтами и клампит в [0, CAP_MAX]. 0 = действие выключено.
+// «Без лимита» — заведомо недостижимое за сутки число (НЕ Infinity: безопасно для JSON и арифметики,
+// не даёт NaN в scaleCaps/remaining). Включается тумблером «Отключить дневные лимиты».
+export const OFF_CAP = 100_000
+
+/**
+ * Эффективные дневные лимиты для поллинга. `override.off === true` → лимиты ОТКЛЮЧЕНЫ (все = OFF_CAP).
+ * Иначе override сливается с дефолтами и клампится в [0, CAP_MAX]. 0 = действие выключено.
+ */
 export function mergeCaps(override: unknown): Caps {
   const o = (override ?? {}) as Record<string, unknown>
+  if (o.off === true) return { dm: OFF_CAP, follow: OFF_CAP, like: OFF_CAP, comment: OFF_CAP, story: OFF_CAP }
   const out = { ...DAILY_CAPS }
   for (const k of Object.keys(DAILY_CAPS) as ActionKind[]) {
     const v = Number(o[k])
@@ -31,7 +40,24 @@ export function mergeCaps(override: unknown): Caps {
   return out
 }
 
-// Максимум НОВЫХ целей (подписчиков/комментариев), обрабатываемых за одну проверку
+export interface StoredCaps { dm: number; follow: number; like: number; comment: number; story: number; off: boolean }
+/**
+ * Вид для ХРАНЕНИЯ/UI: клампнутые пользовательские числа + флаг `off`. В отличие от mergeCaps НЕ
+ * подменяет числа на OFF_CAP при off — числа остаются пользовательскими (восстановятся, когда тумблер
+ * выключат), а UI по флагу `off` рисует тумблер. Так «выключить лимиты» не затирает заданные значения.
+ */
+export function normalizeCaps(override: unknown): StoredCaps {
+  const o = (override ?? {}) as Record<string, unknown>
+  const out = { ...DAILY_CAPS, off: o.off === true } as StoredCaps
+  for (const k of Object.keys(DAILY_CAPS) as ActionKind[]) {
+    const v = Number(o[k])
+    if (Number.isFinite(v) && v >= 0) out[k] = Math.min(CAP_MAX[k], Math.floor(v))
+  }
+  return out
+}
+
+// Максимум НОВЫХ целей за одну проверку (дрип-защита от залпа). При отключённых лимитах поллинг
+// поднимает это сам (см. poll/route.ts) — пользователь сознательно выбрал скорость важнее анти-бана.
 export const MAX_NEW_PER_POLL = 12
 
 export interface Counters {

@@ -66,7 +66,7 @@ const HELP: { icon: any; color: string; title: string; text: string; features: s
   },
 ]
 
-interface DailyCaps { dm: number; follow: number; like: number; comment: number; story: number }
+interface DailyCaps { dm: number; follow: number; like: number; comment: number; story: number; off?: boolean }
 interface Settings {
   accountsPerProxy: number; allowNoProxy: boolean; allowNoDrafts: boolean; likeByDraft: boolean; storyByDraft: boolean
   parsingSource: string; actionEngine: string; browserHeadful: boolean; pollIntervalHours: number
@@ -74,12 +74,12 @@ interface Settings {
 }
 
 // Метаданные для редактора лимитов (подпись + потолок + пояснение риска)
-const CAP_FIELDS: { key: keyof DailyCaps; label: string; max: number; hint: string }[] = [
-  { key: 'dm', label: 'Директ', max: 60, hint: 'в основном тёплым подписчикам — низкий риск' },
-  { key: 'follow', label: 'Подписка', max: 40, hint: 'подписки в ответ; масс-фолловинг рискованнее' },
-  { key: 'like', label: 'Лайк', max: 120, hint: 'лайки постов' },
-  { key: 'comment', label: 'Коммент', max: 30, hint: 'публичные комментарии — заметнее' },
-  { key: 'story', label: 'Сторис', max: 150, hint: 'просмотры/лайки сторис — самое безопасное' },
+const CAP_FIELDS: { key: Exclude<keyof DailyCaps, 'off'>; label: string; max: number; hint: string }[] = [
+  { key: 'dm', label: 'Директ', max: 500, hint: 'в основном тёплым подписчикам — низкий риск' },
+  { key: 'follow', label: 'Подписка', max: 500, hint: 'подписки в ответ; масс-фолловинг рискованнее' },
+  { key: 'like', label: 'Лайк', max: 1000, hint: 'лайки постов' },
+  { key: 'comment', label: 'Коммент', max: 200, hint: 'публичные комментарии — заметнее' },
+  { key: 'story', label: 'Сторис', max: 1000, hint: 'просмотры/лайки сторис — самое безопасное' },
 ]
 
 // Радио-группа: список карточек-вариантов (заголовок + пояснение)
@@ -241,24 +241,48 @@ function SettingsScreen() {
             </div>
           </div>
         </div>
-        <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-3">
-          {CAP_FIELDS.map((f) => {
-            const val = (capsDraft ?? s.dailyCaps)[f.key]
-            return (
-              <label key={f.key} className="flex flex-col gap-1.5" title={f.hint}>
-                <span className="text-[12px] font-medium text-ink/80">{f.label}<span className="text-subt/60 font-normal"> /сут</span></span>
-                <input type="number" min={0} max={f.max} value={val}
-                  onChange={(e) => setCapsDraft((prev) => ({ ...(prev ?? s.dailyCaps), [f.key]: Math.max(0, Math.min(f.max, Math.round(Number(e.target.value) || 0))) }))}
-                  className="field w-full py-2 text-[14px] text-center" />
-                <span className="text-[10.5px] text-subt/70 leading-tight">{f.hint}</span>
+        {(() => {
+          const off = Boolean((capsDraft ?? s.dailyCaps)?.off)
+          return (
+            <>
+              <div className={cn('mt-4 grid grid-cols-2 sm:grid-cols-5 gap-3 transition-opacity', off && 'opacity-40 pointer-events-none')}>
+                {CAP_FIELDS.map((f) => {
+                  const val = (capsDraft ?? s.dailyCaps)[f.key]
+                  return (
+                    <label key={f.key} className="flex flex-col gap-1.5" title={f.hint}>
+                      <span className="text-[12px] font-medium text-ink/80">{f.label}<span className="text-subt/60 font-normal"> /сут</span></span>
+                      <input type="number" min={0} max={f.max} value={val} disabled={off}
+                        onChange={(e) => setCapsDraft((prev) => ({ ...(prev ?? s.dailyCaps), [f.key]: Math.max(0, Math.min(f.max, Math.round(Number(e.target.value) || 0))) }))}
+                        className="field w-full py-2 text-[14px] text-center" />
+                      <span className="text-[10.5px] text-subt/70 leading-tight">{f.hint}</span>
+                    </label>
+                  )
+                })}
+              </div>
+
+              {/* Тумблер «Отключить дневные лимиты» — сознательный выбор скорости важнее анти-бана */}
+              <label className={cn('mt-4 flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition-colors',
+                off ? 'border-bad/60 bg-bad/[0.06]' : 'border-line/50 hover:bg-black/[0.02]')}>
+                <input type="checkbox" checked={off}
+                  onChange={(e) => setCapsDraft((prev) => ({ ...(prev ?? s.dailyCaps), off: e.target.checked }))}
+                  className="mt-0.5 w-4 h-4 accent-red-600 shrink-0" />
+                <span className="min-w-0">
+                  <span className="block text-[13.5px] font-medium">Отключить дневные лимиты</span>
+                  <span className="block text-[12px] text-bad/90 leading-snug mt-0.5">
+                    ⚠️ Высокий риск блокировки Instagram. Бот будет действовать без дневного потолка и обрабатывать
+                    всплески целиком. При ограничении аккаунта действия остановятся автоматически, но восстановить
+                    доступ придётся вручную. Включайте, только если понимаете риск.
+                  </span>
+                </span>
               </label>
-            )
-          })}
-        </div>
-        <div className="mt-4 flex items-center gap-2">
-          <Button onClick={() => capsDraft && patch({ dailyCaps: capsDraft })}>Сохранить лимиты</Button>
-          <Button variant="ghost" onClick={() => setCapsDraft({ dm: 25, follow: 15, like: 40, comment: 10, story: 50 })}>Сбросить к умолчанию</Button>
-        </div>
+
+              <div className="mt-4 flex items-center gap-2">
+                <Button onClick={() => capsDraft && patch({ dailyCaps: capsDraft })}>Сохранить лимиты</Button>
+                <Button variant="ghost" onClick={() => setCapsDraft({ dm: 25, follow: 15, like: 40, comment: 10, story: 50, off: false })}>Сбросить к умолчанию</Button>
+              </div>
+            </>
+          )
+        })()}
       </div>
 
       <div className={rowCls}>

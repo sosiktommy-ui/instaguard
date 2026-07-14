@@ -36,9 +36,10 @@ const LIKERS_MEDIA_COUNT = 3
 const LIKERS_PER_MEDIA = 50
 // Сколько тредов директа читать на предмет ответов/упоминаний в сторис
 const STORY_EVENTS_AMOUNT = 15
-const SELF_EVENTS_AMOUNT = 60   // plan4: сколько историй news/inbox читать за проверку (шире окно —
-                                // при всплеске (много подписок/комментов разом) не теряем старые события;
-                                // сами действия всё равно ограничены дневными лимитами + «дрипом»)
+// Сколько историй news/inbox читать за проверку. Поднято 60→150 (env BROWSER_SELF_EVENTS_AMOUNT):
+// при ВСПЛЕСКЕ (напр. 120 подписок за час) окно 60 теряло половину событий («посчитал только 60»).
+// Шире окно = ловим весь всплеск; сами действия всё равно ограничены дневными лимитами + «дрипом».
+const SELF_EVENTS_AMOUNT = Number(process.env.BROWSER_SELF_EVENTS_AMOUNT) || 150
 const ACCEPT_REQUESTS_LIMIT = 10 // §13.11: сколько входящих заявок в подписчики подтверждать за цикл (ban-safety)
 // Глубина скрейпа подписчиков/подписок ОСНОВНОГО черновым для проверки гейта.
 // Держим НЕБОЛЬШОЙ (свежая порция + накопленный снапшот подписчиков): 900+900 с
@@ -191,7 +192,7 @@ async function mergeStats(triggerId: string, incFired: Record<string, number>, i
 
 // Выполняет действия триггера-подписки для одной цели синхронно.
 // Считаем отдельно «сработало» (попытались) и «выполнено» (получилось).
-async function runFollowerActionsInline(job: any) {
+async function runFollowerActionsInline(job: any): Promise<'CHALLENGE' | 'PAUSED' | null> {
   // ── Браузерный движок (эмуль): действия по username через реальный Chromium (plan §4.6). ──
   // Строго изолировано от legacy: включается только когда job.engine==='browser' и есть browserState.
   if (job.engine === 'browser' && job.browserState) {
@@ -235,10 +236,11 @@ async function runFollowerActionsInline(job: any) {
       ])
     }
     if (r.brk) await prisma.instagramAccount.update({ where: { id: job.accountId }, data: { status: r.brk } }).catch(() => null)
-    return
+    return (r.brk as 'CHALLENGE' | 'PAUSED' | undefined) ?? null   // Instagram ограничил → сигнал «стоп» для батча
   }
   // Нет browserState — действовать браузером нечем. poll отсеивает такие аккаунты гардом [A1]
   // (метит CHALLENGE «нужен повторный вход»), сюда доходить не должно; на всякий случай — no-op.
+  return null
 }
 
 interface PollSummary {
@@ -323,6 +325,10 @@ export async function POST(req: NextRequest) {
   const parsingSourceOf = new Map(settingsRows.map((r) => [r.userId, r.parsingSource ?? 'api']))
   // Пользовательские дневные лимиты (override дефолтов, кламп в mergeCaps). Дефолт — DAILY_CAPS.
   const capsOf = (userId: string) => mergeCaps(settingsRows.find((r) => r.userId === userId)?.dailyCaps)
+  // Тумблер «Отключить дневные лимиты» (dailyCaps.off). Влияет на «дрип» (сколько новых целей брать
+  // за проверку): при off обрабатываем гораздо больше за раз — пользователь сознательно выбрал
+  // скорость важнее анти-бана (в UI это под явным предупреждением о риске).
+  const limitsOffOf = (userId: string) => (settingsRows.find((r) => r.userId === userId)?.dailyCaps as any)?.off === true
   // §10 настраиваемый интервал авто-проверки (раз в N часов на аккаунт). Дефолт 3ч; кламп 1..168.
   const intervalMsOf = (userId: string) =>
     Math.max(1, Math.min(168, settingsRows.find((r) => r.userId === userId)?.pollIntervalHours ?? 3)) * 60 * 60 * 1000
@@ -442,7 +448,11 @@ export async function POST(req: NextRequest) {
     // и добираются в следующих циклах — так серия действий не улетает залпом (топ-сигнал бана), но
     // никто не теряется (selectTargets помечает известными ТОЛЬКО обработанных). Ручной запуск —
     // обрабатывает больше (до MAX_NEW_PER_POLL): пользователь явно ждёт результат.
-    const newCap = isManual ? MAX_NEW_PER_POLL : 2 + Math.floor(Math.random() * 3)
+    // При ОТКЛЮЧЁННЫХ лимитах (off) дрип снимается — берём весь всплеск за раз (до 500): пользователь
+    // выбрал скорость важнее анти-бана. Действия всё равно останавливаются по stop-on-block, если
+    // Instagram ограничит аккаунт (не долбим вслепую).
+    const limitsOff = limitsOffOf(account.userId)
+    const newCap = limitsOff ? 500 : (isManual ? MAX_NEW_PER_POLL : 2 + Math.floor(Math.random() * 3))
 
     // Прогрев: дневные лимиты ужимаются по возрасту основного аккаунта (свежий не срывается на полную).
     const warm = warmupFactor(account.createdAt)
@@ -513,9 +523,12 @@ export async function POST(req: NextRequest) {
       targets: { pk: string; username: string }[],
       triggersForStream: typeof triggers,
       withGate: boolean,
-    ): Promise<Set<string>> => {
+    ): Promise<{ failed: Set<string>; blocked: 'CHALLENGE' | 'PAUSED' | null }> => {
       const failedPks = new Set<string>()
+      const dispatched = new Set<string>()   // цели, по которым действие уже отправлено (не ретраим)
+      let blocked: 'CHALLENGE' | 'PAUSED' | null = null   // Instagram ограничил аккаунт → стоп батча
       for (const trigger of triggersForStream) {
+        if (blocked) break
         const actions = (trigger.actions ?? []) as any[]
         const isOn = (a: any) => a && a.enabled !== false
         const msgAction = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
@@ -534,6 +547,7 @@ export async function POST(req: NextRequest) {
         const gateMode: GateMode | null = withGate && msgAction?.gate ? (msgAction.gate.mode ?? 'followed_by') : null
 
         for (const target of targets) {
+          if (blocked) break
           // Гейт подписки: если задан и не проходит — DM не шлём (лайк/подписка/сторис остаются)
           let dmAllowed = Boolean(msgAction?.templates?.[0])
           if (dmAllowed && gateMode) {
@@ -601,8 +615,13 @@ export async function POST(req: NextRequest) {
                 removeOnComplete: true, removeOnFail: 100,
               })
               cursor += nextGap()
+              dispatched.add(target.pk)
             } else {
-              await runFollowerActionsInline(job)
+              const brk = await runFollowerActionsInline(job)
+              dispatched.add(target.pk)
+              // STOP-ON-BLOCK: Instagram ограничил аккаунт (challenge/action-block/429) → НЕ долбим
+              // остальных (это углубляет бан). Прерываем батч; необработанные цели уйдут в ретрай ниже.
+              if (brk) { blocked = brk; break }
               await randDelay(isManual ? 4 : 40, isManual ? 12 : 90)
             }
             s.dmsQueued++
@@ -614,7 +633,10 @@ export async function POST(req: NextRequest) {
           }
         }
       }
-      return failedPks
+      // На блокировке необработанные цели (не dispatched) — на ретрай: снапшот НЕ пометит их
+      // «известными» (см. failedPks в вызывающем потоке), добьются после восстановления аккаунта.
+      if (blocked) for (const t of targets) if (!dispatched.has(t.pk)) failedPks.add(t.pk)
+      return { failed: failedPks, blocked }
     }
 
     // Число подписчиков растёт из САМИХ уведомлений (self-events): каждый НОВЫЙ подписчик, впервые
@@ -758,12 +780,13 @@ export async function POST(req: NextRequest) {
           s.newFollowers = fresh.length
 
           // Подписчик уже подписан на нас — гейт не нужен
-          const failed = await handleTargets(
+          const { failed, blocked } = await handleTargets(
             process.map((f) => ({ pk: String(f.pk), username: f.username })),
             followerTriggers, false,
           )
           // §2.3 — транзиентно-провалившиеся цели НЕ фиксируем «известными»: добьются в след. цикле.
           failed.forEach((pk) => knownPks.delete(pk))
+          if (blocked) sessionDead = true   // Instagram ограничил → стоп остальных потоков этого цикла
 
           // Счётчик подписчиков: считаем НОВЫЕ pk, впервые попавшие в «известные» этот цикл (после
           // снятия провалившихся) — каждый новый подписчик учитывается РОВНО ОДИН раз (устойчиво к
@@ -786,7 +809,7 @@ export async function POST(req: NextRequest) {
       // ── Поток лайков (отдельный кулдаун) ─────────────────────────────────
       const snapLikesMeta = account.snapshots.find((sn) => sn.type === 'LIKES')
       const likeElapsed = snapLikesMeta ? Date.now() - new Date(snapLikesMeta.createdAt).getTime() : Infinity
-      if (likeTriggers.length && canDetect && (isManual || likeElapsed >= LIKE_COOLDOWN_MS)) {
+      if (likeTriggers.length && canDetect && !sessionDead && (isManual || likeElapsed >= LIKE_COOLDOWN_MS)) {
         {
           const likers = selfLikes
           const hadBaseline = Boolean(snapLikesMeta)
@@ -795,11 +818,12 @@ export async function POST(req: NextRequest) {
 
           s.newLikers = fresh.length
           // Гейт: лайкнувший может быть не подписан → DM пропускается (лайк/подписка/сторис остаются)
-          const failed = await handleTargets(
+          const { failed, blocked } = await handleTargets(
             process.map((l) => ({ pk: String(l.pk), username: l.username })),
             likeTriggers, true,
           )
           failed.forEach((pk) => knownL.delete(pk))   // §2.3 — провалившиеся добьются в след. цикле
+          if (blocked) sessionDead = true
 
           await prisma.$transaction([
             prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'LIKES' } }),
@@ -814,7 +838,7 @@ export async function POST(req: NextRequest) {
       // Стори-события видит только ОСНОВНОЙ (его личка) — читаем инбокс своим Chromium под ТЕМ ЖЕ
       // локом (§4.8), что и self-events выше. liveState/originalState/skipBrowserSection/лок —
       // уже взяты в начале цикла (наверху). Здесь только используем canDetect.
-      const useBrowserForStories = canDetect
+      const useBrowserForStories = canDetect && !sessionDead
       if (storyTriggers.length && useBrowserForStories && (isManual || storyElapsed >= STORY_COOLDOWN_MS)) {
         let events: Array<{ pk?: string | number; user_pk: string | number; username: string }> = []
         try {
@@ -834,10 +858,11 @@ export async function POST(req: NextRequest) {
         const { fresh, process } = selectTargets(events, knownS, hadBaseline, (e) => (e.pk ? String(e.pk) : ''), newCap)
 
         s.newStoryEvents = fresh.length
-        const failed = await handleTargets(
+        const { failed, blocked } = await handleTargets(
           process.map((e) => ({ pk: String(e.user_pk), username: e.username })),
           storyTriggers, true,
         )
+        if (blocked) sessionDead = true
         // §2.3 — снапшот стори ключуется по pk СОБЫТИЯ, а цели — по user_pk; провалившиеся события
         // (их user_pk в failed) убираем из «известных» по pk события, чтобы добить в след. цикле.
         process.forEach((e) => { if (e.pk && failed.has(String(e.user_pk))) knownS.delete(String(e.pk)) })
@@ -864,7 +889,7 @@ export async function POST(req: NextRequest) {
       // воркера — postUrl строится из media_id (shortcode, lib/instagram/shortcode.ts). Реплай
       // браузером сейчас = обычный коммент к посту, НЕ тред-ответ конкретному комменту (см.
       // workers/browser/lib/actions.js replyComment — тред отложен на Фазу 4).
-      const useBrowserForComments = canDetect
+      const useBrowserForComments = canDetect && !sessionDead
       if (commentTriggers.length && useBrowserForComments && (isManual || commentElapsed >= COMMENT_COOLDOWN_MS)) {
         {
         const comments = selfComments   // plan4: комментарии к моим постам из self-events (type=comment)
