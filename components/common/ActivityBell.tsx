@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Bell, CheckCircle2, AlertCircle, AlertTriangle, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { humanizeLog } from '@/lib/logText'
 
 // plan4 Фаза H — колокольчик срабатываний. Глобальный фид «Сработал триггер → @user»
 // по всем аккаунтам владельца. Непрочитанное считаем по метке времени последнего
@@ -132,7 +133,7 @@ export function ActivityBell() {
                         <m.Icon className="w-3.5 h-3.5" style={{ color: m.color }} />
                       </span>
                       <div className="flex-1 min-w-0">
-                        <div className="text-[12.5px] text-ink/85 leading-snug">{i.message}</div>
+                        <div className="text-[12.5px] text-ink/85 leading-snug">{humanizeLog(i.message)}</div>
                         <div className="text-[11px] text-subt mt-0.5">{i.account ? `@${i.account} · ` : ''}{relTime(i.createdAt)}</div>
                       </div>
                     </div>

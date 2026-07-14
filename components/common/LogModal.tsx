@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { X, CheckCircle2, AlertCircle, AlertTriangle, Info, ScrollText, RefreshCw, ArrowRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { TRIGGER_TYPE_LABELS } from '@/lib/stats'
+import { humanizeLog, isDiagnostic } from '@/lib/logText'
 
 interface LogEntry { id: string; level: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS'; message: string; createdAt: string }
 
@@ -63,7 +64,9 @@ function parseLog(l: LogEntry): Parsed {
     else if (/невозможн/i.test(msg)) outcome = { label: 'невозможно', tone: 'warn' }
     else outcome = { label: l.level === 'ERROR' ? 'ошибка' : l.level === 'WARN' ? 'частично' : 'выполнено', tone: l.level === 'ERROR' ? 'bad' : l.level === 'WARN' ? 'warn' : 'ok' }
   }
-  return { kind: isTrigger ? 'trigger' : 'event', campaign, account, triggerType, done, outcome, reason, text: msg }
+  // Человеческий язык (§1.5): чистим жаргон в тексте события и в причине. Парсинг выше идёт по
+  // сырому msg (кампания/аккаунт/тип/действия), поэтому humanize не ломает разбор карточек.
+  return { kind: isTrigger ? 'trigger' : 'event', campaign, account, triggerType, done, outcome, reason: reason ? humanizeLog(reason) : undefined, text: humanizeLog(msg) }
 }
 
 // Цвета чипов действий — в тон 3D-диаграмме статистики
@@ -98,6 +101,7 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
   const [logs, setLogs] = useState<LogEntry[] | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [range, setRange] = useState<Range>('30d')
+  const [details, setDetails] = useState(false)   // «Подробно» — показывать диагностические записи (шум пустых циклов)
   const [live, setLive] = useState(false)   // «● Live» — авто-обновление журнала каждые 4с
   // Кампания → {тип триггера, настроенные действия}: чтобы даже у старых логов
   // (без «· тип:»/«· сделано:») слева показывать ТИП, а справа — реальные ДЕЙСТВИЯ.
@@ -105,7 +109,8 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
 
   const load = () => {
     setLogs(null)
-    fetch(`/api/logs?accountId=${encodeURIComponent(accountId)}&limit=200`)
+    // cache:'no-store' + t=<ts> — иначе браузер может отдать закешированный GET (журнал «не обновлялся»)
+    fetch(`/api/logs?accountId=${encodeURIComponent(accountId)}&limit=200&t=${Date.now()}`, { cache: 'no-store' })
       .then((r) => r.ok ? r.json() : [])
       .then(setLogs)
       .catch(() => setLogs([]))
@@ -117,12 +122,14 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
   // действиями бота в реальном времени. Выключается тумблером или закрытием окна.
   useEffect(() => {
     if (!live) return
-    const id = setInterval(() => {
-      fetch(`/api/logs?accountId=${encodeURIComponent(accountId)}&limit=200`)
+    const tick = () => {
+      fetch(`/api/logs?accountId=${encodeURIComponent(accountId)}&limit=200&t=${Date.now()}`, { cache: 'no-store' })
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => { if (Array.isArray(d)) setLogs(d) })
         .catch(() => {})
-    }, 4000)
+    }
+    tick()                       // сразу при включении Live — мгновенный отклик, не ждать 4с
+    const id = setInterval(tick, 4000)
     return () => clearInterval(id)
   }, [live, accountId])
 
@@ -158,6 +165,8 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
   const scoped = (logs ?? [])
     .filter((l) => !matchText || l.message.includes(matchText))
     .filter((l) => inRange(l.createdAt))
+    // §1.5 — по умолчанию прячем диагностический шум пустых циклов (показывается под «Подробно»)
+    .filter((l) => details || !isDiagnostic(l.message))
 
   const okCount = scoped.filter((l) => l.level === 'SUCCESS').length
   const issueCount = scoped.filter((l) => l.level === 'ERROR' || l.level === 'WARN').length
@@ -196,6 +205,11 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
             </div>
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            <button onClick={() => setDetails((v) => !v)} title="Подробно — показывать технические/диагностические записи (по умолчанию скрыты)"
+              className={cn('h-9 px-2.5 rounded-xl text-[12px] font-semibold transition-colors',
+                details ? 'bg-brand/12 text-brand' : 'text-subt hover:text-ink hover:bg-black/[0.04]')}>
+              Подробно
+            </button>
             <button onClick={() => setLive((v) => !v)} title="Live — авто-обновление каждые 4с (наблюдать за ботом в реальном времени)"
               className={cn('flex items-center gap-1.5 h-9 px-2.5 rounded-xl text-[12px] font-semibold transition-colors',
                 live ? 'bg-red-500/12 text-red-500' : 'text-subt hover:text-ink hover:bg-black/[0.04]')}>
