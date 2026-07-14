@@ -130,7 +130,12 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
     }
     tick()                       // сразу при включении Live — мгновенный отклик, не ждать 4с
     const id = setInterval(tick, 4000)
-    return () => clearInterval(id)
+    // Браузер ТОРМОЗИТ setInterval в фоновой вкладке (до 1/мин): переключился на другое окно/телефон
+    // сделать тест-подписку → вернулся → Live «замер». Обновляем сразу при возврате фокуса/видимости.
+    const onFocus = () => { if (!document.hidden) tick() }
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onFocus)
+    return () => { clearInterval(id); window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onFocus) }
   }, [live, accountId])
 
   // Подтягиваем кампании владельца → карта «имя кампании» → {тип, настроенные действия}

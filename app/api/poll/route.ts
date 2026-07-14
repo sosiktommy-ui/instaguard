@@ -488,6 +488,11 @@ export async function POST(req: NextRequest) {
     // множеству. Так проверка «подписан ли на нас» не грузит основной аккаунт вообще.
     let gateFollowers: Set<string> | null = null   // кто подписан на основной (followed_by)
     let gateFollowing: Set<string> | null = null   // на кого подписан основной (для mutual)
+    // Свежие подписки ИЗ СОБСТВЕННЫХ уведомлений (self-events, type=follow) — заполняется в детекте
+    // ниже. Это АВТОРИТЕТНЕЕ скрейпа: человек, который только что подписался (и тут же
+    // прокомментировал), в скрейп/снапшот ещё не попал (лаг IG/кеш API) → гейт ложно решал «не
+    // подписан» и слал приглашение «подпишись» уже подписавшемуся. Засеиваем гейт этими pk.
+    const selfFollowedPks = new Set<string>()
     const ensureGateFollowers = async (): Promise<Set<string>> => {
       if (gateFollowers) return gateFollowers
       // Стартуем с накопленного снапшота подписчиков + добираем свежих через API
@@ -496,6 +501,7 @@ export async function POST(req: NextRequest) {
         const { followers } = await scrapeFollowers(account.username, GATE_FOLLOWERS_SCAN)
         followers.forEach((f) => set.add(String(f.pk)))
       } catch { /* не смогли добрать — используем что есть (гейт ошибётся в безопасную сторону) */ }
+      selfFollowedPks.forEach((pk) => set.add(pk))   // только что подписавшиеся (из наших уведомлений) — точно followed_by
       gateFollowers = set
       return set
     }
@@ -710,6 +716,7 @@ export async function POST(req: NextRequest) {
             }
             const evs = se.events ?? []
             selfFollows = evs.filter((e) => e.type === 'follow').map((e) => ({ pk: e.pk, username: e.username }))
+            selfFollows.forEach((f) => selfFollowedPks.add(String(f.pk)))   // засеиваем гейт: только что подписавшиеся точно followed_by
             selfLikes = evs.filter((e) => e.type === 'like').map((e) => ({ pk: e.pk, username: e.username }))
             selfComments = evs.filter((e) => e.type === 'comment').map((e) => ({ pk: `${e.pk}_${e.media_id ?? ''}`, user_pk: e.pk, username: e.username, text: e.text ?? '', media_id: e.media_id ?? '' }))
             // Диагностика (только ручная проверка, чтобы не засорять авто-логи): что реально
@@ -924,7 +931,10 @@ export async function POST(req: NextRequest) {
               const ok = await passesGateFor(c.user_pk, gateCfg.mode)
 
               if (!ok) {
-                const gateText = gateCfg.inviteText.replace(/\{\{username\}\}/gi, c.username)
+                const gateBase = gateCfg.inviteText.replace(/\{\{username\}\}/gi, c.username)
+                // Адресуем ответ автору коммента через @упоминание (иначе это «общий» коммент к посту,
+                // а не ответ конкретному человеку — жалоба пользователя). Тред-ответ = отдельная правка воркера.
+                const gateText = gateBase && !gateBase.includes('@' + c.username) ? `@${c.username} ${gateBase}` : gateBase
                 if (gateText && !postUrl) {
                   errors.push('коммент-приглашение: не удалось определить пост для ответа (в уведомлении нет media_id)')
                 } else if (gateText && use('comment')) {
@@ -984,7 +994,9 @@ export async function POST(req: NextRequest) {
                   errors.push('ответ в комментах: не удалось определить пост для ответа (в уведомлении нет media_id)')
                 } else if (use('comment')) {
                   incFired.comment = (incFired.comment || 0) + 1
-                  const pick = variants[Math.floor(Math.random() * variants.length)].replace(/\{\{username\}\}/gi, c.username)
+                  const pickBase = variants[Math.floor(Math.random() * variants.length)].replace(/\{\{username\}\}/gi, c.username)
+                  // Адресуем ответ автору коммента через @упоминание (не «общий» коммент к посту).
+                  const pick = pickBase.includes('@' + c.username) ? pickBase : `@${c.username} ${pickBase}`
                   try {
                     { const r = await browserReply(bctx(), postUrl, pick); if (r.browserState) cState = r.browserState; if (!r.ok) throw new Error(r.error ?? 'не отправлен') }
                     fired = true; incDone.comment = (incDone.comment || 0) + 1
