@@ -66,10 +66,21 @@ const HELP: { icon: any; color: string; title: string; text: string; features: s
   },
 ]
 
+interface DailyCaps { dm: number; follow: number; like: number; comment: number; story: number }
 interface Settings {
   accountsPerProxy: number; allowNoProxy: boolean; allowNoDrafts: boolean; likeByDraft: boolean; storyByDraft: boolean
   parsingSource: string; actionEngine: string; browserHeadful: boolean; pollIntervalHours: number
+  dailyCaps: DailyCaps
 }
+
+// Метаданные для редактора лимитов (подпись + потолок + пояснение риска)
+const CAP_FIELDS: { key: keyof DailyCaps; label: string; max: number; hint: string }[] = [
+  { key: 'dm', label: 'Директ', max: 60, hint: 'в основном тёплым подписчикам — низкий риск' },
+  { key: 'follow', label: 'Подписка', max: 40, hint: 'подписки в ответ; масс-фолловинг рискованнее' },
+  { key: 'like', label: 'Лайк', max: 120, hint: 'лайки постов' },
+  { key: 'comment', label: 'Коммент', max: 30, hint: 'публичные комментарии — заметнее' },
+  { key: 'story', label: 'Сторис', max: 150, hint: 'просмотры/лайки сторис — самое безопасное' },
+]
 
 // Радио-группа: список карточек-вариантов (заголовок + пояснение)
 function Radio<T extends string>({ value, options, onChange }: { value: T; options: { v: T; label: string; desc: string }[]; onChange: (v: T) => void }) {
@@ -117,7 +128,8 @@ function timeAgo(iso: string | null): string {
 }
 
 function SettingsScreen() {
-  const [s, setS] = useState<Settings>({ accountsPerProxy: 3, allowNoProxy: false, allowNoDrafts: false, likeByDraft: false, storyByDraft: false, parsingSource: 'api', actionEngine: 'browser', browserHeadful: false, pollIntervalHours: 3 })
+  const [s, setS] = useState<Settings>({ accountsPerProxy: 3, allowNoProxy: false, allowNoDrafts: false, likeByDraft: false, storyByDraft: false, parsingSource: 'api', actionEngine: 'browser', browserHeadful: false, pollIntervalHours: 3, dailyCaps: { dm: 25, follow: 15, like: 40, comment: 10, story: 50 } })
+  const [capsDraft, setCapsDraft] = useState<DailyCaps | null>(null)   // локальная правка перед «Сохранить»
   const [capInput, setCapInput] = useState('3')
   const [msg, setMsg] = useState('')
   const [openHelp, setOpenHelp] = useState<number | null>(null)
@@ -126,7 +138,7 @@ function SettingsScreen() {
   const [checking, setChecking] = useState(false)
 
   const load = useCallback(async () => {
-    try { const r = await fetch('/api/settings'); if (r.ok) { const d = await r.json(); setS(d); setCapInput(String(d.accountsPerProxy ?? 3)) } } catch {}
+    try { const r = await fetch('/api/settings'); if (r.ok) { const d = await r.json(); setS(d); setCapInput(String(d.accountsPerProxy ?? 3)); if (d.dailyCaps) setCapsDraft(d.dailyCaps) } } catch {}
   }, [])
   // Последняя проверка = самый свежий lastChecked среди аккаунтов владельца.
   const loadLastCheck = useCallback(async () => {
@@ -160,7 +172,7 @@ function SettingsScreen() {
     setS((p) => ({ ...p, ...data }))   // оптимистично
     try {
       const r = await fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
-      if (r.ok) { setMsg('Сохранено'); const d = await r.json(); setS((p) => ({ ...p, ...d })) }
+      if (r.ok) { setMsg('Сохранено'); const d = await r.json(); setS((p) => ({ ...p, ...d })); if (d.dailyCaps) setCapsDraft(d.dailyCaps) }
       else setMsg('Не удалось сохранить')
     } catch { setMsg('Ошибка сети') }
   }
@@ -214,6 +226,39 @@ function SettingsScreen() {
             <option key={h} value={h}>{h === 24 ? 'раз в сутки' : h === 48 ? 'раз в 2 суток' : `каждые ${h} ч`}</option>
           ))}
         </select>
+      </div>
+
+      {/* Дневные лимиты действий (защита от бана) */}
+      <div className="card card-3d gloss p-5">
+        <div className="flex items-start gap-4">
+          <IconTile icon={ShieldAlert} color={TONE.pink} size={40} />
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-[15px]">Дневные лимиты действий</div>
+            <div className="text-[13px] text-subt mt-1 leading-relaxed">
+              Сколько действий в сутки на аккаунт. Директ идёт в основном тёплым подписчикам (низкий риск),
+              поэтому его потолок выше. Всё равно ужимается «прогревом»: у нового аккаунта лимиты стартуют
+              с 15% и за 14 дней выходят на 100% (защита от бана). <b>0</b> — действие выключено.
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-3">
+          {CAP_FIELDS.map((f) => {
+            const val = (capsDraft ?? s.dailyCaps)[f.key]
+            return (
+              <label key={f.key} className="flex flex-col gap-1.5" title={f.hint}>
+                <span className="text-[12px] font-medium text-ink/80">{f.label}<span className="text-subt/60 font-normal"> /сут</span></span>
+                <input type="number" min={0} max={f.max} value={val}
+                  onChange={(e) => setCapsDraft((prev) => ({ ...(prev ?? s.dailyCaps), [f.key]: Math.max(0, Math.min(f.max, Math.round(Number(e.target.value) || 0))) }))}
+                  className="field w-full py-2 text-[14px] text-center" />
+                <span className="text-[10.5px] text-subt/70 leading-tight">{f.hint}</span>
+              </label>
+            )
+          })}
+        </div>
+        <div className="mt-4 flex items-center gap-2">
+          <Button onClick={() => capsDraft && patch({ dailyCaps: capsDraft })}>Сохранить лимиты</Button>
+          <Button variant="ghost" onClick={() => setCapsDraft({ dm: 25, follow: 15, like: 40, comment: 10, story: 50 })}>Сбросить к умолчанию</Button>
+        </div>
       </div>
 
       <div className={rowCls}>

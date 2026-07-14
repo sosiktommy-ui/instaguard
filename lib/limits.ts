@@ -5,15 +5,30 @@
  */
 export type ActionKind = 'dm' | 'follow' | 'like' | 'comment' | 'story'
 
-// PLAN-IDEAL §1.8: приоритет ВЫЖИВАНИЕ ≫ скорость. Дефолты сознательно КОНСЕРВАТИВНЫ
-// (снижены с dm30/follow40/like80/comment20/story80). Лучше 8 директов в день и живой
-// аккаунт, чем 30 и бан. Ещё режутся прогревом по возрасту (warmupFactor) и суточным ритмом.
+// Дефолтные дневные лимиты. Приоритет — выживание аккаунта, но т.к. директы идут в основном
+// ТЁПЛЫМ подписчикам (низкий риск), директ поднят с 10 до 25. follow/like умереннее (масс-фолловинг
+// и лайки чужого контента рискованнее). Ещё режутся прогревом по возрасту (warmupFactor) и ритмом.
+// Пользователь может переопределить в Настройках (UserSettings.dailyCaps), кламп CAP_MAX ниже.
 export const DAILY_CAPS: Record<ActionKind, number> = {
-  dm: 10,       // DM в сутки (особенно неподписчикам — самый рискованный лимит)
-  follow: 12,   // подписок в сутки
-  like: 30,     // лайков в сутки
-  comment: 8,   // публичных комментариев в сутки
-  story: 40,    // просмотров/лайков сторис в сутки
+  dm: 25,       // директов в сутки (в основном тёплым подписчикам — низкий риск)
+  follow: 15,   // подписок в сутки (масс-фолловинг рискованнее — умереннее)
+  like: 40,     // лайков в сутки
+  comment: 10,  // публичных комментариев в сутки
+  story: 50,    // просмотров/лайков сторис в сутки
+}
+
+// Жёсткий потолок пользовательских лимитов (защита от «фат-фингера» = гарантированный бан).
+export const CAP_MAX: Record<ActionKind, number> = { dm: 60, follow: 40, like: 120, comment: 30, story: 150 }
+
+// Сливает пользовательский override с дефолтами и клампит в [0, CAP_MAX]. 0 = действие выключено.
+export function mergeCaps(override: unknown): Caps {
+  const o = (override ?? {}) as Record<string, unknown>
+  const out = { ...DAILY_CAPS }
+  for (const k of Object.keys(DAILY_CAPS) as ActionKind[]) {
+    const v = Number(o[k])
+    if (Number.isFinite(v) && v >= 0) out[k] = Math.min(CAP_MAX[k], Math.floor(v))
+  }
+  return out
 }
 
 // Максимум НОВЫХ целей (подписчиков/комментариев), обрабатываемых за одну проверку
@@ -82,14 +97,18 @@ export function warmupPct(createdAt?: Date | string | null): number {
   return Math.round(warmupFactor(createdAt) * 100)
 }
 
-/** Дневные лимиты, ужатые под текущий коэффициент прогрева (минимум 1 действие). */
-export function scaleCaps(factor: number): Caps {
+/**
+ * Дневные лимиты, ужатые под текущий коэффициент прогрева. База — дефолты ИЛИ пользовательский
+ * override (base). Действие с лимитом 0 остаётся 0 (выключено); ненулевые — минимум 1.
+ */
+export function scaleCaps(factor: number, base: Caps = DAILY_CAPS): Caps {
   const f = Math.min(1, Math.max(0, factor))
+  const scale = (v: number) => (v <= 0 ? 0 : Math.max(1, Math.ceil(v * f)))
   return {
-    dm:      Math.max(1, Math.ceil(DAILY_CAPS.dm * f)),
-    follow:  Math.max(1, Math.ceil(DAILY_CAPS.follow * f)),
-    like:    Math.max(1, Math.ceil(DAILY_CAPS.like * f)),
-    comment: Math.max(1, Math.ceil(DAILY_CAPS.comment * f)),
-    story:   Math.max(1, Math.ceil(DAILY_CAPS.story * f)),
+    dm:      scale(base.dm),
+    follow:  scale(base.follow),
+    like:    scale(base.like),
+    comment: scale(base.comment),
+    story:   scale(base.story),
   }
 }

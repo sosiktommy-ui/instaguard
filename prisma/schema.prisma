@@ -44,6 +44,10 @@ model UserSettings {
   actionEngine   String  @default("browser") // "browser" | "legacy" — движок входа/действий (browser = Playwright-воркер)
   browserHeadful Boolean @default(false)      // отладка: показывать окно браузера (только локально)
 
+  // Пользовательские дневные лимиты действий (override дефолтов lib/limits.ts DAILY_CAPS).
+  // JSON { dm, follow, like, comment, story }; null → дефолты. Ещё ужимаются прогревом по возрасту.
+  dailyCaps      Json?
+
   // Распределение действий основной/черновой (защита основного от бана).
   // true → «палевное» действие выполняет ЧЕРНОВОЙ (если есть живой), сохраняя основной.
   // Директ, ответ в комментах и «подписка в ответ» ВСЕГДА выполняет основной (иначе теряется смысл).

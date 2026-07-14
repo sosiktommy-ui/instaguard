@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getUserOrFirst } from '@/lib/auth'
+import { DAILY_CAPS, mergeCaps } from '@/lib/limits'
 
 const PARSING = ['api', 'drafts', 'drafts_then_api']
 const ENGINE = ['browser', 'legacy']
@@ -8,6 +9,7 @@ const ENGINE = ['browser', 'legacy']
 const DEFAULTS = {
   accountsPerProxy: 3, allowNoProxy: false, allowNoDrafts: false, likeByDraft: false, storyByDraft: false,
   parsingSource: 'api', actionEngine: 'browser', browserHeadful: false, pollIntervalHours: 3,
+  dailyCaps: DAILY_CAPS,
 }
 
 export async function GET() {
@@ -25,6 +27,7 @@ export async function GET() {
       actionEngine: s?.actionEngine ?? DEFAULTS.actionEngine,
       browserHeadful: s?.browserHeadful ?? DEFAULTS.browserHeadful,
       pollIntervalHours: s?.pollIntervalHours ?? DEFAULTS.pollIntervalHours,
+      dailyCaps: mergeCaps(s?.dailyCaps),   // всегда полный набор (override слит с дефолтами)
     })
   } catch {
     return NextResponse.json(DEFAULTS)
@@ -37,7 +40,7 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json().catch(() => ({}))
   const data: {
     accountsPerProxy?: number; allowNoProxy?: boolean; allowNoDrafts?: boolean; likeByDraft?: boolean; storyByDraft?: boolean
-    parsingSource?: string; actionEngine?: string; browserHeadful?: boolean; pollIntervalHours?: number
+    parsingSource?: string; actionEngine?: string; browserHeadful?: boolean; pollIntervalHours?: number; dailyCaps?: any
   } = {}
   if (body.accountsPerProxy !== undefined) data.accountsPerProxy = Math.max(1, Math.min(100, Math.round(Number(body.accountsPerProxy) || 3)))
   if (typeof body.allowNoProxy === 'boolean') data.allowNoProxy = body.allowNoProxy
@@ -48,6 +51,8 @@ export async function PATCH(req: NextRequest) {
   if (typeof body.actionEngine === 'string' && ENGINE.includes(body.actionEngine)) data.actionEngine = body.actionEngine
   if (typeof body.browserHeadful === 'boolean') data.browserHeadful = body.browserHeadful
   if (body.pollIntervalHours !== undefined) data.pollIntervalHours = Math.max(1, Math.min(168, Math.round(Number(body.pollIntervalHours) || 3)))
+  // Дневные лимиты: клампим в [0, CAP_MAX] через mergeCaps и сохраняем полный набор.
+  if (body.dailyCaps !== undefined) data.dailyCaps = mergeCaps(body.dailyCaps)
 
   const s = await prisma.userSettings.upsert({
     where: { userId: user.id },
@@ -58,6 +63,6 @@ export async function PATCH(req: NextRequest) {
     ok: true, accountsPerProxy: s.accountsPerProxy, allowNoProxy: s.allowNoProxy, allowNoDrafts: s.allowNoDrafts,
     likeByDraft: s.likeByDraft, storyByDraft: s.storyByDraft,
     parsingSource: s.parsingSource, actionEngine: s.actionEngine, browserHeadful: s.browserHeadful,
-    pollIntervalHours: s.pollIntervalHours,
+    pollIntervalHours: s.pollIntervalHours, dailyCaps: mergeCaps(s.dailyCaps),
   })
 }

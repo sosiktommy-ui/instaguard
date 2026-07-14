@@ -14,7 +14,7 @@ import { acquireBrowserLock, releaseBrowserLock } from '@/lib/browserLock'
 import { loadDelivery, deliveryUnhealthy, recordDelivery, DELIVERY_SLOWDOWN_FACTOR } from '@/lib/delivery'
 import { mediaPostUrl } from '@/lib/instagram/shortcode'
 import { Queue } from 'bullmq'
-import { loadCounters, consume, warmupFactor, scaleCaps, MAX_NEW_PER_POLL, type Counters, type ActionKind } from '@/lib/limits'
+import { loadCounters, consume, warmupFactor, scaleCaps, mergeCaps, MAX_NEW_PER_POLL, type Counters, type ActionKind } from '@/lib/limits'
 import { activityWindow } from '@/lib/activity'
 import { getCurrentUser } from '@/lib/auth'
 import { mergeStatsMap, logMeta } from '@/lib/stats'
@@ -317,10 +317,12 @@ export async function POST(req: NextRequest) {
   // черновым) остаются LEGACY no-op — черновые теперь только парсят, не действуют.
   const ownerIds = [...new Set(accounts.map((a) => a.userId))]
   const settingsRows = ownerIds.length
-    ? await prisma.userSettings.findMany({ where: { userId: { in: ownerIds } }, select: { userId: true, allowNoProxy: true, parsingSource: true, pollIntervalHours: true } })
+    ? await prisma.userSettings.findMany({ where: { userId: { in: ownerIds } }, select: { userId: true, allowNoProxy: true, parsingSource: true, pollIntervalHours: true, dailyCaps: true } })
     : []
   const allowNoProxy = new Map(settingsRows.map((r) => [r.userId, r.allowNoProxy]))
   const parsingSourceOf = new Map(settingsRows.map((r) => [r.userId, r.parsingSource ?? 'api']))
+  // Пользовательские дневные лимиты (override дефолтов, кламп в mergeCaps). Дефолт — DAILY_CAPS.
+  const capsOf = (userId: string) => mergeCaps(settingsRows.find((r) => r.userId === userId)?.dailyCaps)
   // §10 настраиваемый интервал авто-проверки (раз в N часов на аккаунт). Дефолт 3ч; кламп 1..168.
   const intervalMsOf = (userId: string) =>
     Math.max(1, Math.min(168, settingsRows.find((r) => r.userId === userId)?.pollIntervalHours ?? 3)) * 60 * 60 * 1000
@@ -464,7 +466,7 @@ export async function POST(req: NextRequest) {
 
     // Прогрев: дневные лимиты ужимаются по возрасту основного аккаунта (свежий не срывается на полную).
     const warm = warmupFactor(account.createdAt)
-    const caps = scaleCaps(warm)
+    const caps = scaleCaps(warm, capsOf(account.userId))
     // §4.6 автоснижение: если директы сегодня систематически НЕ доходят (лички закрыты массово /
     // ограничение) — резко режем дневной лимит DM, чтобы не долбить аккаунт впустую (сам ban-сигнал).
     // Сбрасывается на следующий день (счётчик дневной). Комменты/лайки/сторис не трогаем.
