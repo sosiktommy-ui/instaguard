@@ -841,6 +841,13 @@ export async function POST(req: NextRequest) {
         ])
       }
 
+      // Диагностика (ручная проверка): комменты прочитаны из уведомлений, но обрабатывать их
+      // НЕКОМУ — на аккаунте нет активной кампании с событием «Комментарий». Частая причина жалобы
+      // «комментарий не замечен»: self-events его прочитал (в сводке «комменты N»), но кампании нет.
+      if (isManual && selfComments.length > 0 && !commentTriggers.length) {
+        await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: `Прочитано ${selfComments.length} комментариев, но на этом аккаунте НЕТ активной кампании с событием «Комментарий» — поэтому они не обрабатываются. Создайте кампанию «Комментарий», чтобы бот реагировал.` } }).catch(() => null)
+      }
+
       // ── Поток комментариев (отдельный кулдаун — реже чем подписчики) ────
       const snapCommentsMeta = account.snapshots.find((sn) => sn.type === 'COMMENTS')
       const commentElapsed = snapCommentsMeta
@@ -863,9 +870,9 @@ export async function POST(req: NextRequest) {
 
         if (isManual) {
           const cmsg = !hadBaseline
-            ? `Первый проход (базлайн): записано ${comments.length} комментариев, действий 0 — новые ловятся со следующей проверки.`
+            ? `Первый проход (базлайн): записано ${comments.length} комментариев, действий 0 — новые ловятся со следующей проверки. Чтобы сработать на уже существующих — нажмите «Сбросить».`
             : fresh.length === 0
-              ? `Новых комментариев нет (в уведомлениях ${comments.length}, все уже обработаны).`
+              ? `Новых комментариев нет (в уведомлениях ${comments.length}, все уже обработаны). Если ждали реакцию на существующий комментарий — нажмите «Сбросить».`
               : `Новых комментариев: ${fresh.length}, обрабатываю ${toProcess.length}.`
           await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: cmsg } }).catch(() => null)
         }
@@ -882,6 +889,7 @@ export async function POST(req: NextRequest) {
         for (const c of toProcess) {
           if (sessionDead) break   // аккаунт остановлен (бан/челлендж) — не обрабатываем дальше в этом цикле
           let firedForComment = false
+          let matchedAny = false   // приняла ли текст коммента хоть одна кампания (для диагностики)
           try {
           for (const trigger of commentTriggers) {
             const actions = (trigger.actions ?? []) as any[]
@@ -889,6 +897,7 @@ export async function POST(req: NextRequest) {
             // «Сигнал» — общее условие на весь триггер (хранится в conditions)
             const match = (trigger.conditions ?? {}) as any
             if (!matchPhrase(c.text, match)) continue
+            matchedAny = true
 
             const dm = actions.find((a: any) => a.type === 'SEND_MESSAGE' && isOn(a))
             const reply = actions.find((a: any) => a.type === 'REPLY_COMMENT' && isOn(a))
@@ -1068,6 +1077,7 @@ export async function POST(req: NextRequest) {
               if (firedOrImpossible) { s.commentActions++; firedForComment = true }
             }
           }
+          if (isManual && !matchedAny) await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: `Коммент @${c.username}: «${(c.text || '').slice(0, 60)}» не подошёл под условие «Сигнал» ни одной кампании «Комментарий» — кампания реагирует только на заданные фразы (настройка «На что реагировать»).` } }).catch(() => null)
           } catch (e: any) {
             const m = String(e?.message ?? e)
             failedComments.add(String(c.pk))   // не теряем цель — добьётся в след. цикле
