@@ -529,7 +529,11 @@ function MessageBlock({ d, set, fileRef, onPickImage }: {
       <div>
         <div className="flex items-center gap-1.5 text-[11px] font-medium text-subt mb-1.5"><Send className="w-3 h-3" /> Текст сообщения</div>
         <textarea value={d.message} onChange={(e) => set('message', e.target.value)}
-          className="field h-20 resize-none text-[13px] leading-relaxed" placeholder="Используйте {{username}}" />
+          className="field h-20 resize-none text-[13px] leading-relaxed" placeholder="Используйте {{username}} и варианты {Привет|Хай|Хеллоу}" />
+        <div className="text-[10.5px] text-subt/80 mt-1 leading-snug">
+          💡 Чтобы у каждого был <b>разный</b> текст (не спам-дубли): пиши варианты в фигурных скобках через <code className="font-mono">|</code> — напр.
+          <span className="font-mono"> {'{Привет|Хай|Хеллоу}'}, {'{{username}}'}! {'{Спасибо за подписку|Рад видеть}'}</span> — бот подставит случайную комбинацию каждому.
+        </div>
       </div>
 
       {/* 3. Кастомный текст — в самом низу */}
