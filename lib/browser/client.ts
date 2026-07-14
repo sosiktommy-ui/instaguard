@@ -10,16 +10,20 @@ const BROWSER_WORKER_SECRET = process.env.BROWSER_WORKER_SECRET ?? ''
 // отдаёт СКРИН — на 120с клиент рвал fetch до diag (аудит-баг #1). Бюджет воркера подрезан,
 // но запас нужен на медленный прокси + первый scheme-детект.
 const TIMEOUT_MS = Number(process.env.BROWSER_WORKER_TIMEOUT_MS) || 180_000
+// Визит (/session/run) — прогрев ленты + несколько действий на цель + человеческие паузы:
+// на медленном резидентном прокси легко выходит за 180с (директ «не доставлен» по таймауту).
+// Даём ему отдельный, БОЛЬШИЙ бюджет. Воркер сам ограничивает конкуренцию, так что это безопасно.
+const VISIT_TIMEOUT_MS = Number(process.env.BROWSER_VISIT_TIMEOUT_MS) || 300_000
 
 /** Задеплоен ли браузерный воркер (задан URL). Если нет — движок остаётся legacy. */
 export function browserConfigured(): boolean {
   return Boolean(BROWSER_WORKER_URL)
 }
 
-async function browserFetch<T = any>(path: string, body: object): Promise<T> {
+async function browserFetch<T = any>(path: string, body: object, timeoutMs: number = TIMEOUT_MS): Promise<T> {
   if (!BROWSER_WORKER_URL) throw new Error('Браузерный воркер не настроен (нет BROWSER_WORKER_URL)')
   const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
   let res: Response
   try {
     res = await fetch(`${BROWSER_WORKER_URL}${path}`, {
@@ -29,7 +33,7 @@ async function browserFetch<T = any>(path: string, body: object): Promise<T> {
       signal: ctrl.signal,
     })
   } catch (e: any) {
-    if (e?.name === 'AbortError') throw new Error(`Таймаут ${Math.round(TIMEOUT_MS / 1000)}с: браузерный воркер не ответил (${path})`)
+    if (e?.name === 'AbortError') throw new Error(`Таймаут ${Math.round(timeoutMs / 1000)}с: браузерный воркер не ответил (${path})`)
     throw e
   } finally {
     clearTimeout(timer)
@@ -201,7 +205,7 @@ export interface VisitTask { type: 'dm' | 'follow' | 'like' | 'story' | 'comment
 // impossible — действия, НЕвыполнимые не по вине бота (0 постов для лайка / 0 активных сторис): §13.10.
 export interface VisitResult { done: Record<string, number>; impossible?: string[]; closed?: boolean; errors?: string[]; brk?: 'CHALLENGE' | 'PAUSED'; browserState?: object }
 export function browserRunVisit(ctx: Ctx, tasks: VisitTask[]) {
-  return browserFetch<VisitResult>('/session/run', { ...ctx, tasks })
+  return browserFetch<VisitResult>('/session/run', { ...ctx, tasks }, VISIT_TIMEOUT_MS)
 }
 
 // Стори-события основного (ответы на сторис + упоминания) — читает директ своим браузером.
