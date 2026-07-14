@@ -18,6 +18,7 @@ import { loadCounters, consume, warmupFactor, scaleCaps, mergeCaps, MAX_NEW_PER_
 import { activityWindow } from '@/lib/activity'
 import { getCurrentUser } from '@/lib/auth'
 import { mergeStatsMap, logMeta } from '@/lib/stats'
+import { spin, renderMessage } from '@/lib/spin'
 import { matchPhrase } from '@/lib/match'
 import { selectTargets } from '@/lib/targets'
 
@@ -583,7 +584,8 @@ export async function POST(req: NextRequest) {
           }
           if (!willDM && !willFollow && !willLike && !willStory) { s.limited = (s.limited ?? 0) + 1; continue }
 
-          let text = willDM ? template.replace(/\{\{username\}\}/gi, target.username) : ''
+          // Анти-«одинаковое»: случайный шаблон из набора + spintax {a|b} → у каждого свой текст
+          let text = willDM ? renderMessage(msgAction?.templates ?? template, target.username) : ''
           if (willDM && link?.enabled && link.url) {
             const lt = String(link.text ?? '').replace(/\{\{username\}\}/gi, target.username)
             text += `\n\n${lt ? lt + ': ' : ''}${link.url}`
@@ -1052,7 +1054,7 @@ export async function POST(req: NextRequest) {
                   errors.push('ответ в комментах: не удалось определить пост для ответа (в уведомлении нет media_id)')
                 } else if (use('comment')) {
                   incFired.comment = (incFired.comment || 0) + 1
-                  const pickBase = variants[Math.floor(Math.random() * variants.length)].replace(/\{\{username\}\}/gi, c.username)
+                  const pickBase = spin(variants[Math.floor(Math.random() * variants.length)].replace(/\{\{username\}\}/gi, c.username))
                   // Адресуем ответ автору коммента через @упоминание (не «общий» коммент к посту).
                   const pick = pickBase.includes('@' + c.username) ? pickBase : `@${c.username} ${pickBase}`
                   try {
@@ -1084,7 +1086,7 @@ export async function POST(req: NextRequest) {
                 markDmed(c.username)
                 incFired.dm = (incFired.dm || 0) + 1
                 await randDelay(3, 8)
-                let text = String(dm.templates[0]).replace(/\{\{username\}\}/gi, c.username)
+                let text = renderMessage(dm.templates, c.username)
                 if (dm.link?.enabled && dm.link.url) {
                   const lt = String(dm.link.text ?? '').replace(/\{\{username\}\}/gi, c.username)
                   text += `\n\n${lt ? lt + ': ' : ''}${dm.link.url}`

@@ -55,6 +55,9 @@ export async function runVisit(context, { tasks = [], warmup = true } = {}) {
       if (task.type === 'dm') {
         // Директ последним. Идёт НЕЗАВИСИМО от исхода прошлых действий (если не отсечён гейтом
         // взаимной подписки на стороне poll). Закрытая личка → fallback follow+like (мягкий контакт).
+        // Директ — самое рискованное действие: перед ним ДОПОЛНИТЕЛЬНАЯ человеческая пауза
+        // (человек не пишет в директ через 2 секунды после подписки/лайка) — анти-бан.
+        await jitter(8000, 22000)
         const r = await sendDM(context, { toUsername: task.target, text: task.text, image: task.image })
         if (r.ok) mark('dm')
         else if (r.closed) {
@@ -89,7 +92,11 @@ export async function runVisit(context, { tasks = [], warmup = true } = {}) {
       errors.push(`${task.type}: ${m}`)
     }
     await closePages(context)
-    if (!brk) await jitter(1500, 5000) // человеческая пауза между задачами визита
+    // Человеческая пауза между действиями на ОДНОЙ цели. 1.5–5с было слишком быстро (живой
+    // человек не жмёт follow→like→comment за пару секунд) → всплеск/action-block. Теперь 8–25с
+    // (+ перед каждым действием ещё идёт органический прогрев ленты в openProfile → суммарно
+    // ритм похож на человека). На всплеск не влияет — число целей за цикл ограничено «дрипом».
+    if (!brk) await jitter(8000, 25000)
   }
 
   return { done, impossible, closed, errors, brk, storageState: await safeStorageState(context) }
