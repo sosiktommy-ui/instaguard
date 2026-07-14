@@ -373,7 +373,20 @@ export async function POST(req: NextRequest) {
             ;(account as any).followers = n            // in-memory → поздний блок не тянет повторно
             ;(account as any).followersHistory = trimmed
           }
-        } catch { /* метрика подписчиков не критична */ }
+        } catch (e: any) {
+          // Метрика подписчиков НЕ критична: детект новых подписчиков идёт через self-events
+          // (свои уведомления аккаунта), а не через HikerAPI. Но молчаливый сбой = «счётчик застыл
+          // без причины» → на РУЧНОЙ проверке показываем настоящую причину (частый случай — пустой
+          // баланс HikerAPI, HTTP 402/InsufficientFunds). Авто-циклы молчат (без спама).
+          if (isManual) {
+            const raw = String(e?.message ?? e)
+            const noFunds = /InsufficientFunds|Top up|\b402\b/i.test(raw)
+            const msg = noFunds
+              ? '💳 Счётчик подписчиков заморожен: на HikerAPI закончился баланс (пополнить: hikerapi.com/billing). На поиск новых подписчиков и на действия это НЕ влияет — детект идёт через уведомления самого аккаунта.'
+              : `Счётчик подписчиков не обновлён (HikerAPI): ${raw.slice(0, 140)}. На детект новых подписчиков и действия НЕ влияет.`
+            await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: msg } }).catch(() => null)
+          }
+        }
       }
     }
 
