@@ -1124,14 +1124,18 @@ export async function POST(req: NextRequest) {
       const data: any = { errorCount: { increment: 1 }, limits: counters as any, lastChecked: new Date() }
       if (brk) data.status = brk
       else if (nextErrors >= ERROR_PAUSE_THRESHOLD) data.status = 'PAUSED'
-      await prisma.instagramAccount.update({ where: { id: account.id }, data })
+      // ⚠️ КРИТИЧНО: и update, и log ОБЯЗАТЕЛЬНО с .catch — иначе сбой БД в обработчике ошибки
+      // одного аккаунта пробросится во внешний try и оборвёт проверку ВСЕХ следующих аккаунтов
+      // («следующий аккаунт пропустился и не проверился»). Один плохой аккаунт не роняет остальные.
+      await prisma.instagramAccount.update({ where: { id: account.id }, data }).catch(() => null)
       await prisma.log.create({
         data: { accountId: account.id, level: 'ERROR', message: `Ошибка проверки: ${e.message}${data.status ? ` → аккаунт остановлен (${data.status})` : ''}` },
-      })
+      }).catch(() => null)
       summary.push(s)
     } finally {
       // §4.8 — освобождаем per-account лок браузерной сессии (если брали), чтобы dm-воркер мог работать.
-      if (browserLockHeld) await releaseBrowserLock(prisma, account.id)
+      // .catch — release тоже не должен пробросить исключение в внешний try (иначе оборвёт цикл).
+      if (browserLockHeld) await releaseBrowserLock(prisma, account.id).catch(() => {})
     }
   }
 
