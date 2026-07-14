@@ -576,6 +576,17 @@ export async function POST(req: NextRequest) {
           // успешном DM (тогда зарезервированное действие просто не выполнится).
           const fallbackFollow = willDM && !willFollow && use('follow')
           const fallbackLike   = willDM && !willLike && use('like')
+          // Прозрачность на ручной проверке: почему настроенное действие НЕ выполнилось — почти
+          // всегда это ДНЕВНОЙ ЛИМИТ (у молодого аккаунта прогрев ужимает подписки до 2–7/сутки),
+          // а не баг. Иначе «подписался только директ» выглядит как поломка (жалоба пользователя).
+          if (isManual) {
+            const capped: string[] = []
+            if (doFollowT && !willFollow && !fallbackFollow) capped.push('подписка')
+            if (doLikeT && !willLike && !fallbackLike) capped.push('лайк')
+            if (Boolean(storiesAct) && !willStory) capped.push('сторис')
+            if (dmAllowed && !willDM) capped.push('директ')
+            if (capped.length) await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: `@${target.username}: не выполнено из-за дневного лимита (${capped.join(', ')}) — сбросится завтра; у молодого аккаунта лимиты ниже (прогрев).` } }).catch(() => null)
+          }
           if (!willDM && !willFollow && !willLike && !willStory) { s.limited = (s.limited ?? 0) + 1; continue }
 
           let text = willDM ? template.replace(/\{\{username\}\}/gi, target.username) : ''
