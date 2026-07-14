@@ -519,11 +519,16 @@ export async function POST(req: NextRequest) {
     // Общий обработчик «целей» (подписчики/лайкнувшие/ответившие на сторис):
     // DM ставит основной (в очередь), лайк/подписка/сторис — черновой (в job).
     // withGate=true → перед DM проверяем подписку; не проходит → DM пропускаем.
+    // Возвращает МНОЖЕСТВО pk целей, по которым действие ТРАНЗИЕНТНО не удалось (таймаут визита/
+    // сеть/воркер). Их снапшот НЕ пометит «известными» → они добьются в следующем цикле (§1.3/§2.3:
+    // «не пропускать ни один аккаунт»). Сама функция НЕ бросает — сбой одной цели не роняет ни поток,
+    // ни весь цикл (иначе таймаут в потоке подписчиков убивал детект комментариев/сторис).
     const handleTargets = async (
       targets: { pk: string; username: string }[],
       triggersForStream: typeof triggers,
       withGate: boolean,
-    ) => {
+    ): Promise<Set<string>> => {
+      const failedPks = new Set<string>()
       for (const trigger of triggersForStream) {
         const actions = (trigger.actions ?? []) as any[]
         const isOn = (a: any) => a && a.enabled !== false
@@ -590,21 +595,29 @@ export async function POST(req: NextRequest) {
           // в отложенную очередь: пользователь жмёт кнопку и ждёт результат ЗДЕСЬ, и это не
           // зависит от фонового dm-воркера (если он в проде не крутится — очередь молча копится,
           // «0 срабатываний»). Авто-поллинг (много аккаунтов) по-прежнему через очередь с пейсингом.
-          if (dmQueue && !isManual) {
-            await dmQueue.add('send', job, {
-              // BullMQ запрещает ':' в custom jobId → разделитель '_' (id — cuid/число, без '_').
-              jobId: `dm_${account.id}_${trigger.id}_${target.pk}`,
-              delay: Math.round(cursor), attempts: 1,
-              removeOnComplete: true, removeOnFail: 100,
-            })
-            cursor += nextGap()
-          } else {
-            await runFollowerActionsInline(job)
-            await randDelay(isManual ? 4 : 40, isManual ? 12 : 90)
+          try {
+            if (dmQueue && !isManual) {
+              await dmQueue.add('send', job, {
+                // BullMQ запрещает ':' в custom jobId → разделитель '_' (id — cuid/число, без '_').
+                jobId: `dm_${account.id}_${trigger.id}_${target.pk}`,
+                delay: Math.round(cursor), attempts: 1,
+                removeOnComplete: true, removeOnFail: 100,
+              })
+              cursor += nextGap()
+            } else {
+              await runFollowerActionsInline(job)
+              await randDelay(isManual ? 4 : 40, isManual ? 12 : 90)
+            }
+            s.dmsQueued++
+          } catch (e: any) {
+            // Транзиентный сбой (таймаут визита/сеть/воркер) — НЕ теряем цель и НЕ роняем поток/цикл:
+            // помечаем на ретрай (снапшот не зафиксирует её «известной») и идём дальше.
+            failedPks.add(target.pk)
+            await prisma.log.create({ data: { accountId: account.id, level: 'ERROR', message: `Действие для @${target.username} не выполнено — повторим автоматически.` } }).catch(() => null)
           }
-          s.dmsQueued++
         }
       }
+      return failedPks
     }
 
     // Реальное число подписчиков — для спарклайна нужна лишь ОДНА точка в день.
@@ -733,23 +746,26 @@ export async function POST(req: NextRequest) {
               ? `Первый проход (базлайн): записано ${followers.length} подписок, действий 0 — новые ловятся со следующей проверки. Чтобы сработать на текущих — нажмите «Сбросить».`
               : fresh.length === 0
                 ? `Новых подписок нет (в уведомлениях ${followers.length}, все уже обработаны).`
-                : `Новых подписок: ${fresh.length}, выполняю действия по ${process.length}.`
+                : `Новых подписок: ${fresh.length}, обрабатываю ${process.length}.`
             await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: msg } }).catch(() => null)
           }
-
-          await prisma.$transaction([
-            prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'FOLLOWERS' } }),
-            prisma.snapshot.create({ data: { accountId: account.id, type: 'FOLLOWERS', data: capPks(knownPks, SNAPSHOT_MAX) } }),
-          ])
 
           s.totalFollowers = followers.length
           s.newFollowers = fresh.length
 
           // Подписчик уже подписан на нас — гейт не нужен
-          await handleTargets(
+          const failed = await handleTargets(
             process.map((f) => ({ pk: String(f.pk), username: f.username })),
             followerTriggers, false,
           )
+          // §2.3 — транзиентно-провалившиеся цели НЕ фиксируем «известными»: добьются в след. цикле.
+          failed.forEach((pk) => knownPks.delete(pk))
+
+          // Снапшот сохраняем ПОСЛЕ действий (без провалившихся) — иначе таймаут визита терял цель.
+          await prisma.$transaction([
+            prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'FOLLOWERS' } }),
+            prisma.snapshot.create({ data: { accountId: account.id, type: 'FOLLOWERS', data: capPks(knownPks, SNAPSHOT_MAX) } }),
+          ])
         }
       }
 
@@ -763,17 +779,18 @@ export async function POST(req: NextRequest) {
           const knownL = extractKnownPks(snapLikesMeta?.data)
           const { fresh, process } = selectTargets(likers, knownL, hadBaseline, (l) => String(l.pk), newCap)
 
+          s.newLikers = fresh.length
+          // Гейт: лайкнувший может быть не подписан → DM пропускается (лайк/подписка/сторис остаются)
+          const failed = await handleTargets(
+            process.map((l) => ({ pk: String(l.pk), username: l.username })),
+            likeTriggers, true,
+          )
+          failed.forEach((pk) => knownL.delete(pk))   // §2.3 — провалившиеся добьются в след. цикле
+
           await prisma.$transaction([
             prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'LIKES' } }),
             prisma.snapshot.create({ data: { accountId: account.id, type: 'LIKES', data: capPks(knownL, SNAPSHOT_MAX) } }),
           ])
-
-          s.newLikers = fresh.length
-          // Гейт: лайкнувший может быть не подписан → DM пропускается (лайк/подписка/сторис остаются)
-          await handleTargets(
-            process.map((l) => ({ pk: String(l.pk), username: l.username })),
-            likeTriggers, true,
-          )
         }
       }
 
@@ -802,16 +819,19 @@ export async function POST(req: NextRequest) {
         const knownS = extractKnownPks(snapStoryMeta?.data)
         const { fresh, process } = selectTargets(events, knownS, hadBaseline, (e) => (e.pk ? String(e.pk) : ''), newCap)
 
+        s.newStoryEvents = fresh.length
+        const failed = await handleTargets(
+          process.map((e) => ({ pk: String(e.user_pk), username: e.username })),
+          storyTriggers, true,
+        )
+        // §2.3 — снапшот стори ключуется по pk СОБЫТИЯ, а цели — по user_pk; провалившиеся события
+        // (их user_pk в failed) убираем из «известных» по pk события, чтобы добить в след. цикле.
+        process.forEach((e) => { if (e.pk && failed.has(String(e.user_pk))) knownS.delete(String(e.pk)) })
+
         await prisma.$transaction([
           prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'STORY' } }),
           prisma.snapshot.create({ data: { accountId: account.id, type: 'STORY', data: capPks(knownS, SNAPSHOT_MAX) } }),
         ])
-
-        s.newStoryEvents = fresh.length
-        await handleTargets(
-          process.map((e) => ({ pk: String(e.user_pk), username: e.username })),
-          storyTriggers, true,
-        )
       }
 
       // ── Поток комментариев (отдельный кулдаун — реже чем подписчики) ────
@@ -832,11 +852,16 @@ export async function POST(req: NextRequest) {
         // Первая проверка (нет снапшота) — только фиксируем базу, НЕ реагируем на старые комменты,
         // иначе бот разом ответит на все существующие. Реагируем только на появившиеся после базы.
         const { fresh, process: toProcess } = selectTargets(comments, knownC, hadBaseline, (c) => String(c.pk), newCap)
+        const failedComments = new Set<string>()   // §2.3 — транзиентно провалившиеся комменты (ретрай)
 
-        await prisma.$transaction([
-          prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'COMMENTS' } }),
-          prisma.snapshot.create({ data: { accountId: account.id, type: 'COMMENTS', data: capPks(knownC, SNAPSHOT_MAX) } }),
-        ])
+        if (isManual) {
+          const cmsg = !hadBaseline
+            ? `Первый проход (базлайн): записано ${comments.length} комментариев, действий 0 — новые ловятся со следующей проверки.`
+            : fresh.length === 0
+              ? `Новых комментариев нет (в уведомлениях ${comments.length}, все уже обработаны).`
+              : `Новых комментариев: ${fresh.length}, обрабатываю ${toProcess.length}.`
+          await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: cmsg } }).catch(() => null)
+        }
 
         s.totalComments = comments.length
         s.newComments = fresh.length
@@ -848,7 +873,9 @@ export async function POST(req: NextRequest) {
         let cmtDmTried = 0, cmtDmOk = 0   // §4.6 — исход доставки директов коммент-потока (запишем разом под локом)
 
         for (const c of toProcess) {
+          if (sessionDead) break   // аккаунт остановлен (бан/челлендж) — не обрабатываем дальше в этом цикле
           let firedForComment = false
+          try {
           for (const trigger of commentTriggers) {
             const actions = (trigger.actions ?? []) as any[]
             const isOn = (a: any) => a && a.enabled !== false
@@ -1029,6 +1056,20 @@ export async function POST(req: NextRequest) {
               if (firedOrImpossible) { s.commentActions++; firedForComment = true }
             }
           }
+          } catch (e: any) {
+            const m = String(e?.message ?? e)
+            failedComments.add(String(c.pk))   // не теряем цель — добьётся в след. цикле
+            const st = statusFromError(m)        // CHALLENGE/PAUSED = бан/челлендж/лимит Instagram
+            if (st) {
+              // Реальное ограничение/бан аккаунта — останавливаем аккаунт и прекращаем цикл (не долбим).
+              await prisma.instagramAccount.update({ where: { id: account.id }, data: { status: st as any } }).catch(() => null)
+              sessionDead = true
+              await prisma.log.create({ data: { accountId: account.id, level: 'ERROR', message: st === 'CHALLENGE' ? 'Аккаунт требует подтверждения входа — войдите заново.' : 'Instagram временно ограничил аккаунт — бот сделал паузу, чтобы не навредить.' } }).catch(() => null)
+            } else {
+              // Транзиентный сбой (таймаут/сеть) — НЕ роняем цикл: прогрев/сохранение сессии выполнятся.
+              await prisma.log.create({ data: { accountId: account.id, level: 'ERROR', message: `Ответ на комментарий @${c.username} не выполнен — повторим автоматически.` } }).catch(() => null)
+            }
+          }
           // [A2] Пауза МЕЖДУ комментами (как inline-путь потока подписчиков, randDelay 40–90с):
           // не выпускать серию директов/подписок/лайков залпом на весь батч авторов за один
           // поллинг — это топ-сигнал бана. Пауза только если по комменту реально что-то сработало.
@@ -1039,6 +1080,12 @@ export async function POST(req: NextRequest) {
         liveState = cState
         // §4.6 — исход доставки директов коммент-потока в дневной счётчик (под browserLock — гонки нет).
         if (cmtDmTried) await recordDelivery(prisma, account.id, cmtDmTried, cmtDmOk, Date.now())
+        // §2.3 — снапшот комментов сохраняем ПОСЛЕ обработки (без провалившихся) — не теряем цели.
+        failedComments.forEach((pk) => knownC.delete(pk))
+        await prisma.$transaction([
+          prisma.snapshot.deleteMany({ where: { accountId: account.id, type: 'COMMENTS' } }),
+          prisma.snapshot.create({ data: { accountId: account.id, type: 'COMMENTS', data: capPks(knownC, SNAPSHOT_MAX) } }),
+        ])
         }
       }
 
