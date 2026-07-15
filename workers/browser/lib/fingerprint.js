@@ -74,5 +74,9 @@ export function fingerprint(username, override = {}) {
     glRenderer: p.glRenderer,
     hardwareConcurrency: hw.cores,
     deviceMemory: hw.mem,
+    // Стабильные на аккаунт СИДы для шума Canvas/Audio-отпечатка (как Dolphin/GoLogin): у разных
+    // аккаунтов отпечаток РАЗНЫЙ, но у одного — ОДИН И ТОТ ЖЕ каждый раз (смена = свой сигнал).
+    canvasSeed: (h ^ 0x9e3779b9) >>> 0,
+    audioSeed: (Math.imul(h, 2246822519) ^ 0x85ebca6b) >>> 0,
   }
 }

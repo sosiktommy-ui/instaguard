@@ -127,6 +127,48 @@ export async function newAccountContext(opts) {
       patch(window.WebGLRenderingContext && window.WebGLRenderingContext.prototype)
       patch(window.WebGL2RenderingContext && window.WebGL2RenderingContext.prototype)
     } catch {}
+    // Canvas fingerprint: детерминированный на аккаунт шум (как Dolphin/GoLogin). У разных аккаунтов
+    // canvas-отпечаток РАЗНЫЙ, у одного — стабильный (иначе смена отпечатка = свой сигнал). Шум ±1
+    // на части пикселей — незаметно глазу, но меняет хеш. Оригинальный canvas НЕ мутируем (для
+    // toDataURL рисуем в теневой canvas). Всё в try/catch — не ломает рендер страницы.
+    try {
+      const cseed = (fp.canvasSeed >>> 0) || 0x9e3779b9
+      const shift = (i) => (((Math.imul(i + 1, 2654435761) ^ cseed) >>> 0) % 3) - 1  // -1|0|+1, детерминир.
+      const applyNoise = (data) => { for (let i = 0; i < data.length; i += 4) { if (((i >> 2) % 11) === 0) { const s = shift(i); data[i] = Math.max(0, Math.min(255, data[i] + s)); data[i + 1] = Math.max(0, Math.min(255, data[i + 1] - s)) } } }
+      const C2D = window.CanvasRenderingContext2D && window.CanvasRenderingContext2D.prototype
+      const origGID = C2D && C2D.getImageData
+      if (C2D && origGID) {
+        C2D.getImageData = function (sx, sy, sw, sh) { const img = origGID.call(this, sx, sy, sw, sh); try { applyNoise(img.data) } catch {} return img }
+      }
+      const HCE = window.HTMLCanvasElement && window.HTMLCanvasElement.prototype
+      if (HCE && origGID) {
+        const origToDataURL = HCE.toDataURL
+        HCE.toDataURL = function (...a) {
+          try {
+            if (this.width && this.height && this.width * this.height < 4e6) {
+              const sh = document.createElement('canvas'); sh.width = this.width; sh.height = this.height
+              const sctx = sh.getContext('2d'); sctx.drawImage(this, 0, 0)
+              const img = origGID.call(sctx, 0, 0, this.width, this.height); applyNoise(img.data); sctx.putImageData(img, 0, 0)
+              return origToDataURL.apply(sh, a)
+            }
+          } catch {}
+          return origToDataURL.apply(this, a)
+        }
+      }
+    } catch {}
+    // AudioContext fingerprint: лёгкий детерминированный шум в аудио-буфере (тоже стабильный на аккаунт).
+    try {
+      const aseed = (fp.audioSeed >>> 0) || 0x85ebca6b
+      const AB = window.AudioBuffer && window.AudioBuffer.prototype
+      if (AB && AB.getChannelData) {
+        const origGCD = AB.getChannelData
+        AB.getChannelData = function (ch) {
+          const arr = origGCD.call(this, ch)
+          try { for (let i = 0; i < arr.length; i += 1000) arr[i] = arr[i] + ((((Math.imul(i + 1, aseed) >>> 0) % 1000) - 500) * 1e-8) } catch {}
+          return arr
+        }
+      }
+    } catch {}
     // WebRTC IP-leak guard (§2.9 [D11] / §10.2): launch-флаг disable_non_proxied_udp не всегда
     // держит — self-test поймал утечку реального датацентр-egress (Railway) мимо резидентного
     // HTTP-прокси = сильнейший сигнал прокси-детекта. HTTP/SOCKS-прокси не носят UDP, поэтому

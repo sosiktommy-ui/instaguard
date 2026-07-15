@@ -103,6 +103,7 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
   const [range, setRange] = useState<Range>('30d')
   const [details, setDetails] = useState(false)   // «Подробно» — показывать диагностические записи (шум пустых циклов)
   const [live, setLive] = useState(false)   // «● Live» — авто-обновление журнала каждые 4с
+  const [beat, setBeat] = useState(0)        // «пульс» — увеличивается на каждом успешном опросе (видно, что Live жив)
   // Кампания → {тип триггера, настроенные действия}: чтобы даже у старых логов
   // (без «· тип:»/«· сделано:») слева показывать ТИП, а справа — реальные ДЕЙСТВИЯ.
   const [campMeta, setCampMeta] = useState<Record<string, { type?: string; actions: string[] }>>({})
@@ -125,7 +126,7 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
     const tick = () => {
       fetch(`/api/logs?accountId=${encodeURIComponent(accountId)}&limit=200&t=${Date.now()}`, { cache: 'no-store' })
         .then((r) => (r.ok ? r.json() : null))
-        .then((d) => { if (Array.isArray(d)) setLogs(d) })
+        .then((d) => { if (Array.isArray(d)) setLogs(d); setBeat((b) => b + 1) })  // пульс: видно, что опрос идёт
         .catch(() => {})
     }
     tick()                       // сразу при включении Live — мгновенный отклик, не ждать 4с
@@ -215,11 +216,11 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
                 details ? 'bg-brand/12 text-brand' : 'text-subt hover:text-ink hover:bg-black/[0.04]')}>
               Подробно
             </button>
-            <button onClick={() => setLive((v) => !v)} title="Live — авто-обновление каждые 4с (наблюдать за ботом в реальном времени)"
+            <button onClick={() => setLive((v) => !v)} title="Live — авто-обновление каждые 4с (наблюдать за ботом в реальном времени). Чтобы увидеть действия сейчас — нажмите «Проверить сейчас» в Настройках, не закрывая журнал."
               className={cn('flex items-center gap-1.5 h-9 px-2.5 rounded-xl text-[12px] font-semibold transition-colors',
                 live ? 'bg-red-500/12 text-red-500' : 'text-subt hover:text-ink hover:bg-black/[0.04]')}>
-              <span className={cn('w-1.5 h-1.5 rounded-full', live ? 'bg-red-500 animate-pulse' : 'bg-subt/50')} />
-              Live
+              <span key={beat} className={cn('w-1.5 h-1.5 rounded-full', live ? 'bg-red-500 animate-ping' : 'bg-subt/50')} />
+              {live ? 'Live ●' : 'Live'}
             </button>
             <button onClick={load} className="w-9 h-9 flex items-center justify-center rounded-xl text-subt hover:text-ink hover:bg-black/[0.04] transition-colors" title="Обновить">
               <RefreshCw className={cn('w-4 h-4', logs === null && 'animate-spin')} />
