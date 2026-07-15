@@ -45,9 +45,12 @@ function base32Decode(s) {
   for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2))
   return Buffer.from(bytes)
 }
-function totpCode(secret) {
+// offset — сдвиг 30с-окна (0=текущее, -1=предыдущее, +1=следующее). Нужен для толерантности к
+// рассинхрону часов воркера: при фиксированном сдвиге часов код текущего окна всегда «не тот»,
+// и ожидание не помогает — помогает попытка соседнего окна.
+function totpCode(secret, offset = 0) {
   const key = base32Decode(secret)
-  const epoch = Math.floor(Date.now() / 1000 / 30)
+  const epoch = Math.floor(Date.now() / 1000 / 30) + offset
   const buf = Buffer.alloc(8)
   buf.writeUInt32BE(Math.floor(epoch / 2 ** 32), 0)
   buf.writeUInt32BE(epoch >>> 0, 4)
@@ -329,8 +332,10 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
           totpAttempts++
           const codeInput = await firstVisible(page, SEL.codeInput, 6000)
           if (codeInput) {
+            // Сдвиг окна по попыткам (0/-1/+1) — толерантность к рассинхрону часов воркера.
+            const offset = [0, -1, 1][(totpAttempts - 1) % 3]
             await codeInput.fill('').catch(() => {})
-            await humanType(codeInput, totpCode(totpSecret))
+            await humanType(codeInput, totpCode(totpSecret, offset))
             await submitCodeForm(page, codeInput)
           }
         }
@@ -489,6 +494,8 @@ export async function resumeWithTotp(context, totpSecret) {
   ]
 
   let totpWindow = -1
+  let attempt = 0
+  const OFFSETS = [0, -1, 1] // толерантность к рассинхрону часов: текущее → предыдущее → следующее окно
   const deadline = Date.now() + 100000 // ~3 TOTP-окна с запасом
   while (Date.now() < deadline) {
     if (await hasSessionCookie(context)) {
@@ -501,14 +508,16 @@ export async function resumeWithTotp(context, totpSecret) {
       totpWindow = window
       const codeInput = await firstVisibleAnyFrame(page, CODE_SELECTORS, 6000)
       if (codeInput) {
+        const offset = OFFSETS[attempt % OFFSETS.length]   // 0 / -1 / +1 — по одному коду на окно (без учащения)
+        attempt++
         await codeInput.fill('').catch(() => {})
-        await humanType(codeInput, totpCode(totpSecret))
+        await humanType(codeInput, totpCode(totpSecret, offset))
         await submitCodeForm(page, codeInput)
       }
     }
     await page.waitForTimeout(1000)
   }
-  await fail(page, 'bad_code: автоматический TOTP-код не принят за несколько окон подряд — проверьте 2FA-ключ или войдите вручную')
+  await fail(page, 'bad_code: автоматический TOTP-код не принят (перепробованы текущее/соседние окна) — ключ 2FA неверный ИЛИ рассинхрон часов; сверьте: тот же ключ в Google Authenticator должен давать тот же код')
 }
 
 // Попытаться повторно отправить код (клик по «Resend»).
