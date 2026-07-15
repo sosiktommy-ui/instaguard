@@ -336,11 +336,9 @@ export async function POST(req: NextRequest) {
   // Прокси обязателен, если владелец НЕ включил «Работать без прокси» (по умолчанию — обязателен).
   const proxyRequired = (userId: string) => !allowNoProxy.get(userId)
 
-  // Основные, у которых есть какая-либо сессия и активные триггеры. sessionData тут — только
-  // «мост» для старых legacy-аккаунтов (instagrapi удалён, Фаза V): они пройдут этот фильтр и
-  // ниже попадут под [A1]-гард, где честно пометятся CHALLENGE (нужен вход браузером), а не
-  // молча пропадут. Реально действовать может лишь аккаунт с browserState.
-  const workingMains = accounts.filter((a) => (a.sessionData || a.browserState) && a.triggersAsResponder.length)
+  // Основные с браузерной сессией и активными триггерами. Аккаунт без browserState обрабатывается
+  // в цикле ниже и честно помечается [A1]-гардом «Требует входа» (legacy sessionData удалён).
+  const workingMains = accounts.filter((a) => a.browserState && a.triggersAsResponder.length)
 
   // plan4 (Фаза D): детект идёт через СВОИ уведомления (self-events) — HikerAPI/черновые НЕ нужны,
   // поэтому никого не блокируем. Счётчик подписчиков тоже растёт из self-events (новые подписчики
@@ -358,7 +356,8 @@ export async function POST(req: NextRequest) {
   const dmQueue = getDmQueue()
 
   for (const account of accounts) {
-    if (!account.sessionData && !account.browserState) continue
+    // (Нет раннего скипа «нет сессии»: аккаунт без browserState дойдёт до [A1]-гарда ниже и честно
+    //  пометится «Требует входа». Legacy sessionData удалён — Фаза V.)
 
     // Счётчик подписчиков растёт из САМИХ уведомлений аккаунта (self-events): каждый новый
     // подписчик, впервые замеченный в потоке ниже, прибавляется к счётчику (см. followersGained).

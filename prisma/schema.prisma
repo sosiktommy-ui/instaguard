@@ -36,23 +36,14 @@ model UserSettings {
   userId           String  @id
   accountsPerProxy Int     @default(3)      // сколько аккаунтов авто-вешать на один пуловый прокси
   allowNoProxy     Boolean @default(false)  // разрешить работу аккаунтов без прокси (риск бана)
-  allowNoDrafts    Boolean @default(false)  // разрешить основным парсить самим, когда нет черновых
   pollIntervalHours Int    @default(3)      // §10 авто-проверка триггеров: раз в N часов на аккаунт
 
-  // Переход на браузерную автоматизацию («эмуль»). См. plan.md §3/§5/§7.6.
   parsingSource  String  @default("api")     // "api" | "drafts" | "drafts_then_api" — источник парсинга
-  actionEngine   String  @default("browser") // "browser" | "legacy" — движок входа/действий (browser = Playwright-воркер)
   browserHeadful Boolean @default(false)      // отладка: показывать окно браузера (только локально)
 
   // Пользовательские дневные лимиты действий (override дефолтов lib/limits.ts DAILY_CAPS).
-  // JSON { dm, follow, like, comment, story }; null → дефолты. Ещё ужимаются прогревом по возрасту.
+  // JSON { dm, follow, like, comment, story, off }; null → дефолты. Ещё ужимаются прогревом по возрасту.
   dailyCaps      Json?
-
-  // Распределение действий основной/черновой (защита основного от бана).
-  // true → «палевное» действие выполняет ЧЕРНОВОЙ (если есть живой), сохраняя основной.
-  // Директ, ответ в комментах и «подписка в ответ» ВСЕГДА выполняет основной (иначе теряется смысл).
-  likeByDraft  Boolean @default(false)  // лайки постов цели выполняет черновой
-  storyByDraft Boolean @default(false)  // просмотр/лайк сторис выполняет черновой
 
   user User @relation(fields: [userId], references: [id])
 }
@@ -112,7 +103,6 @@ model InstagramAccount {
   userId      String
   username    String
   role        AccountRole
-  sessionData Json?         // LEGACY instagrapi-сессия (Python-воркер). Читаем для совместимости.
   browserState Json?        // Playwright storageState (cookies+origins) — сессия браузерного «эмуля»
   loginMethod String  @default("legacy") // "browser" | "cookies" | "legacy" — чем вошли
   emailLogin  String?       // почта аккаунта (для авточтения кода checkpoint по IMAP)

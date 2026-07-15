@@ -120,6 +120,17 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-15 (6) (LEGACY удалён полностью — поля схемы sessionData/allowNoDrafts/likeByDraft/storyByDraft/actionEngine)
+
+⚠️ **Передеплой Next.js** (миграция `20260715120000_drop_legacy_fields` применится `prisma migrate deploy` в `start`). Воркер не трогал. По запросу: «доделай legacy, давно должно быть удалено; но не сломай рабочую логику / то, что сделано лучше другим способом».
+
+- **Тяжёлый legacy был удалён ещё в Фазе V** (Python instagrapi-воркер, `lib/instagram/client`, `lib/browser/engine`) — план просто не обновили. Оставались только **мёртвые поля схемы**.
+- **Удалены LEGACY-поля:** `InstagramAccount.sessionData` (instagrapi-сессия) + `UserSettings.allowNoDrafts/likeByDraft/storyByDraft/actionEngine` (черновые/выбор движка — все no-op). Миграция `DROP COLUMN IF EXISTS` (идемпотентна, безопасна).
+- **Код:** `settings/route.ts` — убраны 4 поля из DEFAULTS/GET/PATCH/ответа + `const ENGINE`. `settings/page.tsx` — из типа `Settings` и дефолта `useState` (UI-контролов у них давно нет). `poll/route.ts` — `workingMains` теперь фильтрует только по `browserState`; **убран ранний скип `!sessionData && !browserState`** — аккаунт без `browserState` теперь доходит до [A1]-гарда и честно помечается «Требует входа» (поведение сохранено, просто без legacy-ветки).
+- **Не тронул (осознанно, «не сломать»/«сделано лучше другим способом»):** `loginMethod` (ещё осмыслен — чем вошли), `engine:'browser'`-литерал в job-payload + defensive `job.engine==='browser'`-проверки (безвредный контракт джоба, горячий путь действий — не трогаю ради косметики), HikerAPI (`lib/scraper/hiker.ts` — НЕ legacy: используется гейтом «подписан на нас»), комментарии-история про instagrapi. Инертный `allowNoDrafts?` в ctx `securityIndex` (`lib/safety.ts`) — no-op, не персистится; оставлен, чтобы не трогать `SecurityBadge` на 3 экранах ради нулевого эффекта.
+
+`prisma validate` ок, `tsc` чист, тесты **79/79**. ⚠️ Аккаунтов, живших ТОЛЬКО на `sessionData` (без `browserState`), в проде фактически нет (браузерный вход давно основной); если такой найдётся — он и раньше не мог действовать, теперь просто помечается «Требует входа». Отмечено `[x]` в `plan.md` Фаза 5.
+
 ### 2026-07-15 (5) (2FA-ключ решается автоматически — не только с первой попытки)
 
 #### fix(логин): TOTP retry на несколько 30-секундных окон + авто-решение 2FA на /login/checkpoint без ручного кода

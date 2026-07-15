@@ -358,7 +358,7 @@ model UserSettings {
 
 ### Фаза 5 — Вывод legacy
 - [x] Убрать `actionEngine='legacy'` — сделано 2026-07-09(3), опережая фазу (пользователь попросил раньше срока): `resolveEngine` больше не читает настройку, UI-переключатель удалён из `settings/page.tsx`. Поле в схеме осталось no-op.
-- [ ] Удалить/заархивировать Python instagrapi-воркер, чистка мёртвого кода и LEGACY-полей (`sessionData`, `allowNoDrafts`, `likeByDraft`, `storyByDraft`, `actionEngine` из схемы). НЕ сделано — оставлен как аварийный резерв, пока не подтверждена стабильность браузерного движка на реальных аккаунтах.
+- [x] 2026-07-15 — LEGACY удалён полностью. Python instagrapi-воркер/`lib/instagram/client`/`engine.ts` были удалены ещё в Фазе V. Теперь убраны и LEGACY-поля схемы: `InstagramAccount.sessionData` + `UserSettings.allowNoDrafts/likeByDraft/storyByDraft/actionEngine` (миграция `20260715120000_drop_legacy_fields`, `DROP COLUMN IF EXISTS` — идемпотентно). Код: `settings/route.ts` (убраны 4 поля из DEFAULTS/GET/PATCH/ответа + const ENGINE), `settings/page.tsx` (из типа Settings + дефолта useState), `poll/route.ts` (`workingMains` → только `browserState`; убран ранний скип `!sessionData && !browserState` — аккаунт без browserState теперь доходит до [A1]-гарда «Требует входа», поведение сохранено). `prisma validate` ок, `tsc` чист, тесты 79/79. Остаток `allowNoDrafts?` в ctx `securityIndex` (lib/safety.ts) — инертный no-op (не персистится, безопасность не меняет), оставлен, чтобы не трогать SecurityBadge на 3 экранах.
 - **Тест:** полный цикл только на браузере + API; `tsc`/`build` чисто.
 
 ---

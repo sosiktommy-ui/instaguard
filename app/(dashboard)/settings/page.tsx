@@ -68,8 +68,8 @@ const HELP: { icon: any; color: string; title: string; text: string; features: s
 
 interface DailyCaps { dm: number; follow: number; like: number; comment: number; story: number; off?: boolean }
 interface Settings {
-  accountsPerProxy: number; allowNoProxy: boolean; allowNoDrafts: boolean; likeByDraft: boolean; storyByDraft: boolean
-  parsingSource: string; actionEngine: string; browserHeadful: boolean; pollIntervalHours: number
+  accountsPerProxy: number; allowNoProxy: boolean
+  parsingSource: string; browserHeadful: boolean; pollIntervalHours: number
   dailyCaps: DailyCaps
 }
 
@@ -128,7 +128,7 @@ function timeAgo(iso: string | null): string {
 }
 
 function SettingsScreen() {
-  const [s, setS] = useState<Settings>({ accountsPerProxy: 3, allowNoProxy: false, allowNoDrafts: false, likeByDraft: false, storyByDraft: false, parsingSource: 'api', actionEngine: 'browser', browserHeadful: false, pollIntervalHours: 3, dailyCaps: { dm: 25, follow: 15, like: 40, comment: 10, story: 50 } })
+  const [s, setS] = useState<Settings>({ accountsPerProxy: 3, allowNoProxy: false, parsingSource: 'api', browserHeadful: false, pollIntervalHours: 3, dailyCaps: { dm: 25, follow: 15, like: 40, comment: 10, story: 50 } })
   const [capsDraft, setCapsDraft] = useState<DailyCaps | null>(null)   // локальная правка перед «Сохранить»
   const [capInput, setCapInput] = useState('3')
   const [msg, setMsg] = useState('')
