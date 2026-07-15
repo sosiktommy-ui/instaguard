@@ -230,7 +230,11 @@ export async function closeContextSafe(context) {
 // контексте (без повторного «входа»/прогрева), а закрывается он по ПРОСТОЮ (idle) — как человек
 // зашёл, сделал всё и ушёл. Живучесть: мёртвый контекст выселяется, следующий вызов создаст свежий.
 const _ctxCache = new Map() // key → { context, lastUsed, warmedUp }
-const CTX_IDLE_MS = 2 * 60 * 1000   // закрыть по простою 2 мин (цикл на аккаунт укладывается)
+// Закрыть по простою. 3 мин с запасом: за цикл аккаунт может сделать МНОГО действий (10 лайков +
+// 15 подписок + …), между ними человеческие паузы до ~90–120с — контекст должен пережить весь цикл
+// (каждое действие/чтение делает touchContext и сбрасывает таймер). Выход = простой ПОСЛЕ последнего
+// действия цикла = «человек всё сделал и ушёл».
+const CTX_IDLE_MS = 3 * 60 * 1000
 const CTX_MAX = 3                    // держим мало открытых контекстов (RAM Chromium) — остальное закрывается
 setInterval(() => {
   const now = Date.now()
@@ -264,6 +268,12 @@ export async function getOrCreateContext(opts) {
 
 export function touchContext(key) { const v = _ctxCache.get(key); if (v) v.lastUsed = Date.now() }
 export async function evictContext(key) { const v = _ctxCache.get(key); if (v) { _ctxCache.delete(key); await closeContextSafe(v.context) } }
+
+// Прогрев ленты делается РОВНО ОДИН раз на весь цикл (первое реальное касание контекста), кто бы
+// ни коснулся первым — чтение уведомлений / действие / визит. Дальше — только микро-браузинг между
+// действиями. Флаг живёт в кэше контекста, поэтому переживает отдельные HTTP-вызовы цикла.
+export function isCtxWarmed(key) { const v = _ctxCache.get(key); return Boolean(v?.warmedUp) }
+export function markCtxWarmed(key) { const v = _ctxCache.get(key); if (v) v.warmedUp = true }
 
 // context.storageState() бросает "Target page, context or browser has been closed", если контекст
 // уже закрыт (краш браузера / дохлый прокси оборвал соединение / гонка закрытия). Тогда возвращаем

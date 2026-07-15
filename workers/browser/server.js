@@ -1,7 +1,7 @@
 // Браузерный воркер InstaGuard — вход и действия Instagram через реальный Chromium.
 // См. plan.md §4. Контракт ответов согласован с lib/browser/client.ts в Next.js.
 import express from 'express'
-import { getBrowser, newAccountContext, closeContextSafe, getOrCreateContext, touchContext, evictContext } from './lib/browser.js'
+import { getBrowser, newAccountContext, closeContextSafe, getOrCreateContext, touchContext, evictContext, isCtxWarmed, markCtxWarmed } from './lib/browser.js'
 import { attemptLogin, resumeCode, resendCode, loginByState, testSession, warmupSession } from './lib/login.js'
 import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment, commentLatestPost, readStoryEvents, acceptFollowRequests } from './lib/actions.js'
 import { parseFollowers, parseFollowing, parseComments, parseLikers } from './lib/parse.js'
@@ -11,8 +11,10 @@ import { checkProxyBrowser } from './lib/proxy.js'
 import { toStorageState } from './lib/state.js'
 import { fingerprint } from './lib/fingerprint.js'
 import { fingerprintSelfTest } from './lib/selftest.js'
+import { captchaConfigured } from './lib/captcha.js'
+import { warmupFeed } from './lib/human.js'
 
-const BUILD = '2026-07-14-browser-58-one-session'
+const BUILD = '2026-07-15-browser-60-single-session'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -75,7 +77,7 @@ app.all('/health', async (_req, res) => {
   try { const b = await getBrowser(); chromium = b.version() } catch (e) { chromium = 'error: ' + e.message }
   // headful=true когда браузер видимый (под Xvfb в проде). display — есть ли виртуальный дисплей.
   const headful = process.env.BROWSER_HEADLESS !== '1'
-  res.json({ ok: true, build: BUILD, playwright: true, chromium, headful, display: process.env.DISPLAY || null, concurrency: MAX, active, pending: pending.size })
+  res.json({ ok: true, build: BUILD, playwright: true, chromium, headful, display: process.env.DISPLAY || null, concurrency: MAX, active, pending: pending.size, captcha: captchaConfigured() })
 })
 
 // Вход по логину/паролю.
@@ -173,11 +175,9 @@ app.post('/session/warmup', async (req, res) => {
   const { storageState, proxy, username, locale, timezoneId } = req.body || {}
   if (!storageState) return res.status(400).json({ alive: false, error: 'storageState обязателен' })
   try {
-    const r = await runLimited(async () => {
-      const context = await newAccountContext({ username: username || 'owner', proxy, storageState, locale, timezoneId })
-      try { return await warmupSession(context) }
-      finally { await closeContextSafe(context) }
-    })
+    // Keep-alive в ТОЙ ЖЕ сессии цикла (реюз контекста, если он ещё жив после действий; иначе
+    // свежий). autoWarm:false — warmupSession сам делает полноценный человеческий визит.
+    const r = await runLimited(() => withCycleContext(req.body, (context) => warmupSession(context), { autoWarm: false }))
     res.json({ alive: r.alive, browserState: r.storageState ?? undefined })
   } catch (e) {
     res.json({ alive: false, error: String(e?.message || 'ошибка').slice(0, 160) })
@@ -279,21 +279,64 @@ function actionRoute(fn) {
   }
 }
 
-app.post('/dm', actionRoute((ctx, b) => sendDM(ctx, { toUsername: b.toUsername, text: b.text, image: b.image, dryRun: b.dryRun })))
-app.post('/follow', actionRoute((ctx, b) => followUser(ctx, { targetUsername: b.targetUsername, dryRun: b.dryRun })))
-app.post('/like', actionRoute((ctx, b) => likeUser(ctx, { targetUsername: b.targetUsername, count: b.count, dryRun: b.dryRun })))
-app.post('/stories', actionRoute((ctx, b) => viewStories(ctx, { targetUsername: b.targetUsername, like: b.like, count: b.count, dryRun: b.dryRun })))
-app.post('/comment', actionRoute((ctx, b) => commentPost(ctx, { postUrl: b.postUrl, text: b.text, dryRun: b.dryRun })))
-app.post('/reply-comment', actionRoute((ctx, b) => replyComment(ctx, { postUrl: b.postUrl, text: b.text, dryRun: b.dryRun })))
-// Канареечный тест: прокомментировать ПОСЛЕДНИЙ пост цели (канарейка → пост основного).
+// ── ЕДИНАЯ СЕССИЯ НА ЦИКЛ ────────────────────────────────────────────────────
+// Весь цикл одного аккаунта (чтение уведомлений → авто-приём → действия по всем потокам →
+// прогрев) выполняется в ОДНОМ переиспользуемом контексте (getOrCreateContext по ключу
+// username|proxy). Прогрев ленты — РОВНО ОДИН раз (кто первым коснулся контекста), дальше
+// микро-браузинг между действиями. Контекст закрывается по простою ПОСЛЕ последнего действия
+// цикла = «человек зашёл, всё сделал, ушёл». Мёртвый/ограниченный контекст выселяется.
+const CTX_DEAD_RX = /closed|crash|Target page|context or browser|Session closed|login_required|сессия недейств/i
+async function withCycleContext(body, fn, { autoWarm = true } = {}) {
+  const { username, storageState, proxy, locale, timezoneId } = body || {}
+  const { context, key } = await getOrCreateContext({ username: username || 'owner', proxy, storageState, locale, timezoneId })
+  try {
+    // Прогрев ленты — один раз на цикл (первое реальное касание контекста). autoWarm=false у тех,
+    // кто сам делает полноценный визит (session/warmup), чтобы не греть дважды.
+    if (autoWarm && !isCtxWarmed(key)) {
+      try { const p = await context.newPage(); await warmupFeed(p); await p.close().catch(() => {}) } catch {}
+      markCtxWarmed(key)
+    }
+    const r = await fn(context)
+    if (r && r.brk) await evictContext(key)   // бан/челлендж → закрыть, не переиспользовать
+    else touchContext(key)                    // иначе продлить жизнь для следующего действия цикла
+    return r
+  } catch (e) {
+    if (CTX_DEAD_RX.test(String(e?.message ?? ''))) await evictContext(key)   // мёртвая сессия/краш → свежий контекст в след. раз
+    throw e
+  }
+}
+
+// Как actionRoute, но контекст — ПЕРЕИСПОЛЬЗУЕМЫЙ (единая сессия на цикл). Для эндпоинтов,
+// участвующих в цикле аккаунта: чтение уведомлений, авто-приём, действия, стори-инбокс.
+function cycleRoute(fn) {
+  return async (req, res) => {
+    if (!req.body?.storageState) return res.status(400).json({ error: 'bad_request', message: 'storageState обязателен' })
+    try {
+      const result = await runLimited(() => withCycleContext(req.body, (ctx) => fn(ctx, req.body)))
+      res.json(result)
+    } catch (e) {
+      const { kind, message } = errStatus(e.message)
+      res.status(400).json({ error: kind, message })
+    }
+  }
+}
+
+// Действия и чтения ЦИКЛА — через переиспользуемый контекст (cycleRoute): весь цикл = одна сессия.
+app.post('/dm', cycleRoute((ctx, b) => sendDM(ctx, { toUsername: b.toUsername, text: b.text, image: b.image, dryRun: b.dryRun })))
+app.post('/follow', cycleRoute((ctx, b) => followUser(ctx, { targetUsername: b.targetUsername, dryRun: b.dryRun })))
+app.post('/like', cycleRoute((ctx, b) => likeUser(ctx, { targetUsername: b.targetUsername, count: b.count, dryRun: b.dryRun })))
+app.post('/stories', cycleRoute((ctx, b) => viewStories(ctx, { targetUsername: b.targetUsername, like: b.like, count: b.count, dryRun: b.dryRun })))
+app.post('/comment', cycleRoute((ctx, b) => commentPost(ctx, { postUrl: b.postUrl, text: b.text, dryRun: b.dryRun })))
+app.post('/reply-comment', cycleRoute((ctx, b) => replyComment(ctx, { postUrl: b.postUrl, text: b.text, dryRun: b.dryRun })))
+// Канареечный тест — ОДНОРАЗОВЫЙ (другой, канареечный аккаунт): свой свежий контекст, не цикл.
 app.post('/comment-latest', actionRoute((ctx, b) => commentLatestPost(ctx, { targetUsername: b.targetUsername, text: b.text, dryRun: b.dryRun })))
-// Стори-события основного (ответы на сторис + упоминания) — чтение директа своим браузером.
-app.post('/story-inbox', actionRoute((ctx, b) => readStoryEvents(ctx, { amount: b.amount })))
+// Стори-события основного (ответы на сторис + упоминания) — чтение директа. Часть цикла → один контекст.
+app.post('/story-inbox', cycleRoute((ctx, b) => readStoryEvents(ctx, { amount: b.amount })))
 // plan4: СВОИ уведомления (лента активности) — детект follow/like/comment основным аккаунтом.
-// raw=true → сырой payload news/inbox (Фаза B: снять формат на живом).
-app.post('/self-events', actionRoute((ctx, b) => readSelfEvents(ctx, { amount: b.amount, raw: b.raw })))
+// Первый шаг цикла: создаёт+греет контекст, дальше все действия идут в ЭТОМ же контексте.
+app.post('/self-events', cycleRoute((ctx, b) => readSelfEvents(ctx, { amount: b.amount, raw: b.raw })))
 // §13.11 — авто-приём заявок в подписчики (приватный аккаунт): подтвердить ожидающие follow-requests.
-app.post('/follow-requests/accept', actionRoute((ctx, b) => acceptFollowRequests(ctx, { limit: b.limit })))
+app.post('/follow-requests/accept', cycleRoute((ctx, b) => acceptFollowRequests(ctx, { limit: b.limit })))
 
 // ── Парсинг черновыми (Фаза 3, plan.md §4.4/§5) — DOM, без сохранения browserState (чтение) ──
 app.post('/parse/followers', actionRoute((ctx, b) => parseFollowers(ctx, { targetUsername: b.targetUsername, limit: b.limit })))
@@ -305,25 +348,13 @@ app.post('/parse/likers', actionRoute((ctx, b) => parseLikers(ctx, { targetUsern
 // в случайном порядке с микро-браузингом → выход). Тело: {storageState, proxy, username,
 // locale, timezoneId, tasks:[...]}. Ответ: {done, closed, errors, brk, storageState}. ──
 app.post('/session/run', async (req, res) => {
-  const { username, storageState, proxy, locale, timezoneId, tasks } = req.body || {}
-  if (!storageState) return res.status(400).json({ error: 'bad_request', message: 'storageState обязателен' })
+  const { tasks } = req.body || {}
+  if (!req.body?.storageState) return res.status(400).json({ error: 'bad_request', message: 'storageState обязателен' })
   if (!Array.isArray(tasks) || !tasks.length) return res.status(400).json({ error: 'bad_request', message: 'tasks пуст' })
   try {
-    const result = await runLimited(async () => {
-      // ОДНА сессия на цикл: переиспользуем контекст аккаунта между целями (не «вход на каждую
-      // цель»). Прогрев — только при СВЕЖЕМ контексте (первая цель цикла), дальше без повторного входа.
-      const { context, reused, key } = await getOrCreateContext({ username: username || 'owner', proxy, storageState, locale, timezoneId })
-      try {
-        const r = await runVisit(context, { tasks, warmup: !reused })
-        if (r.brk) await evictContext(key)   // сессия ограничена/челлендж → закрыть, не переиспользовать
-        else touchContext(key)               // иначе продлить жизнь для следующей цели этого же цикла
-        return r
-      } catch (e) {
-        // мёртвый контекст (сессия/браузер закрылись/крашнулись) → выселяем, следующий вызов создаст свежий
-        if (/closed|crash|Target page|context or browser|Session closed/i.test(String(e?.message ?? ''))) await evictContext(key)
-        throw e
-      }
-    })
+    // Единая сессия на цикл: тот же переиспользуемый контекст, что у чтения уведомлений/действий.
+    // Прогрев — один раз в withCycleContext, поэтому runVisit БЕЗ собственного прогрева (warmup:false).
+    const result = await runLimited(() => withCycleContext(req.body, (context) => runVisit(context, { tasks, warmup: false })))
     res.json(result)
   } catch (e) {
     const { kind, message } = errStatus(e.message)

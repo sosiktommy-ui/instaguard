@@ -10,9 +10,9 @@ const BROWSER_WORKER_SECRET = process.env.BROWSER_WORKER_SECRET ?? ''
 // отдаёт СКРИН — на 120с клиент рвал fetch до diag (аудит-баг #1). Бюджет воркера подрезан,
 // но запас нужен на медленный прокси + первый scheme-детект.
 const TIMEOUT_MS = Number(process.env.BROWSER_WORKER_TIMEOUT_MS) || 180_000
-// Визит (/session/run) — прогрев ленты + несколько действий на цель + человеческие паузы:
-// на медленном резидентном прокси легко выходит за 180с (директ «не доставлен» по таймауту).
-// Даём ему отдельный, БОЛЬШИЙ бюджет. Воркер сам ограничивает конкуренцию, так что это безопасно.
+// Единая сессия на цикл: визит (/session/run) И первый вызов цикла (чтение уведомлений / авто-приём)
+// включают прогрев ленты + человеческие паузы → на медленном резидентном прокси легко выходят за 180с.
+// Даём им отдельный, БОЛЬШИЙ бюджет. Воркер сам ограничивает конкуренцию, так что это безопасно.
 const VISIT_TIMEOUT_MS = Number(process.env.BROWSER_VISIT_TIMEOUT_MS) || 300_000
 
 /** Задеплоен ли браузерный воркер (задан URL). Если нет — движок остаётся legacy. */
@@ -212,21 +212,23 @@ export function browserRunVisit(ctx: Ctx, tasks: VisitTask[]) {
 // Форма совпадает с legacy getStoryEvents, чтобы poll/route.ts не переписывать.
 export interface BrowserStoryEvent { pk: string; user_pk: string; username: string; text: string; kind: 'reply' | 'mention' }
 export function browserStoryEvents(ctx: Ctx, amount = 10) {
-  return browserFetch<{ events: BrowserStoryEvent[]; browserState?: object }>('/story-inbox', { ...ctx, amount })
+  return browserFetch<{ events: BrowserStoryEvent[]; browserState?: object }>('/story-inbox', { ...ctx, amount }, VISIT_TIMEOUT_MS)
 }
 
 // plan4 — свои уведомления (лента активности) основного аккаунта: детект follow/like/comment.
 // raw=true → сырой payload news/inbox (Фаза B: снять формат на живом).
 export interface SelfEvent { type: 'follow' | 'like' | 'comment' | 'unknown'; pk: string; username: string; text?: string; media_id?: string; ts?: number | null; code?: number | string | null }
 export function browserSelfEvents(ctx: Ctx, opts: { amount?: number; raw?: boolean } = {}) {
-  return browserFetch<{ events: SelfEvent[]; raw?: any; error?: string; browserState?: object }>('/self-events', { ...ctx, amount: opts.amount, raw: opts.raw })
+  // Первый вызов цикла: создаёт+греет контекст (прогрев ленты) → больший бюджет.
+  return browserFetch<{ events: SelfEvent[]; raw?: any; error?: string; browserState?: object }>('/self-events', { ...ctx, amount: opts.amount, raw: opts.raw }, VISIT_TIMEOUT_MS)
 }
 
 // §13.11 — авто-приём заявок в подписчики (для приватных аккаунтов): подтвердить ожидающие
 // follow-requests. Возвращает сколько было ожидающих и кого подтвердили (+ обновлённый browserState).
 export interface AcceptRequestsResult { pendingCount: number; approved: { pk: string; username: string }[]; errors?: string[]; browserState?: object }
 export function browserAcceptFollowRequests(ctx: Ctx, limit = 10) {
-  return browserFetch<AcceptRequestsResult>('/follow-requests/accept', { ...ctx, limit })
+  // Может быть первым вызовом цикла (приватный аккаунт) → включает прогрев → больший бюджет.
+  return browserFetch<AcceptRequestsResult>('/follow-requests/accept', { ...ctx, limit }, VISIT_TIMEOUT_MS)
 }
 
 // ── Парсинг черновыми (Фаза 3, plan.md §4.4/§5). Формы = lib/scraper/hiker.ts, чтобы
