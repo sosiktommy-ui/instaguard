@@ -5,6 +5,21 @@ import crypto from 'crypto'
 import { SEL, URLS } from './selectors.js'
 import { firstVisible, firstVisibleAnyFrame, clickByText, pageHasText, hasSessionCookie, gotoResilient, safeStorageState } from './browser.js'
 import { humanType, jitter, idleMouse, warmupFeed, humanClick } from './human.js'
+import { trySolveCaptcha, captchaConfigured } from './captcha.js'
+
+// Капча встретилась → решаем через 2captcha, вписываем токен, жмём «Продолжить»/submit,
+// какой найдётся на экране. captchaTried гасит повторные попытки на ТОМ ЖЕ экране —
+// 2captcha не бесплатна и решение занимает 10–40с, повторять его в каждой итерации poll-а нельзя.
+async function handleCaptchaIfPresent(page) {
+  if (!captchaConfigured()) return false
+  const solved = await trySolveCaptcha(page).catch(() => false)
+  if (!solved) return false
+  await page.waitForTimeout(1200)
+  const btn = await firstVisible(page, ['button[type="submit"]:not([disabled])', ...SEL.codeSubmitCss], 3000).catch(() => null)
+  if (btn) await btn.click({ delay: 60 }).catch(() => {})
+  else await clickByText(page, [...SEL.codeSubmit, 'Verify', 'Проверить'], { timeout: 3000 }).catch(() => {})
+  return true
+}
 
 const LOGIN_URL = 'https://www.instagram.com/accounts/login/'
 
@@ -205,6 +220,9 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
   await gotoResilient(page, 'https://www.instagram.com/', { timeout: 45000, retries: 2, backoffMs: [10000, 25000] })
   await dismissCookieBanner(page)
   await idleMouse(page)
+  // Изредка Instagram показывает капчу ДО формы входа (бот-стена на подозрительном IP) —
+  // пробуем решить её здесь же, прежде чем искать поля username/password.
+  await handleCaptchaIfPresent(page).catch(() => false)
 
   const { userInput, passInput } = await findLoginForm(page)
   if (!userInput || !passInput) {
@@ -233,9 +251,10 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
   if (submit) await humanClick(page, submit)   // §1.3: человеческий подвод курсора к «Войти»
   else await passInput.press('Enter')
 
-  // Ждём исход до ~28с (при device-approval дедлайн продлевается — см. ниже).
+  // Ждём исход до ~28с (при device-approval/капче дедлайн продлевается — см. ниже).
   let deadline = Date.now() + 28000
   let approvalExtended = false
+  let captchaTried = false
   while (Date.now() < deadline) {
     await page.waitForTimeout(700)
 
@@ -290,6 +309,18 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
       continue
     }
 
+    // Капча (reCAPTCHA/hCaptcha/Arkose) — Instagram запрашивает её при подозрительном входе
+    // (новый IP/прокси/устройство). Пробуем решить ОДИН раз через 2captcha (решение занимает
+    // 10–40с — на это время продлеваем дедлайн, иначе цикл выйдет по таймауту, не дождавшись ответа).
+    if (!captchaTried) {
+      const attempted = await handleCaptchaIfPresent(page)
+      if (attempted) {
+        captchaTried = true
+        deadline = Math.max(deadline, Date.now() + 40000)
+        continue
+      }
+    }
+
     const err = await firstVisible(page, SEL.loginError, 500)
     if (err) {
       const txt = (await err.textContent().catch(() => '')) || ''
@@ -329,6 +360,8 @@ export async function resumeCode(context, { code }) {
   const pages = context.pages()
   const page = pages[pages.length - 1] || (await context.newPage())
   await page.waitForLoadState('domcontentloaded', { timeout: 4000 }).catch(() => {})
+  // Иногда вместо/перед полем кода стоит капча (доп. проверка на этом же экране подтверждения).
+  await handleCaptchaIfPresent(page).catch(() => false)
 
   // На экране подтверждения («Check your email») поле кода у Instagram имеет НЕОЧЕВИДНЫЕ
   // атрибуты: подтверждено DOM-дампом — это `input name="email"` type=text с placeholder
