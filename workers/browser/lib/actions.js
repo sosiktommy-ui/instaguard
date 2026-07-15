@@ -173,12 +173,32 @@ export async function sendDM(context, { toUsername, text, image, dryRun }) {
   return { ok: true, delivered: true, photo, error: deliverErr, storageState }
 }
 
+// Есть ли на профиле КНОПКА состояния подписки («Вы подписаны»/«Запрос отправлен»)? Значит, мы
+// уже подписаны (или заявка отправлена у приватного). ⚠️ Проверяем именно button-роль, а НЕ текст:
+// слово «following» есть в счётчике статистики КАЖДОГО профиля («123 following») и раньше ложно
+// матчилось pageHasText('Following') → followUser возвращал already:true для ВСЕХ = «подписка
+// выполнена», хотя клика не было (жалоба «подписка писалась выполненной, но не выполнялась»).
+async function hasFollowStateButton(page, timeout = 4000) {
+  const deadline = Date.now() + timeout
+  for (;;) {
+    for (const n of SEL.followingState) {
+      try {
+        const b = page.getByRole('button', { name: n }).first()   // роль button не матчит текст статистики
+        if (await b.isVisible().catch(() => false)) return true
+      } catch {}
+    }
+    if (Date.now() >= deadline) return false
+    await page.waitForTimeout(300)
+  }
+}
+
 // ── Подписка ────────────────────────────────────────────────────────────────
 export async function followUser(context, { targetUsername, dryRun }) {
   await requireSession(context)
   const page = await openProfile(context, targetUsername)
 
-  if (await pageHasText(page, SEL.followingState)) {
+  // Уже подписаны/заявка отправлена — по КНОПКЕ состояния (не по тексту статистики, см. выше).
+  if (await hasFollowStateButton(page, 2500)) {
     return { ok: true, already: true, dryRun: dryRun || undefined, storageState: await safeStorageState(context) }
   }
   // §10.3 dry-run: проверяем присутствие кнопки «Подписаться», НЕ кликаем.
@@ -187,8 +207,13 @@ export async function followUser(context, { targetUsername, dryRun }) {
     return { ok: btn, dryRun: true, reached: { followButton: btn }, storageState: await safeStorageState(context) }
   }
   const clicked = await clickByText(page, SEL.followButton, { timeout: 8000 })
-  if (!clicked) return { ok: false, error: 'follow_button_not_found: кнопка «Подписаться» не найдена' }
+  if (!clicked) return { ok: false, error: 'follow_button_not_found: кнопка «Подписаться» не найдена', storageState: await safeStorageState(context) }
   await jitter(900, 1800)
+  // ПОДТВЕРЖДЕНИЕ: кнопка реально сменилась на «Вы подписаны»/«Запрос отправлен». Без этого клик,
+  // который не применился (перехват/анти-бот/промах), писался как «выполнено».
+  if (!(await hasFollowStateButton(page, 6000))) {
+    return { ok: false, error: 'follow_unconfirmed: после клика кнопка не сменилась на «Вы подписаны» — подписка не применилась', storageState: await safeStorageState(context) }
+  }
   return { ok: true, storageState: await safeStorageState(context) }
 }
 
@@ -282,6 +307,11 @@ export async function commentPost(context, { postUrl, text, dryRun }) {
   const posted = await clickByText(page, SEL.commentPost, { timeout: 4000 })
   if (!posted) await box.press('Enter')
   await jitter(1200, 2200)
+  // ПОДТВЕРЖДЕНИЕ: опубликованный коммент ОЧИЩАЕТ поле ввода (или заменяет его на новое). Если
+  // текст ЗАВИС в поле — публикация не прошла (как и в директе: composer очищается только при приёме).
+  // detached/gone → catch→false → «не завис» → считаем опубликованным; текст остался → не опубликован.
+  const stuck = await box.evaluate((el) => ((el.innerText ?? el.value ?? '').trim().length > 0)).catch(() => false)
+  if (stuck) return { ok: false, error: 'comment_unconfirmed: комментарий не опубликовался (поле не очистилось)', storageState: await safeStorageState(context) }
   return { ok: true, storageState: await safeStorageState(context) }
 }
 
