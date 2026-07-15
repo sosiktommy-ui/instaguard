@@ -579,6 +579,23 @@ export async function resumeWithTotp(context, totpSecret) {
   await fail(page, `bad_code: автоматический TOTP-код не принят (перепробованы текущее/соседние окна) — ключ 2FA неверный ИЛИ рассинхрон часов ИЛИ форма не отправилась (см. кнопки ниже); сверьте: тот же ключ в Google Authenticator должен давать тот же код.${btnTxt}`)
 }
 
+// ВРЕМЕННО (удалить вместе с /session/username в server.js и кнопкой в UI, когда починка
+// накопившихся username=unknown закончится): перечитать username УЖЕ залогиненной сессии
+// (по сохранённому browserState) БЕЗ повторного входа. ТОЛЬКО DOM — заход на главную + то же
+// dismissInterstitials/extractUsername, что при обычном входе.
+export async function rereadUsername(context) {
+  const page = await context.newPage()
+  try {
+    await gotoResilient(page, 'https://www.instagram.com/', { timeout: 25000, retries: 1, backoffMs: [2000] })
+    await page.waitForTimeout(1500)
+    await dismissInterstitials(page).catch(() => {})
+    const uname = await extractUsername(page)
+    return { username: uname, storageState: await safeStorageState(context) }
+  } catch (e) {
+    return { username: null, error: String(e?.message || 'ошибка'), storageState: await safeStorageState(context).catch(() => null) }
+  }
+}
+
 // Попытаться повторно отправить код (клик по «Resend»).
 export async function resendCode(context) {
   const pages = context.pages()

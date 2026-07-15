@@ -102,6 +102,12 @@ export function browserWarmup(storageState: object, proxy?: string, username?: s
   return browserFetch<{ alive: boolean; browserState?: object; error?: string }>('/session/warmup', { storageState, proxy, username, locale, timezoneId })
 }
 
+// ВРЕМЕННО (удалить вместе с /api/accounts/[id]/reread-username и кнопкой в UI): перечитать
+// username уже залогиненной сессии (без повторного входа) — починка накопившихся username=unknown.
+export function browserRereadUsername(storageState: object, proxy?: string, username?: string, locale?: string, timezoneId?: string) {
+  return browserFetch<{ ok: boolean; username: string | null; browserState?: object; error?: string }>('/session/username', { storageState, proxy, username, locale, timezoneId })
+}
+
 // Здоровье воркера — ПЛОСКИЙ GET на /health (воркер отдаёт его без секрета). Раньше тут был
 // browserFetch(POST) → но у воркера /health только GET → POST давал 404 → индикатор в шапке
 // ВСЕГДА показывал «Воркер офлайн», хотя воркер жив. Свой лёгкий fetch, не через browserFetch.

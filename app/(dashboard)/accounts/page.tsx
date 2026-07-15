@@ -187,6 +187,23 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
     finally { setCanarying(false) }
   }
 
+  // ВРЕМЕННО (удалить вместе с /api/accounts/[id]/reread-username и /session/username в воркере,
+  // когда починка накопившихся username=unknown закончится): перечитать ник уже вошедшей сессии
+  // без повторного логина — использует новый DOM-фолбэк (alt аватара) из extractUsername.
+  const [rereading, setRereading] = useState(false)
+  const [rereadOut, setRereadOut] = useState('')
+  const rereadUsername = async () => {
+    if (!ra?.id) { setRereadOut('нет id аккаунта'); return }
+    setRereading(true); setRereadOut('')
+    try {
+      const r = await fetch(`/api/accounts/${ra.id}/reread-username`, { method: 'POST' })
+      const data = await r.json()
+      setRereadOut(JSON.stringify(data, null, 2))
+      if (data.ok && data.changed) onChanged?.()
+    } catch (e: any) { setRereadOut('ошибка: ' + String(e?.message ?? e)) }
+    finally { setRereading(false) }
+  }
+
   // §13.11 — авто-приём заявок в подписчики (для закрытых/приватных аккаунтов).
   const [autoAccept, setAutoAccept] = useState(Boolean(ra?.autoAcceptFollowers))
   const [savingAuto, setSavingAuto] = useState(false)
@@ -258,6 +275,7 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
               <button onClick={runProbe} disabled={probing} title="Проба уведомлений (debug: news/inbox)" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">🔔</button>
             )}
             <button onClick={runCanary} disabled={canarying} title="Канареечный тест: этот аккаунт РЕАЛЬНО подпишется/прокомментирует/лайкнет указанный аккаунт (для проверки триггеров у цели)" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">🧪</button>
+            <button onClick={rereadUsername} disabled={rereading || !ra?.id} title="ВРЕМЕННО: перечитать ник уже вошедшей сессии без повторного входа (чинит username=unknown)" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">🔤</button>
             {onOpenLog && (
               <button onClick={onOpenLog} title="Открыть лог" className="p-1.5 text-subt hover:text-brand transition-colors"><ScrollText size={18} /></button>
             )}
@@ -295,6 +313,22 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
               </div>
               <textarea readOnly value={probeOut} onFocus={(e) => e.currentTarget.select()}
                 className="w-full h-56 text-[11px] font-mono bg-black/[0.03] rounded-xl p-2 border border-line/60" />
+            </div>
+          )}
+          {/* ВРЕМЕННО: вывод результата 🔤 перечитать-ник (не за debug-флагом — нужен видимым сейчас) */}
+          {rereading && (
+            <div className="rounded-2xl bg-canvas px-4 py-3 text-[12px] text-subt flex items-center gap-2">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Читаю ник со страницы профиля…
+            </div>
+          )}
+          {!rereading && rereadOut && (
+            <div className="rounded-2xl bg-canvas px-4 py-3">
+              <div className="text-[12px] font-semibold text-subt mb-2 flex items-center justify-between">
+                <span>🔤 Результат перечитывания ника</span>
+                <button onClick={() => setRereadOut('')} className="text-subt hover:text-ink">✕</button>
+              </div>
+              <textarea readOnly value={rereadOut} onFocus={(e) => e.currentTarget.select()}
+                className="w-full h-32 text-[11px] font-mono bg-black/[0.03] rounded-xl p-2 border border-line/60" />
             </div>
           )}
           {/* Ключевые цифры */}
