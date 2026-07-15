@@ -105,7 +105,10 @@ export function browserWarmup(storageState: object, proxy?: string, username?: s
 // ВРЕМЕННО (удалить вместе с /api/accounts/[id]/reread-username и кнопкой в UI): перечитать
 // username уже залогиненной сессии (без повторного входа) — починка накопившихся username=unknown.
 export function browserRereadUsername(storageState: object, proxy?: string, username?: string, locale?: string, timezoneId?: string) {
-  return browserFetch<{ ok: boolean; username: string | null; browserState?: object; error?: string }>('/session/username', { storageState, proxy, username, locale, timezoneId })
+  return browserFetch<{
+    ok: boolean; username: string | null; browserState?: object; error?: string
+    sessionAlive?: boolean; url?: string; diag?: { url?: string; title?: string; screenshot?: string | null }; dom?: unknown
+  }>('/session/username', { storageState, proxy, username, locale, timezoneId })
 }
 
 // Здоровье воркера — ПЛОСКИЙ GET на /health (воркер отдаёт его без секрета). Раньше тут был

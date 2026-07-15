@@ -589,8 +589,24 @@ export async function rereadUsername(context) {
     await gotoResilient(page, 'https://www.instagram.com/', { timeout: 25000, retries: 1, backoffMs: [2000] })
     await page.waitForTimeout(1500)
     await dismissInterstitials(page).catch(() => {})
+    const sessionAlive = await hasSessionCookie(context)
     const uname = await extractUsername(page)
-    return { username: uname, storageState: await safeStorageState(context) }
+    if (uname) return { username: uname, sessionAlive, storageState: await safeStorageState(context) }
+    // Не нашли ни одним способом — диагностика: жива ли сессия ВООБЩЕ (кука) + что реально
+    // на экране (скрин+DOM), чтобы отличить «сессия мертва, снова форма входа» от «сессия
+    // жива, но страница не та, что ждали» (интерстишл/чекпоинт без нужных элементов).
+    const diag = await captureDiag(page).catch(() => null)
+    const dom = await domSummary(page).catch(() => null)
+    return {
+      username: null,
+      sessionAlive,
+      url: page.url(),
+      error: sessionAlive
+        ? `сессия АКТИВНА (кука есть), но ник не прочитан ни одним способом — см. url/скрин/dom`
+        : `сессия НЕ активна (нет sessionid в куках) — нужен повторный вход`,
+      diag, dom,
+      storageState: await safeStorageState(context),
+    }
   } catch (e) {
     return { username: null, error: String(e?.message || 'ошибка'), storageState: await safeStorageState(context).catch(() => null) }
   }

@@ -14,7 +14,7 @@ import { fingerprintSelfTest } from './lib/selftest.js'
 import { captchaConfigured } from './lib/captcha.js'
 import { warmupFeed } from './lib/human.js'
 
-const BUILD = '2026-07-15-browser-69-reread-username-temp'
+const BUILD = '2026-07-15-browser-70-reread-username-diag'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -205,7 +205,10 @@ app.post('/session/username', async (req, res) => {
       try { return await rereadUsername(context) }
       finally { await closeContextSafe(context) }
     })
-    res.json({ ok: true, username: result.username, browserState: result.storageState, error: result.error })
+    res.json({
+      ok: true, username: result.username, browserState: result.storageState, error: result.error,
+      sessionAlive: result.sessionAlive, url: result.url, diag: result.diag, dom: result.dom,
+    })
   } catch (e) {
     const { kind, message } = errStatus(e.message)
     res.status(400).json({ error: kind, message })

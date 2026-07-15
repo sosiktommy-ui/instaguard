@@ -25,7 +25,15 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       acc.timezoneId ?? undefined,
     )
     if (!result.username) {
-      return NextResponse.json({ ok: false, error: result.error ?? 'Ник снова не прочитался' })
+      return NextResponse.json({
+        ok: false,
+        error: result.error ?? 'Ник снова не прочитался',
+        sessionAlive: result.sessionAlive,
+        url: result.url,
+        screenshot: result.diag?.screenshot ?? null,
+        pageTitle: result.diag?.title ?? null,
+        dom: result.dom,
+      })
     }
     const clean = result.username.replace(/^@/, '').trim().toLowerCase()
     if (clean === acc.username) {

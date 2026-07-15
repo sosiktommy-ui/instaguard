@@ -192,13 +192,16 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
   // без повторного логина — использует новый DOM-фолбэк (alt аватара) из extractUsername.
   const [rereading, setRereading] = useState(false)
   const [rereadOut, setRereadOut] = useState('')
+  const [rereadShot, setRereadShot] = useState('')
   const rereadUsername = async () => {
     if (!ra?.id) { setRereadOut('нет id аккаунта'); return }
-    setRereading(true); setRereadOut('')
+    setRereading(true); setRereadOut(''); setRereadShot('')
     try {
       const r = await fetch(`/api/accounts/${ra.id}/reread-username`, { method: 'POST' })
       const data = await r.json()
-      setRereadOut(JSON.stringify(data, null, 2))
+      const { screenshot, ...rest } = data
+      setRereadShot(screenshot ?? '')
+      setRereadOut(JSON.stringify(rest, null, 2))
       if (data.ok && data.changed) onChanged?.()
     } catch (e: any) { setRereadOut('ошибка: ' + String(e?.message ?? e)) }
     finally { setRereading(false) }
@@ -325,10 +328,16 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
             <div className="rounded-2xl bg-canvas px-4 py-3">
               <div className="text-[12px] font-semibold text-subt mb-2 flex items-center justify-between">
                 <span>🔤 Результат перечитывания ника</span>
-                <button onClick={() => setRereadOut('')} className="text-subt hover:text-ink">✕</button>
+                <button onClick={() => { setRereadOut(''); setRereadShot('') }} className="text-subt hover:text-ink">✕</button>
               </div>
               <textarea readOnly value={rereadOut} onFocus={(e) => e.currentTarget.select()}
                 className="w-full h-32 text-[11px] font-mono bg-black/[0.03] rounded-xl p-2 border border-line/60" />
+              {rereadShot && (
+                <a href={rereadShot} target="_blank" rel="noreferrer" className="block mt-2">
+                  <img src={rereadShot} alt="Что реально показал браузер" className="w-full rounded-xl border border-black/10" />
+                  <span className="block text-subt text-[11px] mt-1">📷 Скрин страницы, на которой бот не смог прочитать ник (клик — открыть крупно)</span>
+                </a>
+              )}
             </div>
           )}
           {/* Ключевые цифры */}
