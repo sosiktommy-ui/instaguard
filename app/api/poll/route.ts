@@ -571,18 +571,28 @@ export async function POST(req: NextRequest) {
           // успешном DM (тогда зарезервированное действие просто не выполнится).
           const fallbackFollow = willDM && !willFollow && use('follow')
           const fallbackLike   = willDM && !willLike && use('like')
+          // Какие НАСТРОЕННЫЕ действия заблокированы ИМЕННО дневным лимитом (не гейтом/конфигом):
+          // use() вернул false при наличии бюджета=0. Это нужно и для лога, и для §4.3 (не терять цель).
+          const capped: string[] = []
+          if (doFollowT && !willFollow && !fallbackFollow) capped.push('подписка')
+          if (doLikeT && !willLike && !fallbackLike) capped.push('лайк')
+          if (Boolean(storiesAct) && !willStory) capped.push('сторис')
+          if (dmAllowed && !willDM) capped.push('директ')   // dmAllowed уже учёл гейт → это чистый лимит
           // Прозрачность на ручной проверке: почему настроенное действие НЕ выполнилось — почти
-          // всегда это ДНЕВНОЙ ЛИМИТ (у молодого аккаунта прогрев ужимает подписки до 2–7/сутки),
-          // а не баг. Иначе «подписался только директ» выглядит как поломка (жалоба пользователя).
-          if (isManual) {
-            const capped: string[] = []
-            if (doFollowT && !willFollow && !fallbackFollow) capped.push('подписка')
-            if (doLikeT && !willLike && !fallbackLike) capped.push('лайк')
-            if (Boolean(storiesAct) && !willStory) capped.push('сторис')
-            if (dmAllowed && !willDM) capped.push('директ')
-            if (capped.length) await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: `@${target.username}: не выполнено из-за дневного лимита (${capped.join(', ')}) — сбросится завтра; у молодого аккаунта лимиты ниже (прогрев).` } }).catch(() => null)
+          // всегда это ДНЕВНОЙ ЛИМИТ (у молодого аккаунта прогрев ужимает подписки до 2–7/сутки), не баг.
+          if (isManual && capped.length) {
+            await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: `@${target.username}: не выполнено из-за дневного лимита (${capped.join(', ')}) — сбросится завтра; у молодого аккаунта лимиты ниже (прогрев).` } }).catch(() => null)
           }
-          if (!willDM && !willFollow && !willLike && !willStory) { s.limited = (s.limited ?? 0) + 1; continue }
+          if (!willDM && !willFollow && !willLike && !willStory) {
+            s.limited = (s.limited ?? 0) + 1
+            // §4.3 — цель НИЧЕГО не получила из-за исчерпанного ДНЕВНОГО ЛИМИТА → НЕ помечаем «известной»
+            // (в failedPks → снапшот её не зафиксирует), чтобы добрать её в следующие дни, когда бюджет
+            // обновится. Так «все действия в итоге выполняются» (в пределах безопасных лимитов), не теряя
+            // людей. Если же нечего было делать по КОНФИГУ/ГЕЙТУ (capped пуст) — это definitive, помечаем
+            // известной (ретрай бессмыслен). Дешёвый повтор: capped-цель просто пере-оценивает бюджет.
+            if (capped.length) failedPks.add(target.pk)
+            continue
+          }
 
           // Анти-«одинаковое»: случайный шаблон из набора + spintax {a|b} → у каждого свой текст
           let text = willDM ? renderMessage(msgAction?.templates ?? template, target.username) : ''
