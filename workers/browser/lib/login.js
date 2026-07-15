@@ -105,13 +105,49 @@ async function dismissCookieBanner(page) {
   await clickByText(page, ['Allow all cookies', 'Accept All', 'Accept', 'Разрешить все файлы cookie', 'Принять все'], { timeout: 3500 })
 }
 
-// Отправить форму кода (challenge/2FA) НАДЁЖНО: сначала CSS-кнопка submit (firstVisible=CSS),
-// затем текстовая кнопка (clickByText), затем Enter по полю. Раньше жали только clickByText
-// по списку, куда затесался CSS-селектор — он как текст не матчился, и код не отправлялся.
+// Кнопка подтверждения кода — ПО ВСЕМ ФРЕЙМАМ (не только главный). Реальный живой кейс:
+// поле кода нашлось через firstVisibleAnyFrame (экран 2FA во фрейме), код был вписан, но
+// firstVisible/clickByText смотрят ТОЛЬКО в page (главный фрейм) — кнопку в ТОМ ЖЕ фрейме,
+// что и поле, они не видят. Итог — код вписан, форма не отправлена (кнопка не нажата, Enter
+// на этом React-инпуте сабмит не триггерит). humanClick(page, locator) кликает КОРРЕКТНО и
+// для локаторов из под-фрейма — boundingBox() даёт координаты относительно вьюпорта, клик
+// мышью идёт через page.mouse на них же, независимо от того, из какого фрейма локатор.
+async function findButtonAnyFrame(page, cssSelectors, textOptions, timeout) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    for (const frame of page.frames()) {
+      for (const sel of cssSelectors) {
+        try {
+          const loc = frame.locator(sel).first()
+          if (await loc.isVisible().catch(() => false)) return loc
+        } catch {}
+      }
+      for (const t of textOptions) {
+        try {
+          const loc = frame.getByRole('button', { name: t, exact: true }).first()
+          if (await loc.isVisible().catch(() => false)) return loc
+        } catch {}
+        try {
+          const loc2 = frame.getByText(t, { exact: true }).first()
+          if (await loc2.isVisible().catch(() => false)) return loc2
+        } catch {}
+      }
+    }
+    await page.waitForTimeout(300)
+  }
+  return null
+}
+
+// Отправить форму кода (challenge/2FA) НАДЁЖНО: кнопка (CSS ИЛИ текст) — по ВСЕМ фреймам,
+// затем Enter по полю как последний фолбэк.
 async function submitCodeForm(page, codeInput) {
-  const cssBtn = await firstVisible(page, SEL.codeSubmitCss, 2500)
-  if (cssBtn) { await cssBtn.click({ delay: 60 }).catch(() => {}); return }
-  if (await clickByText(page, SEL.codeSubmit, { timeout: 3000 })) return
+  const btn = await findButtonAnyFrame(page, SEL.codeSubmitCss, SEL.codeSubmit, 4000)
+  if (btn) {
+    const clicked = await humanClick(page, btn)
+    if (clicked) return
+    await btn.click({ delay: 60 }).catch(() => {})
+    return
+  }
   await codeInput.press('Enter').catch(() => {})
 }
 

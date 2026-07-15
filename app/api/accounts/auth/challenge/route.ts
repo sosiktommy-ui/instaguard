@@ -13,7 +13,7 @@ import { localeForCountry } from '@/lib/browser/geo'
  */
 export async function POST(req: NextRequest) {
   try {
-    const { username, code, proxyId, role, sectionId } = await req.json()
+    const { username, code, proxyId, role, sectionId, manual } = await req.json()
 
     const user = await getCurrentUser()
     if (!user) return NextResponse.json({ error: 'Не авторизован' }, { status: 401 })
@@ -46,7 +46,9 @@ export async function POST(req: NextRequest) {
     let browserState: object | null = null
     try {
       // Браузер: challenge и 2FA доводятся одним и тем же вводом кода (страница мид-флоу).
-      const result = await submitBrowserCheckpoint(clean, codeClean, proxyUrl || undefined)
+      // manual:true — явный фолбэк-путь (авто-TOTP на воркере не смог сам отправить форму) —
+      // воркер тогда использует РОВНО codeClean вместо пересчёта TOTP.
+      const result = await submitBrowserCheckpoint(clean, codeClean, proxyUrl || undefined, Boolean(manual))
       browserState = result.browserState
     } catch (e: any) {
       const raw = String(e?.message ?? 'Не удалось подтвердить код')

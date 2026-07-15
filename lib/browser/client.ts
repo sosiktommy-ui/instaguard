@@ -70,8 +70,11 @@ export function browserLogin(username: string, password: string, proxy?: string,
   return browserFetch<BrowserLoginResult>('/login', { username, password, proxy, totpSecret, locale, timezoneId })
 }
 
-export function submitBrowserCheckpoint(username: string, code: string, proxy?: string) {
-  return browserFetch<{ ok: boolean; browserState: object; username: string }>('/login/checkpoint', { username, code, proxy })
+// manual=true пропускает авто-TOTP на воркере (даже если 2FA-ключ известен) и заставляет
+// использовать РОВНО тот code, что передан — фолбэк для случая, когда авто-решение (resumeWithTotp)
+// само не справилось (DOM/тайминг), а у пользователя есть свежий код (свой authenticator/подсчитанный).
+export function submitBrowserCheckpoint(username: string, code: string, proxy?: string, manual?: boolean) {
+  return browserFetch<{ ok: boolean; browserState: object; username: string }>('/login/checkpoint', { username, code, proxy, manual })
 }
 
 /** Повтор кода. Браузерный воркер сам определяет канал по странице — method принимается для сигнатурной совместимости. */

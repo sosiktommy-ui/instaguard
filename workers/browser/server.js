@@ -14,7 +14,7 @@ import { fingerprintSelfTest } from './lib/selftest.js'
 import { captchaConfigured } from './lib/captcha.js'
 import { warmupFeed } from './lib/human.js'
 
-const BUILD = '2026-07-15-browser-63-live-search'
+const BUILD = '2026-07-15-browser-64-2fa-button-anyframe'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -115,16 +115,18 @@ app.post('/login', async (req, res) => {
 
 // Ввод кода (challenge ИЛИ 2FA) — довод входа на сохранённом контексте.
 app.post('/login/checkpoint', async (req, res) => {
-  const { username, code } = req.body || {}
+  const { username, code, manual } = req.body || {}
   const uname = String(username || '').replace(/^@/, '').trim().toLowerCase()
   const p = pending.get(uname)
   if (!p) return res.status(400).json({ error: 'expired', message: 'Сессия ввода кода истекла — начните вход заново' })
   try {
     // Если это 2FA (не email/SMS-challenge) и известен TOTP-ключ — решаем сами, а не тем
-    // кодом, что ввёл человек (ручной ввод из UI игнорируется в этом случае — авто надёжнее:
-    // пересчитывает код на каждое новое 30-секундное окно, не ограничен одной попыткой).
+    // кодом, что ввёл человек (авто надёжнее: пересчитывает код на каждое новое 30-секундное
+    // окно, не ограничен одной попыткой). manual:true — явный запрос пользователя ОБОЙТИ авто
+    // и использовать РОВНО присланный code (фолбэк, когда сама автоматика не смогла отправить
+    // форму — напр. кнопка подтверждения не найдена — а не когда ключ неверный).
     const result = await runLimited(() => (
-      p.totpSecret ? resumeWithTotp(p.context, p.totpSecret) : resumeCode(p.context, { code })
+      p.totpSecret && !manual ? resumeWithTotp(p.context, p.totpSecret) : resumeCode(p.context, { code })
     ))
     await clearPending(uname)
     res.json({ ok: true, browserState: result.storageState, username: result.username === 'unknown' ? uname : result.username })

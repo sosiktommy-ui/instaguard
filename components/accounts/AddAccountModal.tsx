@@ -91,6 +91,11 @@ export function AddAccountModal({
   const [code, setCode] = useState('')
   const [resending, setResending] = useState(false)
   const [resendNote, setResendNote] = useState('')
+  // Авто-решение 2FA (воркер сам считает TOTP из ключа и вписывает код — человек ничего не
+  // вводит). 'running' — идёт попытка на воркере; 'failed' — авто не справилось (напр. кнопка
+  // подтверждения не найдена), тогда показываем ручной фолбэк с полем кода.
+  const [auto2fa, setAuto2fa] = useState<'idle' | 'running' | 'failed'>('idle')
+  const [secondsLeft, setSecondsLeft] = useState(30 - (Math.floor(Date.now() / 1000) % 30))
 
   // Умная вставка: если вставили строку «логин пароль 2FA-ключ» — раскладываем по полям
   const onCredsPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
@@ -217,6 +222,7 @@ export function AddAccountModal({
         setCode('')
         setError('')
         setResendNote('')
+        setAuto2fa('idle')
         setStep('challenge')
         return
       }
@@ -236,8 +242,14 @@ export function AddAccountModal({
   }
 
   // Шаг 2: пользователь ввёл код из письма/SMS → подтверждаем и сохраняем аккаунт.
-  const submitCode = async () => {
-    if (!challenge || !code.trim()) return
+  // manual=true — явный фолбэк-путь ПОСЛЕ провала авто-2FA: тогда code обязателен и
+  // используется на воркере РОВНО как есть (авто-TOTP там пропускается).
+  const submitCode = async (manual = false) => {
+    if (!challenge) return
+    // Авто-попытка 2FA (manual=false, kind='2fa') не требует введённого кода — воркер игнорирует
+    // его и считает свой. Во всех остальных случаях (challenge email/SMS, ручной 2FA-фолбэк) код обязателен.
+    const isAutoAttempt = challenge.kind === '2fa' && !manual
+    if (!isAutoAttempt && !code.trim()) return
     setLoading(true)
     setError('')
     try {
@@ -246,15 +258,21 @@ export function AddAccountModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           username: challenge.username,
-          code: code.trim(),
+          code: code.trim() || '000000',
           proxyId: challenge.proxyId,
           role: challenge.role,
           sectionId: challenge.sectionId,
           mode: challenge.kind === '2fa' ? '2fa' : undefined,
+          manual: manual || undefined,
         }),
       })
       const data = await res.json()
-      if (!res.ok) { setError(data.error ?? 'Неверный код подтверждения'); setShot(data.screenshot ?? ''); return }
+      if (!res.ok) {
+        setError(data.error ?? 'Неверный код подтверждения')
+        setShot(data.screenshot ?? '')
+        if (challenge.kind === '2fa' && !manual) setAuto2fa('failed')
+        return
+      }
 
       // Черновые (HELPER) не пишем в основной стор-список — они живут на своей вкладке.
       if (role !== 'HELPER') addAccount({ id: data.account.id, username: data.account.username, followers: 0 })
@@ -262,10 +280,29 @@ export function AddAccountModal({
       onClose()
     } catch {
       setError('Ошибка сети — проверьте подключение')
+      if (challenge.kind === '2fa' && !manual) setAuto2fa('failed')
     } finally {
       setLoading(false)
     }
   }
+
+  // Авто-решение 2FA: срабатывает САМО, как только открылся этот экран — воркер уже знает
+  // 2FA-ключ (сохранён на шаге /login) и сам считает/вводит код, человеку вводить нечего.
+  // code здесь — заглушка (воркер его игнорирует, пока manual не запрошен явно).
+  useEffect(() => {
+    if (step === 'challenge' && challenge?.kind === '2fa' && auto2fa === 'idle') {
+      setAuto2fa('running')
+      submitCode(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, challenge?.kind, auto2fa])
+
+  // Живой обратный отсчёт до смены TOTP-окна (30с) — пока идёт авто-попытка.
+  useEffect(() => {
+    if (!(step === 'challenge' && challenge?.kind === '2fa' && auto2fa === 'running')) return
+    const id = setInterval(() => setSecondsLeft(30 - (Math.floor(Date.now() / 1000) % 30)), 1000)
+    return () => clearInterval(id)
+  }, [step, challenge?.kind, auto2fa])
 
   // Повторно отправить код challenge (или на другой канал: 'email' | 'sms').
   const resendCode = async (method: 'email' | 'sms') => {
@@ -359,6 +396,27 @@ export function AddAccountModal({
             <div className="font-medium">Авторизация в Instagram…</div>
             <div className="text-[13px] text-subt">Это может занять 15–30 секунд</div>
           </div>
+        ) : step === 'challenge' && challenge?.kind === '2fa' && auto2fa !== 'failed' ? (
+          // 2FA с известным ключом: бот решает САМ (считает TOTP-код из ключа и вписывает его) —
+          // ничего вводить не нужно. Только живой таймер и статус попытки.
+          <div className="space-y-4">
+            <div className="flex flex-col items-center text-center gap-3 pt-2 pb-2">
+              <div className="w-14 h-14 rounded-2xl bg-brand/10 flex items-center justify-center relative">
+                <ShieldCheck className="w-7 h-7 text-brand" />
+                <Loader2 className="w-14 h-14 text-brand/40 animate-spin absolute inset-0" />
+              </div>
+              <div className="font-semibold text-[17px]">Бот сам решает 2FA</div>
+              <div className="text-[13px] text-subt leading-relaxed max-w-[280px]">
+                Ключ 2FA уже известен — код считается автоматически и вводится ботом для <b>@{challenge?.username}</b>. Вводить ничего не нужно, просто подождите.
+              </div>
+              <div className="text-[28px] font-mono font-semibold text-brand tabular-nums">{secondsLeft}с</div>
+              <div className="text-[11.5px] text-subt">до пересчёта кода (окно 30с) — попытки продолжатся автоматически</div>
+            </div>
+            {error && <div className="text-bad text-[12.5px] whitespace-pre-wrap break-words bg-bad/[0.06] rounded-2xl p-3 max-h-56 overflow-y-auto leading-relaxed">{error}</div>}
+            <div className="flex gap-3">
+              <Button variant="secondary" className="flex-1" onClick={() => { setStep('form'); setError(''); setCode(''); setResendNote(''); setAuto2fa('idle') }}>Отмена</Button>
+            </div>
+          </div>
         ) : step === 'challenge' ? (
           <div className="space-y-4">
             <div className="flex flex-col items-center text-center gap-2 pt-1">
@@ -366,24 +424,24 @@ export function AddAccountModal({
                 <ShieldCheck className="w-6 h-6 text-brand" />
               </div>
               <div className="font-semibold text-[17px]">
-                {challenge?.kind === '2fa' ? 'Двухфакторная аутентификация' : 'Подтверждение входа'}
+                {challenge?.kind === '2fa' ? 'Автоматический ввод не сработал' : 'Подтверждение входа'}
               </div>
               <div className="text-[13px] text-subt leading-relaxed">
                 {challenge?.kind === '2fa'
-                  ? <>Введите код двухфакторной аутентификации {chDest} для <b>@{challenge?.username}</b>.</>
+                  ? <>Бот не смог сам отправить форму 2FA. Введите код {chDest} для <b>@{challenge?.username}</b> вручную (он подставится РОВНО как вы его ввели, авто-расчёт в этот раз не используется).</>
                   : <>Instagram отправил код подтверждения {chDest} аккаунта <b>@{challenge?.username}</b>. Введите его ниже.</>}
               </div>
             </div>
             <input
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
-              onKeyDown={(e) => e.key === 'Enter' && submitCode()}
+              onKeyDown={(e) => e.key === 'Enter' && submitCode(challenge?.kind === '2fa')}
               autoFocus inputMode="numeric"
               className="field text-center tracking-[0.4em] text-[20px] font-mono"
               placeholder="——————"
             />
 
-            {/* Повтор / выбор канала — только для challenge (у 2FA источник кода фиксирован) */}
+            {/* Повтор / выбор канала — только для challenge (у 2FA источник кода — свой authenticator) */}
             {challenge?.kind === 'challenge' && (
               <div className="text-[12px] text-subt text-center leading-relaxed">
                 Не пришёл код?{' '}
@@ -404,6 +462,13 @@ export function AddAccountModal({
                 )}
               </div>
             )}
+            {challenge?.kind === '2fa' && (
+              <div className="text-[12px] text-subt text-center">
+                <button type="button" onClick={() => { setAuto2fa('idle'); setError(''); setShot('') }} className="text-brand font-medium hover:underline">
+                  Попробовать авто-решение ещё раз
+                </button>
+              </div>
+            )}
             {resendNote && <div className="text-[12px] text-ok text-center">{resendNote}</div>}
 
             {error && <div className="text-bad text-[12.5px] whitespace-pre-wrap break-words bg-bad/[0.06] rounded-2xl p-3 max-h-56 overflow-y-auto leading-relaxed">{error}</div>}
@@ -415,12 +480,12 @@ export function AddAccountModal({
             )}
             <div className="text-[12px] text-subt bg-canvas rounded-2xl p-3.5 leading-relaxed">
               {challenge?.kind === '2fa'
-                ? 'Код из приложения обновляется каждые 30 секунд. Не закрывайте это окно.'
+                ? 'Код из приложения обновляется каждые 30 секунд — вводите свежий, ближе к моменту отправки.'
                 : 'Код приходит в течение минуты. Проверьте папку «Спам». Не закрывайте это окно.'}
             </div>
             <div className="flex gap-3">
-              <Button variant="secondary" className="flex-1" onClick={() => { setStep('form'); setError(''); setCode(''); setResendNote('') }} disabled={loading}>Назад</Button>
-              <Button className="flex-1" onClick={submitCode} disabled={loading || !code.trim()}>
+              <Button variant="secondary" className="flex-1" onClick={() => { setStep('form'); setError(''); setCode(''); setResendNote(''); setAuto2fa('idle') }} disabled={loading}>Назад</Button>
+              <Button className="flex-1" onClick={() => submitCode(challenge?.kind === '2fa')} disabled={loading || !code.trim()}>
                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Подтвердить'}
               </Button>
             </div>
