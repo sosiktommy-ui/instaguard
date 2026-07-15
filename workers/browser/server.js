@@ -1,7 +1,7 @@
 // Браузерный воркер InstaGuard — вход и действия Instagram через реальный Chromium.
 // См. plan.md §4. Контракт ответов согласован с lib/browser/client.ts в Next.js.
 import express from 'express'
-import { getBrowser, newAccountContext, closeContextSafe } from './lib/browser.js'
+import { getBrowser, newAccountContext, closeContextSafe, getOrCreateContext, touchContext, evictContext } from './lib/browser.js'
 import { attemptLogin, resumeCode, resendCode, loginByState, testSession, warmupSession } from './lib/login.js'
 import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment, commentLatestPost, readStoryEvents, acceptFollowRequests } from './lib/actions.js'
 import { parseFollowers, parseFollowing, parseComments, parseLikers } from './lib/parse.js'
@@ -12,7 +12,7 @@ import { toStorageState } from './lib/state.js'
 import { fingerprint } from './lib/fingerprint.js'
 import { fingerprintSelfTest } from './lib/selftest.js'
 
-const BUILD = '2026-07-14-browser-57-canvas-fp'
+const BUILD = '2026-07-14-browser-58-one-session'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -310,9 +310,19 @@ app.post('/session/run', async (req, res) => {
   if (!Array.isArray(tasks) || !tasks.length) return res.status(400).json({ error: 'bad_request', message: 'tasks пуст' })
   try {
     const result = await runLimited(async () => {
-      const context = await newAccountContext({ username: username || 'owner', proxy, storageState, locale, timezoneId })
-      try { return await runVisit(context, { tasks }) }
-      finally { await closeContextSafe(context) }
+      // ОДНА сессия на цикл: переиспользуем контекст аккаунта между целями (не «вход на каждую
+      // цель»). Прогрев — только при СВЕЖЕМ контексте (первая цель цикла), дальше без повторного входа.
+      const { context, reused, key } = await getOrCreateContext({ username: username || 'owner', proxy, storageState, locale, timezoneId })
+      try {
+        const r = await runVisit(context, { tasks, warmup: !reused })
+        if (r.brk) await evictContext(key)   // сессия ограничена/челлендж → закрыть, не переиспользовать
+        else touchContext(key)               // иначе продлить жизнь для следующей цели этого же цикла
+        return r
+      } catch (e) {
+        // мёртвый контекст (сессия/браузер закрылись/крашнулись) → выселяем, следующий вызов создаст свежий
+        if (/closed|crash|Target page|context or browser|Session closed/i.test(String(e?.message ?? ''))) await evictContext(key)
+        throw e
+      }
     })
     res.json(result)
   } catch (e) {

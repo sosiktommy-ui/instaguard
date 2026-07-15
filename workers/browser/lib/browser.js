@@ -223,6 +223,48 @@ export async function closeContextSafe(context) {
   try { await context?.close() } catch {}
 }
 
+// ── Кэш контекстов на аккаунт: ОДНА браузерная сессия на цикл ────────────────────
+// Раньше на КАЖДУЮ цель открывался и закрывался свой контекст («вошёл → действие → вышел →
+// снова вошёл» — не по-человечески). Теперь контекст переиспользуется по ключу username|proxy:
+// первая цель цикла создаёт контекст (+прогрев), остальные цели того же цикла работают в ТОМ ЖЕ
+// контексте (без повторного «входа»/прогрева), а закрывается он по ПРОСТОЮ (idle) — как человек
+// зашёл, сделал всё и ушёл. Живучесть: мёртвый контекст выселяется, следующий вызов создаст свежий.
+const _ctxCache = new Map() // key → { context, lastUsed, warmedUp }
+const CTX_IDLE_MS = 2 * 60 * 1000   // закрыть по простою 2 мин (цикл на аккаунт укладывается)
+const CTX_MAX = 3                    // держим мало открытых контекстов (RAM Chromium) — остальное закрывается
+setInterval(() => {
+  const now = Date.now()
+  for (const [k, v] of _ctxCache) {
+    if (now - v.lastUsed > CTX_IDLE_MS) { _ctxCache.delete(k); closeContextSafe(v.context) }
+  }
+}, 30 * 1000).unref?.()
+
+function ctxKey(opts) { return `${String(opts.username || 'owner').toLowerCase()}|${opts.proxy || ''}` }
+
+/**
+ * Получить переиспользуемый контекст на аккаунт (создать при первом обращении цикла).
+ * @returns {{context, reused:boolean, key:string}} reused=true → прогрев уже был, повторять НЕ надо.
+ */
+export async function getOrCreateContext(opts) {
+  const key = ctxKey(opts)
+  const hit = _ctxCache.get(key)
+  if (hit) {
+    try { hit.context.pages(); hit.lastUsed = Date.now(); return { context: hit.context, reused: true, key } } // живой
+    catch { _ctxCache.delete(key); await closeContextSafe(hit.context) }                                        // мёртвый — выселяем
+  }
+  if (_ctxCache.size >= CTX_MAX) {                     // переполнение — закрыть самый старый
+    let ok = null, ot = Infinity
+    for (const [k, v] of _ctxCache) if (v.lastUsed < ot) { ot = v.lastUsed; ok = k }
+    if (ok) { const v = _ctxCache.get(ok); _ctxCache.delete(ok); await closeContextSafe(v.context) }
+  }
+  const context = await newAccountContext(opts)
+  _ctxCache.set(key, { context, lastUsed: Date.now(), warmedUp: false })
+  return { context, reused: false, key }
+}
+
+export function touchContext(key) { const v = _ctxCache.get(key); if (v) v.lastUsed = Date.now() }
+export async function evictContext(key) { const v = _ctxCache.get(key); if (v) { _ctxCache.delete(key); await closeContextSafe(v.context) } }
+
 // context.storageState() бросает "Target page, context or browser has been closed", если контекст
 // уже закрыт (краш браузера / дохлый прокси оборвал соединение / гонка закрытия). Тогда возвращаем
 // undefined, а не роняем ВСЁ действие криптовой ошибкой — сессия просто не «дозреет» в этот раз.
