@@ -126,6 +126,9 @@ async function findButtonAnyFrame(page, cssSelectors, textOptions, timeout) {
         } catch {}
       }
       for (const t of textOptions) {
+        // Точное совпадение — приоритет (меньше риск попасть не туда), но если реальная
+        // надпись отличается на пробел/иконку/вложенный span (exact:true молчаливо мажет мимо),
+        // добавлен НЕточный (substring, регистронезависимый) фолбэк — тем же текстам.
         try {
           const loc = frame.getByRole('button', { name: t, exact: true }).first()
           if (await loc.isVisible().catch(() => false)) return loc
@@ -134,11 +137,39 @@ async function findButtonAnyFrame(page, cssSelectors, textOptions, timeout) {
           const loc2 = frame.getByText(t, { exact: true }).first()
           if (await loc2.isVisible().catch(() => false)) return loc2
         } catch {}
+        try {
+          const loc3 = frame.getByRole('button', { name: t, exact: false }).first()
+          if (await loc3.isVisible().catch(() => false)) return loc3
+        } catch {}
       }
     }
     await page.waitForTimeout(300)
   }
   return null
+}
+
+// Диагностика провала submitCodeForm: список ВСЕХ кандидатов в кнопки (button/[role=button]/
+// input[type=submit]) по всем фреймам — текст/aria/disabled/visible. В отличие от скриншота,
+// это структурированный текст: сразу видно РЕАЛЬНУЮ надпись кнопки (пробелы/иконки/регистр),
+// без чего дальнейшая подгонка селекторов — гадание вслепую.
+async function buttonsSummary(page) {
+  try {
+    const perFrame = []
+    for (const frame of page.frames()) {
+      const d = await frame.evaluate(() => {
+        const els = [...document.querySelectorAll('button, [role="button"], input[type="submit"]')].slice(0, 15)
+        return els.map((el) => ({
+          tag: el.tagName.toLowerCase(),
+          text: (el.textContent || '').trim().slice(0, 40),
+          aria: el.getAttribute('aria-label') || null,
+          disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true',
+          visible: Boolean(el.offsetWidth || el.offsetHeight || el.getClientRects().length),
+        }))
+      }).catch(() => null)
+      if (d) perFrame.push({ url: frame.url().slice(0, 60), buttons: d })
+    }
+    return perFrame
+  } catch { return null }
 }
 
 // Отправить форму кода (challenge/2FA) НАДЁЖНО: кнопка (CSS ИЛИ текст) — по ВСЕМ фреймам,
@@ -472,7 +503,11 @@ export async function resumeCode(context, { code }) {
       if (/incorrect|неверн|wrong|didn't match|check the code/i.test(txt)) await fail(page, 'bad_code: ' + txt.trim())
     }
   }
-  await fail(page, 'bad_code: код не принят (возможно, истёк) — запросите новый и попробуйте снова')
+  {
+    const btns = await buttonsSummary(page)
+    const btnTxt = btns ? ` · кнопки по фреймам: ${JSON.stringify(btns)}` : ''
+    await fail(page, `bad_code: код не принят (возможно, истёк, либо форма не отправилась — см. кнопки ниже) — запросите новый и попробуйте снова.${btnTxt}`)
+  }
 }
 
 /**
@@ -517,7 +552,12 @@ export async function resumeWithTotp(context, totpSecret) {
     }
     await page.waitForTimeout(1000)
   }
-  await fail(page, 'bad_code: автоматический TOTP-код не принят (перепробованы текущее/соседние окна) — ключ 2FA неверный ИЛИ рассинхрон часов; сверьте: тот же ключ в Google Authenticator должен давать тот же код')
+  // Дамп кнопок ПЕРЕД финальным провалом — если реальная причина не «неверный код», а
+  // «кнопка не нажалась» (как уже было — submitCodeForm не находил Continue), это будет
+  // видно в тексте ошибки без необходимости смотреть скриншот.
+  const btns = await buttonsSummary(page)
+  const btnTxt = btns ? ` · кнопки по фреймам: ${JSON.stringify(btns)}` : ''
+  await fail(page, `bad_code: автоматический TOTP-код не принят (перепробованы текущее/соседние окна) — ключ 2FA неверный ИЛИ рассинхрон часов ИЛИ форма не отправилась (см. кнопки ниже); сверьте: тот же ключ в Google Authenticator должен давать тот же код.${btnTxt}`)
 }
 
 // Попытаться повторно отправить код (клик по «Resend»).
