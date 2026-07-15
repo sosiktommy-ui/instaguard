@@ -17,18 +17,67 @@ function profileMatches(page, username) {
   } catch { return false }
 }
 
+// §4.1 (B) ЖИВОЙ переход через ПОИСК: как человек — открыл поиск, набрал ник по буквам, кликнул
+// точное совпадение. Локализованные aria-label иконки поиска. Всё best-effort: ЛЮБОЙ сбой → false
+// → openProfile молча падает на прямой URL (текущее поведение, ничего не ломается). Точное
+// совпадение href=`/{ник}/` + сверка профиля после клика = защита от «не того».
+const SEARCH_NAV_LABELS = ['Search', 'Поиск', 'Пошук', 'Buscar', 'Pesquisar', 'Cari', 'Ara', 'Recherche', '検索', '검색', 'Cerca', 'Suche']
+const SEARCH_PROB = 0.4   // доля переходов через поиск (варьируем: не искать одного 4 раза подряд = роботно)
+
+async function tryOpenViaSearch(page, uname) {
+  // Открыть панель поиска кликом по nav-иконке (мы уже на ленте после preActionBrowse).
+  let opened = false
+  for (const label of SEARCH_NAV_LABELS) {
+    const nav = page.locator(`svg[aria-label="${label}"]`).first()
+    if (await nav.isVisible().catch(() => false)) {
+      const anc = nav.locator('xpath=ancestor::*[(@role="button") or (self::a) or (self::button)][1]')
+      await humanClick(page, (await anc.count().catch(() => 0)) ? anc.first() : nav)
+      opened = true
+      break
+    }
+  }
+  if (!opened) return false
+  await jitter(700, 1400)
+  const input = page.locator('input[aria-label*="Search" i], input[aria-label*="Поиск" i], input[aria-label*="Пошук" i], input[placeholder*="Search" i], input[placeholder*="Поиск" i]').first()
+  if (!(await input.isVisible().catch(() => false))) return false
+  await input.click({ delay: 40 }).catch(() => {})
+  await humanType(input, uname)                 // печать ПО БУКВАМ (живое)
+  await jitter(1200, 2200)                       // результаты подгружаются
+  const result = page.locator(`a[href="/${uname}/"]`).first()   // ТОЧНОЕ совпадение ника
+  if (!(await result.isVisible().catch(() => false))) return false
+  await humanClick(page, result)
+  await page.waitForLoadState('domcontentloaded').catch(() => {})
+  await jitter(1000, 2000)
+  return profileMatches(page, uname)
+}
+
 async function openProfile(context, username) {
+  const uname = String(username).replace(/^@/, '').trim().toLowerCase()
   const page = await context.newPage()
   await preActionBrowse(page) // §1.2: полистать ленту перед заходом к цели — действие не «вхолодную»
-  await gotoResilient(page, `https://www.instagram.com/${username}/`, { timeout: 30000, retries: 1, backoffMs: [2000] })
-  await jitter(1200, 2500)
-  await idleMouse(page)
-  // §4.1 сверка: открылся НЕ профиль @username (редирект/недоступен) → НЕ действуем. Ошибка
-  // retryable (не session-dead/не challenge) → цель повторится; лог покажет причину.
-  if (!profileMatches(page, username)) {
-    const url = page.url()
-    await page.close().catch(() => {})
-    throw new Error(`wrong_profile: открылся не профиль @${username} (${url}) — действие пропущено, повторим`)
+  // §4.1 живой переход: варьированно пробуем ПОИСК, иначе — прямой URL (резерв). Поиск не удался/
+  // открыл не того → тихо на URL (ничего не ломаем).
+  let via = 'url'
+  if (Math.random() < SEARCH_PROB) {
+    try { if (await tryOpenViaSearch(page, uname)) via = 'search' } catch { /* → URL */ }
+  }
+  if (via !== 'search') {
+    await gotoResilient(page, `https://www.instagram.com/${uname}/`, { timeout: 30000, retries: 1, backoffMs: [2000] })
+    await jitter(1200, 2500)
+    await idleMouse(page)
+  }
+  // §4.1 СВЕРКА: открыт НЕ тот профиль? Если пришли поиском — резерв прямой URL (и перепроверка);
+  // если и URL дал не тот (удалён/переименован/недоступен) → НЕ действуем (retryable, повторим).
+  if (!profileMatches(page, uname)) {
+    if (via === 'search') {
+      await gotoResilient(page, `https://www.instagram.com/${uname}/`, { timeout: 30000, retries: 1, backoffMs: [2000] }).catch(() => {})
+      await jitter(1000, 2000)
+    }
+    if (!profileMatches(page, uname)) {
+      const url = page.url()
+      await page.close().catch(() => {})
+      throw new Error(`wrong_profile: открылся не профиль @${uname} (${url}) — действие пропущено, повторим`)
+    }
   }
   return page
 }
@@ -45,6 +94,21 @@ function requireSession(context) {
 // svg-heart по локализованному aria-label и кликаем его кликабельного предка (button|[role=button]),
 // а если обёртки нет — сам svg. Возвращает true, если лайк нажат.
 const LIKE_LABELS = ['Like', 'Нравится', 'Подобається', 'Me gusta', 'Curtir', 'J’aime', "J'aime", 'Suka', 'いいね！', '좋아요', 'Beğen']
+// «Уже лайкнуто» (заполненное сердце) — для ПОДТВЕРЖДЕНИЯ лайка (§4.4).
+const UNLIKE_LABELS = ['Unlike', 'Не нравится', 'Не подобається', 'Ya no me gusta', 'Descurtir', 'Je n’aime plus', "Je n'aime plus", 'Batalkan suka', 'Beğenmekten vazgeç', 'いいね！を取り消す', '좋아요 취소', 'Non mi piace più', 'Gefällt mir nicht mehr']
+
+// §4.4 ПОДТВЕРЖДЕНИЕ лайка (ЛЕНИЕНТНО, без ложных «не выполнено»): true, если появилось «Unlike»
+// (заполненное сердце) ИЛИ «Like»-сердце больше не видно (перерисовалось/detach). false ТОЛЬКО когда
+// «Like»-сердце ЯВНО осталось на месте (клик не применился). Ничего не нашли → считаем ok (lenient).
+async function likeConfirmed(page) {
+  for (const l of UNLIKE_LABELS) {
+    if (await page.locator(`svg[aria-label="${l}"]`).first().isVisible().catch(() => false)) return true
+  }
+  for (const l of LIKE_LABELS) {
+    if (await page.locator(`svg[aria-label="${l}"]`).first().isVisible().catch(() => false)) return false
+  }
+  return true
+}
 async function clickLikeHeart(page, root) {
   const scope = root || page
   for (const label of LIKE_LABELS) {
@@ -267,8 +331,10 @@ export async function likeUser(context, { targetUsername, count = 1, dryRun }) {
       await page.goto(`https://www.instagram.com${href}`, { waitUntil: 'domcontentloaded', timeout: 45000 })
       await jitter(1000, 2200)
       if (await clickLikeHeart(page)) {   // локализованный + любая обёртка (§1.3 humanClick внутри)
-        liked++
-        await jitter(1500, 3000)
+        await jitter(700, 1400)
+        // §4.4 подтверждение: засчитываем лайк, только если сердце реально переключилось (иначе клик
+        // не применился). Ленивентно — detach/неопределённость → считаем ok (без ложных «не лайкнуто»).
+        if (await likeConfirmed(page)) { liked++; await jitter(1200, 2600) }
       }
     } catch {}
   }
