@@ -245,12 +245,16 @@ export async function dismissInterstitials(page) {
   }
 }
 
-// Извлечь username залогиненного аккаунта (для сохранения записи).
+// Извлечь username залогиненного аккаунта (для сохранения записи). ТОЛЬКО чтение DOM/навигация
+// живым браузером — ни одного сетевого запроса от нас (проектное правило: только эмуль, никаких
+// прямых API-вызовов, даже изнутри залогиненного контекста — легаси-API уже банил аккаунты).
 export async function extractUsername(page) {
   // 1) страница редактирования профиля стабильно содержит поле username
   try {
     await page.goto('https://www.instagram.com/accounts/edit/', { waitUntil: 'domcontentloaded', timeout: 30000 })
     await jitter(800, 1600)
+    // На этой странице может выскочить СВОЙ интерстишл (не только на главной) — дожимаем перед чтением.
+    await dismissInterstitials(page).catch(() => {})
     const inp = page.locator('input[name="username"], input#pepUsername, input[maxlength="30"]').first()
     if (await inp.isVisible().catch(() => false)) {
       const v = (await inp.inputValue().catch(() => '')).trim()
@@ -265,6 +269,21 @@ export async function extractUsername(page) {
         .map((a) => a.getAttribute('href'))
         .filter((h) => h && /^\/[^/]+\/$/.test(h) && !skip.some((s) => h.startsWith(s)))
       return links[0] ? links[0].replace(/\//g, '') : null
+    })
+    if (u) return u.replace(/^@/, '').toLowerCase()
+  } catch {}
+  // 3) фолбэк: свой аватар в шапке несёт username прямо в alt-тексте картинки
+  // (Instagram рендерит его как «{username}'s profile picture» / локализованные варианты) —
+  // это ВИДИМЫЙ текст, уже отрисованный браузером, чтение DOM, не сетевой вызов.
+  try {
+    const u = await page.evaluate(() => {
+      const imgs = [...document.querySelectorAll('img[alt]')]
+      for (const img of imgs) {
+        const alt = img.getAttribute('alt') || ''
+        const m = alt.match(/^(.+?)['’]s profile picture$/i) || alt.match(/^Фото профиля (.+)$/i) || alt.match(/^(.+?) profile picture$/i)
+        if (m && m[1] && !/\s/.test(m[1])) return m[1]
+      }
+      return null
     })
     if (u) return u.replace(/^@/, '').toLowerCase()
   } catch {}
