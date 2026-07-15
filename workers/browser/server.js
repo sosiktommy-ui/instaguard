@@ -2,7 +2,7 @@
 // См. plan.md §4. Контракт ответов согласован с lib/browser/client.ts в Next.js.
 import express from 'express'
 import { getBrowser, newAccountContext, closeContextSafe, getOrCreateContext, touchContext, evictContext, isCtxWarmed, markCtxWarmed } from './lib/browser.js'
-import { attemptLogin, resumeCode, resendCode, loginByState, testSession, warmupSession } from './lib/login.js'
+import { attemptLogin, resumeCode, resumeWithTotp, resendCode, loginByState, testSession, warmupSession } from './lib/login.js'
 import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment, commentLatestPost, readStoryEvents, acceptFollowRequests } from './lib/actions.js'
 import { parseFollowers, parseFollowing, parseComments, parseLikers } from './lib/parse.js'
 import { runVisit } from './lib/session.js'
@@ -92,8 +92,11 @@ app.post('/login', async (req, res) => {
       try {
         const r = await attemptLogin(context, { username: uname, password, totpSecret })
         if (r.ok) { await closeContextSafe(context); return { ok: true, browserState: r.storageState, username: r.username } }
-        // challenge/2FA — контекст держим для ввода кода
-        pending.set(uname, { context, createdAt: Date.now() })
+        // challenge/2FA — контекст держим для ввода кода. totpSecret сохраняем ТОЛЬКО для
+        // needs2fa (email/SMS-challenge не имеет TOTP-ключа) — attemptLogin уже исчерпал свои
+        // ~3 встроенные попытки, но /login/checkpoint может решить его сам ещё раз, без
+        // ручного кода от пользователя (см. resumeWithTotp).
+        pending.set(uname, { context, createdAt: Date.now(), totpSecret: r.needs2fa ? totpSecret : undefined })
         return r.needs2fa
           ? { needs2fa: true, username: uname }
           : { needsCheckpoint: true, channel: r.channel ?? null, username: uname }
@@ -117,7 +120,12 @@ app.post('/login/checkpoint', async (req, res) => {
   const p = pending.get(uname)
   if (!p) return res.status(400).json({ error: 'expired', message: 'Сессия ввода кода истекла — начните вход заново' })
   try {
-    const result = await runLimited(() => resumeCode(p.context, { code }))
+    // Если это 2FA (не email/SMS-challenge) и известен TOTP-ключ — решаем сами, а не тем
+    // кодом, что ввёл человек (ручной ввод из UI игнорируется в этом случае — авто надёжнее:
+    // пересчитывает код на каждое новое 30-секундное окно, не ограничен одной попыткой).
+    const result = await runLimited(() => (
+      p.totpSecret ? resumeWithTotp(p.context, p.totpSecret) : resumeCode(p.context, { code })
+    ))
     await clearPending(uname)
     res.json({ ok: true, browserState: result.storageState, username: result.username === 'unknown' ? uname : result.username })
   } catch (e) {

@@ -251,10 +251,13 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
   if (submit) await humanClick(page, submit)   // §1.3: человеческий подвод курсора к «Войти»
   else await passInput.press('Enter')
 
-  // Ждём исход до ~28с (при device-approval/капче дедлайн продлевается — см. ниже).
+  // Ждём исход до ~28с (при device-approval/капче/2FA дедлайн продлевается — см. ниже).
   let deadline = Date.now() + 28000
   let approvalExtended = false
   let captchaTried = false
+  let totpExtended = false
+  let totpWindow = -1
+  let totpAttempts = 0
   while (Date.now() < deadline) {
     await page.waitForTimeout(700)
 
@@ -276,18 +279,27 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
     // из-за чего обычный challenge ошибочно уходил в 2FA-ветку (аудит-баг #3). Дефолт для
     // «просто поле кода» — challenge (ветка ниже), это почти всегда почта/SMS.
     if (urlHas(url, URLS.twoFactor) || (await pageHasText(page, ['two-factor', 'two factor', 'двухфактор', 'authentication app', 'приложении для аутентификации', 'authenticator app']))) {
-      if (totpSecret) {
-        const codeInput = await firstVisible(page, SEL.codeInput, 6000)
-        if (codeInput) {
-          await humanType(codeInput, totpCode(totpSecret))
-          await submitCodeForm(page, codeInput)
-          await page.waitForTimeout(2500)
-          if (await hasSessionCookie(context)) {
-            await dismissInterstitials(page)
-            const uname = (await extractUsername(page)) || username
-            return { ok: true, username: uname, storageState: await safeStorageState(context) }
+      // Раньше пробовали код РОВНО ОДИН раз, ждали 2.5с и при неуспехе сразу отдавали
+      // needs2fa (ручной ввод) — если Instagram не успевал подтвердить чуть дольше (или
+      // код улетел на границе 30-секундного окна), автоматика сдавалась без причины, хотя
+      // ключ верный. Теперь остаёмся в ЭТОЙ ветке до ~3 TOTP-окон подряд (~100с, дедлайн
+      // продлевается один раз аналогично device-approval), пересчитывая код на КАЖДОЕ новое
+      // окно — и только если ни одна попытка не прошла, отдаём needs2fa как честный фолбэк.
+      if (totpSecret && totpAttempts < 3) {
+        if (!totpExtended) { totpExtended = true; deadline = Math.max(deadline, Date.now() + 100000) }
+        const window = Math.floor(Date.now() / 1000 / 30)
+        if (window !== totpWindow) {
+          totpWindow = window
+          totpAttempts++
+          const codeInput = await firstVisible(page, SEL.codeInput, 6000)
+          if (codeInput) {
+            await codeInput.fill('').catch(() => {})
+            await humanType(codeInput, totpCode(totpSecret))
+            await submitCodeForm(page, codeInput)
           }
         }
+        await page.waitForTimeout(1000)
+        continue
       }
       return { needs2fa: true }
     }
@@ -413,10 +425,54 @@ export async function resumeCode(context, { code }) {
     const err = await firstVisible(page, SEL.loginError, 400)
     if (err) {
       const txt = (await err.textContent().catch(() => '')) || ''
-      if (/incorrect|неверн|wrong|didn't match|check the code/i.test(txt)) throw new Error('bad_code: ' + txt.trim())
+      // diag (скрин + DOM) приложен и здесь — раньше «bad_code» ничего не показывал, и
+      // при повторных провалах правильного (проверенного вручную) кода не было видно,
+      // на какой РЕАЛЬНО экран попал код (не туда введён / не тот скрин / что-то ещё).
+      if (/incorrect|неверн|wrong|didn't match|check the code/i.test(txt)) await fail(page, 'bad_code: ' + txt.trim())
     }
   }
-  throw new Error('bad_code: код не принят (возможно, истёк) — запросите новый и попробуйте снова')
+  await fail(page, 'bad_code: код не принят (возможно, истёк) — запросите новый и попробуйте снова')
+}
+
+/**
+ * Автоматическое решение 2FA-экрана ГОТОВЫМ base32-ключом (без участия человека) — на
+ * УЖЕ ОТКРЫТОМ мид-флоу контексте (когда attemptLogin исчерпал свои встроенные ~3 попытки
+ * и отдал needs2fa). Пересчитывает код на каждое новое 30с-окно, как и внутри attemptLogin.
+ * @returns { ok:true, username, storageState }  @throws Error('bad_code'|...) иначе
+ */
+export async function resumeWithTotp(context, totpSecret) {
+  const pages = context.pages()
+  const page = pages[pages.length - 1] || (await context.newPage())
+  await page.waitForLoadState('domcontentloaded', { timeout: 4000 }).catch(() => {})
+  await handleCaptchaIfPresent(page).catch(() => false)
+
+  const CODE_SELECTORS = [
+    ...SEL.codeInput,
+    'input[placeholder*="code" i]',
+    'input[type="text"]:not([name="pass"]):not([name="password"])',
+  ]
+
+  let totpWindow = -1
+  const deadline = Date.now() + 100000 // ~3 TOTP-окна с запасом
+  while (Date.now() < deadline) {
+    if (await hasSessionCookie(context)) {
+      await dismissInterstitials(page)
+      const uname = (await extractUsername(page)) || 'unknown'
+      return { ok: true, username: uname, storageState: await safeStorageState(context) }
+    }
+    const window = Math.floor(Date.now() / 1000 / 30)
+    if (window !== totpWindow) {
+      totpWindow = window
+      const codeInput = await firstVisibleAnyFrame(page, CODE_SELECTORS, 6000)
+      if (codeInput) {
+        await codeInput.fill('').catch(() => {})
+        await humanType(codeInput, totpCode(totpSecret))
+        await submitCodeForm(page, codeInput)
+      }
+    }
+    await page.waitForTimeout(1000)
+  }
+  await fail(page, 'bad_code: автоматический TOTP-код не принят за несколько окон подряд — проверьте 2FA-ключ или войдите вручную')
 }
 
 // Попытаться повторно отправить код (клик по «Resend»).
