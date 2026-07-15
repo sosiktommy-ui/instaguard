@@ -4,12 +4,32 @@ import { SEL } from './selectors.js'
 import { firstVisible, clickByText, findByText, pageHasText, hasSessionCookie, gotoResilient, safeStorageState } from './browser.js'
 import { humanType, jitter, idleMouse, preActionBrowse, humanClick } from './human.js'
 
+// СВЕРКА ПРОФИЛЯ (§4.1): открытый URL должен вести ИМЕННО на @username. Совпадение — happy-path
+// (по прямой ссылке первый сегмент пути = ник, поведение не меняется). Несовпадение = редирект
+// на другой профиль / на главную (аккаунт удалён/переименован/недоступен) / на логин — тогда
+// действовать НЕЛЬЗЯ (иначе действие «не тому»). Консервативно: блокируем ТОЛЬКО при явном
+// расхождении первого сегмента, happy-path не трогаем.
+function profileMatches(page, username) {
+  try {
+    const u = new URL(page.url())
+    const seg = decodeURIComponent((u.pathname.split('/').filter(Boolean)[0] || '')).toLowerCase()
+    return seg === String(username).toLowerCase()
+  } catch { return false }
+}
+
 async function openProfile(context, username) {
   const page = await context.newPage()
   await preActionBrowse(page) // §1.2: полистать ленту перед заходом к цели — действие не «вхолодную»
   await gotoResilient(page, `https://www.instagram.com/${username}/`, { timeout: 30000, retries: 1, backoffMs: [2000] })
   await jitter(1200, 2500)
   await idleMouse(page)
+  // §4.1 сверка: открылся НЕ профиль @username (редирект/недоступен) → НЕ действуем. Ошибка
+  // retryable (не session-dead/не challenge) → цель повторится; лог покажет причину.
+  if (!profileMatches(page, username)) {
+    const url = page.url()
+    await page.close().catch(() => {})
+    throw new Error(`wrong_profile: открылся не профиль @${username} (${url}) — действие пропущено, повторим`)
+  }
   return page
 }
 
