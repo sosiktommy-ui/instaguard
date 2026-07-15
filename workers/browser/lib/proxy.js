@@ -72,6 +72,18 @@ async function schemeWorks(browser, scheme, p) {
  * дальше по цепочке всё равно придёт честная ошибка входа/действия).
  * @param {() => Promise<import('playwright-core').Browser>} getBrowser
  */
+async function probeSchemesOnce(browser, p) {
+  // Схемы пробуем ПАРАЛЛЕЛЬНО — первая рабочая выигрывает. Мёртвый прокси выявляется
+  // за ~8с (один таймаут), а не за ~24с последовательного перебора.
+  const probes = ['http', 'socks5', 'socks4'].map((scheme) =>
+    schemeWorks(browser, scheme, p).then((ok) => {
+      if (ok) return scheme
+      throw new Error('scheme-fail')
+    }),
+  )
+  try { return await Promise.any(probes) } catch { return null }
+}
+
 export async function resolveProxy(getBrowser, raw) {
   const p = splitProxy(raw)
   if (!p) return null
@@ -81,25 +93,26 @@ export async function resolveProxy(getBrowser, raw) {
   if (cached) return toPlaywrightProxy(cached, p)
 
   const browser = await getBrowser()
-  // Схемы пробуем ПАРАЛЛЕЛЬНО — первая рабочая выигрывает. Мёртвый прокси выявляется
-  // за ~8с (один таймаут), а не за ~24с последовательного перебора. Это критично:
-  // при мёртвом прокси вход иначе висел до клиентского таймаута (см. CLAUDE.md — TCP_INVALID).
-  const probes = ['http', 'socks5', 'socks4'].map((scheme) =>
-    schemeWorks(browser, scheme, p).then((ok) => {
-      if (ok) return scheme
-      throw new Error('scheme-fail')
-    }),
-  )
-  let winner = null
-  try { winner = await Promise.any(probes) } catch { winner = null }
+  // Живой прокси (особенно резидентный/мобильный/ротирующий) иногда не успевает за один
+  // 8-секундный проброс — это НЕ смерть прокси, а разовое моргание (холодный тоннель у
+  // ротирующего пула, задержка апстрима и т.п.). Раньше единственный неудачный проброс сразу
+  // давал proxy_dead на живом прокси (жалоба пользователя: «проверил кучу — все живые»,
+  // хотя вход тем же прокси падает). Теперь — до 2 попыток с короткой паузой между ними,
+  // прежде чем честно признать прокси мёртвым; на реально дохлом это добавляет лишние ~10с,
+  // на живом, но подтормаживающем — спасает от ложного отказа.
+  let winner = await probeSchemesOnce(browser, p)
+  if (!winner) {
+    await new Promise((r) => setTimeout(r, 2500))
+    winner = await probeSchemesOnce(browser, p)
+  }
   if (winner) {
     _schemeCache.set(p.hostPort, winner)
     return toPlaywrightProxy(winner, p)
   }
-  // Ни одна схема не дошла до Instagram → прокси мёртв/битый (или неверные креды/тип).
+  // Ни одна схема не дошла до Instagram за 2 попытки → прокси мёртв/битый (или неверные креды/тип).
   // Быстрый ЯВНЫЙ отказ вместо доомной навигации на 40+ секунд.
   throw new Error(
-    'proxy_dead: прокси не отвечает ни по одной схеме (http/socks5/socks4). ' +
+    'proxy_dead: прокси не отвечает ни по одной схеме (http/socks5/socks4) за 2 попытки. ' +
     'Проверьте его на вкладке «Прокси» → «Проверить IP» или замените — ' +
     'вход через нерабочий прокси невозможен. В сетевом логе такой прокси даёт TCP_INVALID.',
   )
