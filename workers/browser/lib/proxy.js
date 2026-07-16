@@ -103,9 +103,13 @@ async function schemeWorks(browser, scheme, p) {
  * @param {() => Promise<import('playwright-core').Browser>} getBrowser
  */
 async function probeSchemesOnce(browser, p) {
+  // С логином/паролем socks5/socks4 пробовать БЕССМЫСЛЕННО: Chromium их с авторизацией не умеет
+  // («Browser does not support socks5 proxy authentication») — проба всегда упадёт. Пробуем только
+  // http (единственная схема, поддерживающая авторизацию в этом движке). Без кредов — весь набор.
+  const schemes = (p.username || p.password) ? ['http'] : ['http', 'socks5', 'socks4']
   // Схемы пробуем ПАРАЛЛЕЛЬНО — первая рабочая выигрывает. Мёртвый прокси выявляется
   // за ~8с (один таймаут), а не за ~24с последовательного перебора.
-  const probes = ['http', 'socks5', 'socks4'].map((scheme) =>
+  const probes = schemes.map((scheme) =>
     schemeWorks(browser, scheme, p).then((ok) => {
       if (ok) return scheme
       throw new Error('scheme-fail')
@@ -129,6 +133,27 @@ export async function resolveProxy(getBrowser, raw) {
       'и поставьте их ПЕРЕД логином. Порт обязан быть числом.',
     )
   }
+  // ── SOCKS + авторизация: ограничение САМОГО Chromium, не наше ────────────────────────────
+  // browser.newContext бросает «Browser does not support socks5 proxy authentication»: движок
+  // умеет SOCKS5 БЕЗ логина/пароля ЛИБО HTTP(S) С логином/паролем, но не SOCKS+auth (живой кейс
+  // 2026-07-16). Почти все резидентные провайдеры отдают ТОТ ЖЕ прокси и по HTTP — пробуем http
+  // на том же host:port: заработало → молча используем (пользователю ничего менять не нужно).
+  // Не заработало → честная ошибка с инструкцией, а не крипто-текст от Playwright.
+  if (p.scheme && /^socks/i.test(p.scheme) && (p.username || p.password)) {
+    const browser = await getBrowser()
+    if (await schemeWorks(browser, 'http', p)) {
+      _schemeCache.set(p.hostPort, 'http')
+      return toPlaywrightProxy('http', p)
+    }
+    throw new Error(
+      'proxy_socks_auth: Chromium не поддерживает SOCKS5/SOCKS4 с логином и паролем — это ограничение ' +
+      'самого браузера (умеет либо SOCKS без авторизации, либо HTTP с авторизацией). Ваш прокси живой, ' +
+      'но в таком виде браузер к нему подключиться не может. Что делать: возьмите у провайдера HTTP(S)-доступ ' +
+      'к ЭТОМУ ЖЕ прокси (обычно тот же хост, другой порт) и вставьте строку БЕЗ «socks5://» — например ' +
+      '«rp.proxxxymiron.cc:8000:логин:пароль». HTTP-прокси с логином/паролем работает штатно.',
+    )
+  }
+
   if (p.scheme) return toPlaywrightProxy(p.scheme, p)
 
   const cached = _schemeCache.get(p.hostPort)
