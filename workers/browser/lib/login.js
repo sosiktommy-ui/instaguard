@@ -29,7 +29,16 @@ async function handleCaptchaIfPresent(page) {
 // у инпута БЕЗ атрибута type (частый случай, браузер дефолтит на text сам) этот CSS-селектор
 // молча пропустит поле. Поэтому ниже есть отдельный `input:not([type])` — самый вероятный
 // корень первого живого провала (`captcha_input_not_found`, картинка нашлась, поле — нет).
+// Реальная надпись поля с живого экрана (2026-07-16): «Enter the code from the image» — ни в
+// одном варианте не содержит слово «captcha», поэтому узкие *captcha*-селекторы ниже её мимо
+// матчили. Эти — самые точные (проверенная фраза), идут первыми.
 const CAPTCHA_INPUT_SELECTORS = [
+  'input[aria-label*="code from the image" i]',
+  'input[placeholder*="code from the image" i]',
+  'textarea[aria-label*="code from the image" i]',
+  'textarea[placeholder*="code from the image" i]',
+  'input[aria-label*="enter the code" i]',
+  'input[placeholder*="enter the code" i]',
   'input[name*="captcha" i]',
   'input[aria-label*="captcha" i]',
   'input[placeholder*="captcha" i]',
@@ -48,7 +57,35 @@ const CAPTCHA_INPUT_SELECTORS = [
 // картинка капчи точно нашлась и человек видел на скрине поле для ввода — вероятно, поле НЕ
 // <input> (защита от автозаполнения/скриптовых ботов часто рисует поле как textarea/
 // contenteditable-div/role=textbox). Расширяем поиск до этих тегов ПЕРЕД координатным фолбэком.
+// Известные фразы поля капчи (2026-07-16: реальный текст «Enter the code from the image»).
+// Playwright getByPlaceholder/getByRole матчат по ВЫЧИСЛЕННОМУ accessible name (placeholder,
+// aria-label, связанный <label>) — надёжнее сырых CSS-атрибутов, ловят и нестандартную вёрстку
+// (div[role=textbox] без aria-label, но с <label> рядом).
+const CAPTCHA_FIELD_PHRASES = [/code from the image/i, /enter the code/i, /код с картинки/i, /введите код/i]
+
+async function findCaptchaFieldByAccessibleName(page) {
+  for (const frame of page.frames()) {
+    for (const rx of CAPTCHA_FIELD_PHRASES) {
+      try {
+        const byPlaceholder = frame.getByPlaceholder(rx).first()
+        if (await byPlaceholder.isVisible({ timeout: 600 }).catch(() => false)) return byPlaceholder
+      } catch {}
+      try {
+        const byRole = frame.getByRole('textbox', { name: rx }).first()
+        if (await byRole.isVisible({ timeout: 600 }).catch(() => false)) return byRole
+      } catch {}
+      try {
+        const byLabel = frame.getByLabel(rx).first()
+        if (await byLabel.isVisible({ timeout: 600 }).catch(() => false)) return byLabel
+      } catch {}
+    }
+  }
+  return null
+}
+
 async function findCaptchaFieldAnyFrame(page) {
+  const byPhrase = await findCaptchaFieldByAccessibleName(page)
+  if (byPhrase) return { kind: 'input', locator: byPhrase }
   const input = await firstVisibleAnyFrame(page, CAPTCHA_INPUT_SELECTORS, 1500)
   if (input) return { kind: 'input', locator: input }
   const editable = await firstVisibleAnyFrame(page, ['textarea', '[contenteditable="true"]', '[role="textbox"]'], 1500)
