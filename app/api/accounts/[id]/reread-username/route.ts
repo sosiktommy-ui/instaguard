@@ -33,6 +33,8 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
         screenshot: result.diag?.screenshot ?? null,
         pageTitle: result.diag?.title ?? null,
         dom: result.dom,
+        needsCaptcha: result.needsCaptcha ?? false,
+        captchaImage: result.captchaImage ?? null,
       })
     }
     const clean = result.username.replace(/^@/, '').trim().toLowerCase()

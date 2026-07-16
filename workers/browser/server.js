@@ -2,7 +2,8 @@
 // См. plan.md §4. Контракт ответов согласован с lib/browser/client.ts в Next.js.
 import express from 'express'
 import { getBrowser, newAccountContext, closeContextSafe, getOrCreateContext, touchContext, evictContext, isCtxWarmed, markCtxWarmed } from './lib/browser.js'
-import { attemptLogin, resumeCode, resumeWithTotp, resendCode, loginByState, testSession, warmupSession, rereadUsername } from './lib/login.js'
+import { attemptLogin, resumeCode, resumeWithTotp, resendCode, loginByState, testSession, warmupSession, rereadUsername, extractUsername, fillImageCaptcha } from './lib/login.js'
+import { safeStorageState } from './lib/browser.js'
 import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment, commentLatestPost, readStoryEvents, acceptFollowRequests } from './lib/actions.js'
 import { parseFollowers, parseFollowing, parseComments, parseLikers } from './lib/parse.js'
 import { runVisit } from './lib/session.js'
@@ -14,7 +15,7 @@ import { fingerprintSelfTest } from './lib/selftest.js'
 import { captchaConfigured } from './lib/captcha.js'
 import { warmupFeed } from './lib/human.js'
 
-const BUILD = '2026-07-15-browser-70-reread-username-diag'
+const BUILD = '2026-07-16-browser-71-suspended-captcha'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -65,6 +66,22 @@ async function clearPending(username) {
   if (p) { await closeContextSafe(p.context); pending.delete(username) }
 }
 
+// ── Хранилище незавершённых image-капч (см. /session/username → needsCaptcha → /session/captcha) ──
+// Тот же паттерн, что pending выше, но отдельная карта — независимый TTL/жизненный цикл.
+const pendingCaptcha = new Map() // username → { context, createdAt }
+const CAPTCHA_TTL = 10 * 60 * 1000
+setInterval(() => {
+  const now = Date.now()
+  for (const [k, v] of pendingCaptcha) {
+    if (now - v.createdAt > CAPTCHA_TTL) { closeContextSafe(v.context); pendingCaptcha.delete(k) }
+  }
+}, 60 * 1000).unref?.()
+
+async function clearPendingCaptcha(username) {
+  const p = pendingCaptcha.get(username)
+  if (p) { await closeContextSafe(p.context); pendingCaptcha.delete(username) }
+}
+
 function errStatus(message) {
   const kind = String(message).split(':')[0]
   return { kind, message: String(message) }
@@ -77,7 +94,7 @@ app.all('/health', async (_req, res) => {
   try { const b = await getBrowser(); chromium = b.version() } catch (e) { chromium = 'error: ' + e.message }
   // headful=true когда браузер видимый (под Xvfb в проде). display — есть ли виртуальный дисплей.
   const headful = process.env.BROWSER_HEADLESS !== '1'
-  res.json({ ok: true, build: BUILD, playwright: true, chromium, headful, display: process.env.DISPLAY || null, concurrency: MAX, active, pending: pending.size, captcha: captchaConfigured() })
+  res.json({ ok: true, build: BUILD, playwright: true, chromium, headful, display: process.env.DISPLAY || null, concurrency: MAX, active, pending: pending.size, pendingCaptcha: pendingCaptcha.size, captcha: captchaConfigured() })
 })
 
 // Вход по логину/паролю.
@@ -199,16 +216,53 @@ app.post('/session/warmup', async (req, res) => {
 app.post('/session/username', async (req, res) => {
   const { storageState, proxy, username, locale, timezoneId } = req.body || {}
   if (!storageState) return res.status(400).json({ error: 'bad_request', message: 'storageState обязателен' })
+  const uname = String(username || 'owner').replace(/^@/, '').trim().toLowerCase()
   try {
     const result = await runLimited(async () => {
-      const context = await newAccountContext({ username: username || 'owner', proxy, storageState, locale, timezoneId })
-      try { return await rereadUsername(context) }
-      finally { await closeContextSafe(context) }
+      const context = await newAccountContext({ username: uname, proxy, storageState, locale, timezoneId })
+      const r = await rereadUsername(context)
+      if (r.needsCaptcha) {
+        // Ник не прочитан из-за НЕРЕШЁННОЙ image-капчи — контекст/страницу держим живыми
+        // (НЕ закрываем) до ответа человека через POST /session/captcha (см. ниже).
+        await clearPendingCaptcha(uname)
+        pendingCaptcha.set(uname, { context, createdAt: Date.now() })
+        return r
+      }
+      await closeContextSafe(context)
+      return r
     })
     res.json({
       ok: true, username: result.username, browserState: result.storageState, error: result.error,
       sessionAlive: result.sessionAlive, url: result.url, diag: result.diag, dom: result.dom,
+      needsCaptcha: result.needsCaptcha, captchaImage: result.captchaImage,
     })
+  } catch (e) {
+    const { kind, message } = errStatus(e.message)
+    res.status(400).json({ error: kind, message })
+  }
+})
+
+// ВРЕМЕННО (тот же жизненный цикл, что /session/username выше): ЧЕЛОВЕК ввёл текст/цифры
+// с картинки капчи (2captcha не настроен/не справился) — довершаем застрявшую /session/username
+// на том же живом контексте (pendingCaptcha), заново читаем ник и отдаём тот же формат успеха.
+app.post('/session/captcha', async (req, res) => {
+  const { username, code } = req.body || {}
+  const uname = String(username || '').replace(/^@/, '').trim().toLowerCase()
+  const p = pendingCaptcha.get(uname)
+  if (!p) return res.status(400).json({ error: 'expired', message: 'Сессия ввода капчи истекла — нажмите «Перечитать ник» ещё раз' })
+  try {
+    const result = await runLimited(async () => {
+      const pages = p.context.pages()
+      const page = pages[pages.length - 1] || (await p.context.newPage())
+      const ok = await fillImageCaptcha(page, code)
+      if (!ok) throw new Error('captcha_input_not_found: поле ввода капчи не найдено на экране (возможно, он уже изменился)')
+      await page.waitForTimeout(1500)
+      const uname2 = await extractUsername(page)
+      if (!uname2) throw new Error('captcha_not_accepted: ник не прочитан после ввода — код неверный либо экран изменился, попробуйте снова')
+      return { username: uname2, storageState: await safeStorageState(p.context) }
+    })
+    await clearPendingCaptcha(uname)
+    res.json({ ok: true, username: result.username, browserState: result.storageState })
   } catch (e) {
     const { kind, message } = errStatus(e.message)
     res.status(400).json({ error: kind, message })

@@ -5,7 +5,7 @@ import crypto from 'crypto'
 import { SEL, URLS } from './selectors.js'
 import { firstVisible, firstVisibleAnyFrame, clickByText, pageHasText, hasSessionCookie, gotoResilient, safeStorageState } from './browser.js'
 import { humanType, jitter, idleMouse, warmupFeed, humanClick } from './human.js'
-import { trySolveCaptcha, captchaConfigured } from './captcha.js'
+import { trySolveCaptcha, captchaConfigured, findImageCaptchaLocator, solveImageCaptcha } from './captcha.js'
 
 // Капча встретилась → решаем через 2captcha, вписываем токен, жмём «Продолжить»/submit,
 // какой найдётся на экране. captchaTried гасит повторные попытки на ТОМ ЖЕ экране —
@@ -19,6 +19,46 @@ async function handleCaptchaIfPresent(page) {
   if (btn) await btn.click({ delay: 60 }).catch(() => {})
   else await clickByText(page, [...SEL.codeSubmit, 'Verify', 'Проверить'], { timeout: 3000 }).catch(() => {})
   return true
+}
+
+// Вписать РАЗГАДАННЫЙ текст image-капчи в ближайшее подходящее текстовое поле (НЕ логин/пароль/
+// username) и отправить форму — используется и авто-решением (handleImageCaptcha), и ручным
+// вводом человеком (server.js /session/captcha, тот же экран, код пришёл позже отдельным запросом).
+export async function fillImageCaptcha(page, text) {
+  const input = await firstVisibleAnyFrame(page, [
+    'input[name*="captcha" i]',
+    'input[aria-label*="captcha" i]',
+    'input[placeholder*="captcha" i]',
+    'input[type="text"]:not([name="username"]):not([name="email"]):not([name="pass"]):not([name="password"])',
+  ], 3000)
+  if (!input) return false
+  await input.fill('').catch(() => {})
+  await humanType(input, String(text))
+  await submitCodeForm(page, input)
+  return true
+}
+
+// Простая image-капча (искажённый текст/цифры на картинке, БЕЗ JS-виджета — отдельно от
+// handleCaptchaIfPresent выше, который решает recaptcha/hcaptcha/funcaptcha). Появляется на
+// некоторых identity-checkpoint экранах (напр. после /accounts/suspended/ → «Continue»).
+// Пытается решить через 2captcha (Normal Captcha API — скрин уже отрисованного <img>, БЕЗ
+// сетевых запросов к Instagram, только чтение DOM живым браузером). Если ключ не настроен
+// или решение не подошло — честно отдаёт «нужен ручной ввод» (вызывающий код решает, что
+// делать — см. rereadUsername ниже, который отдаёт картинку человеку через UI).
+export async function handleImageCaptcha(page) {
+  const loc = await findImageCaptchaLocator(page)
+  if (!loc) return { status: 'none' }
+  if (!captchaConfigured()) return { status: 'needs_manual' }
+  let shot
+  try { shot = await loc.screenshot({ timeout: 5000 }) } catch { return { status: 'none' } }
+  try {
+    const text = await solveImageCaptcha(shot.toString('base64'))
+    const ok = await fillImageCaptcha(page, text)
+    if (ok) { await page.waitForTimeout(1500); return { status: 'solved' } }
+  } catch (e) {
+    console.error('[captcha] авто-решение image-капчи не удалось:', e?.message || e)
+  }
+  return { status: 'needs_manual' }
 }
 
 const LOGIN_URL = 'https://www.instagram.com/accounts/login/'
@@ -264,6 +304,11 @@ export async function extractUsername(page) {
         await dismissInterstitials(page).catch(() => {})
       }
     }
+    // «Continue» иногда ведёт не сразу на next=, а на простую image-капчу (цифры на картинке) —
+    // best-effort авто-решение через 2captcha; если не настроено/не решилось — просто продолжаем
+    // (rereadUsername ниже сам поймает пустой username и предложит ручной ввод человеку).
+    const cap = await handleImageCaptcha(page).catch(() => ({ status: 'none' }))
+    if (cap.status === 'solved') await page.waitForTimeout(800)
     const inp = page.locator('input[name="username"], input#pepUsername, input[maxlength="30"]').first()
     if (await inp.isVisible().catch(() => false)) {
       const v = (await inp.inputValue().catch(() => '')).trim()
@@ -601,6 +646,23 @@ export async function rereadUsername(context) {
     const sessionAlive = await hasSessionCookie(context)
     const uname = await extractUsername(page)
     if (uname) return { username: uname, sessionAlive, storageState: await safeStorageState(context) }
+    // Ник не нашли — прежде чем уходить в общую диагностику, проверим: вдруг на экране ЕЩЁ
+    // стоит НЕРЕШЁННАЯ image-капча (2captcha не настроен на воркере / решение не подошло внутри
+    // extractUsername). Тогда это не «страница не та» — это явный запрос кода у ЧЕЛОВЕКА.
+    // Контекст/страницу НЕ закрываем здесь (это делает server.js) — их держат живыми для
+    // последующего /session/captcha с введённым текстом.
+    const capLoc = await findImageCaptchaLocator(page).catch(() => null)
+    if (capLoc) {
+      let image = null
+      try { image = `data:image/png;base64,${(await capLoc.screenshot({ timeout: 5000 })).toString('base64')}` } catch {}
+      if (image) {
+        return {
+          username: null, sessionAlive, url: page.url(), needsCaptcha: true, captchaImage: image,
+          error: 'Instagram просит код с картинки (капча) — введите текст/цифры с изображения',
+          storageState: await safeStorageState(context),
+        }
+      }
+    }
     // Не нашли ни одним способом — диагностика: жива ли сессия ВООБЩЕ (кука) + что реально
     // на экране (скрин+DOM), чтобы отличить «сессия мертва, снова форма входа» от «сессия
     // жива, но страница не та, что ждали» (интерстишл/чекпоинт без нужных элементов).

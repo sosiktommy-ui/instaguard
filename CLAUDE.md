@@ -120,7 +120,20 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
-### 2026-07-16 (fix: 🔤 перечитать-ник не проходил экран /accounts/suspended/?next=... — «Continue» не нажимался)
+### 2026-07-16 (2) (feat: image-капча после /accounts/suspended/ — авто-решение 2captcha + ручной ввод человеком как фолбэк)
+
+⚠️ **Нужен редеплой браузерного воркера** (build → `2026-07-16-browser-71-suspended-captcha`) + передеплой Next.js (новый роут). Миграций нет. Продолжение записи (1) ниже: после клика «Continue» на `/accounts/suspended/` Instagram в этом кейсе показал ЕЩЁ один экран — простую image-капчу (текст/цифры на картинке, не виджет recaptcha/hcaptcha). По запросу: решать через 2captcha (ключ `TWOCAPTCHA_API_KEY`, уже задан на воркере — тот же, что для виджет-капчи при входе, `d2d853ced6714b3641e6ade432069c62`), а если ключ/решение не сработали — просить у человека ввести текст с картинки.
+
+- **`workers/browser/lib/captcha.js`:** новый `solveImageCaptcha(base64Image)` — 2captcha «Normal Captcha» (`method=base64`, тот же `in.php`/`res.php`, что уже используется для recaptcha/hcaptcha/funcaptcha). Новый `findImageCaptchaLocator(page)` — ищет `<img>`-капчу (НЕ виджет) по подсказкам в `src`/`alt`/`id`/`class`, по всем фреймам, возвращает `Locator` (для `.screenshot()`).
+- **`workers/browser/lib/login.js`:** `fillImageCaptcha(page, text)` — вписывает разгаданный текст в ближайшее НЕ-логин/пароль текстовое поле + сабмит (переиспользует `submitCodeForm`). `handleImageCaptcha(page)` — best-effort: находит капчу → скриншотит ТОЛЬКО сам `<img>` (это чтение уже отрисованного DOM браузером, БЕЗ сетевого запроса к Instagram — проектное правило [[instacontrol-no-api]] не нарушено) → 2captcha → вписывает → возвращает `{status:'solved'|'needs_manual'|'none'}`. Подключено в `extractUsername` сразу после клика `suspendedContinue` (запись (1)) — покрывает ВСЕ пути (обычный вход, вход по сессии, `rereadUsername`).
+- **`rereadUsername`:** если после `extractUsername` ник всё ещё не прочитан — проверяет, не осталась ли НЕРЕШЁННАЯ капча на экране (2captcha не настроен/не справился); если да — возвращает `{needsCaptcha:true, captchaImage}` вместо обычной диагностики, **контекст/страницу НЕ закрывает** (ждут ручного ввода).
+- **`workers/browser/server.js`:** новая карта `pendingCaptcha` (username→context, TTL 10 мин, тот же паттерн, что `pending` для challenge/2FA). `/session/username` — при `needsCaptcha` контекст уходит в `pendingCaptcha` вместо закрытия. Новый **`POST /session/captcha`** `{username, code}` — берёт живой контекст, вписывает код (`fillImageCaptcha`), заново читает ник (`extractUsername`), отдаёт тот же формат успеха, что `/session/username`.
+- **Next.js:** `browserSubmitCaptcha()` в `lib/browser/client.ts`; новый роут `POST /api/accounts/[id]/reread-username/captcha` (owner-scoped, тот же паттерн, что `reread-username`) — принимает `{code}`, обновляет username/browserState записи. `reread-username/route.ts` теперь пробрасывает `needsCaptcha`/`captchaImage` в ответ.
+- **UI (`accounts/page.tsx`):** при `needsCaptcha` под результатом 🔤 показывается картинка капчи + поле ввода + «Подтвердить» → уходит в новый роут; успех обновляет запись как обычно.
+
+Проверено: `node --check` (`captcha.js`/`login.js`/`server.js`) чист, воркер-тесты **26/26**, `tsc --noEmit` чист, `next build` чист (новый роут `/api/accounts/[id]/reread-username/captcha` собран). ⚠️ Живьём не переподтверждено (нужен редеплой + повтор 🔤 на этом же аккаунте) — если 2captcha решит сама, человек ничего не увидит (просто ник прочитается); если нет — появится картинка с полем ввода.
+
+### 2026-07-16 (1) (fix: 🔤 перечитать-ник не проходил экран /accounts/suspended/?next=... — «Continue» не нажимался)
 
 ⚠️ **Нужен редеплой браузерного воркера.** Только воркер, миграций нет. По живому кейсу (диагностика записи (14)): `rereadUsername` вернул `sessionAlive:true`, но ник не прочитан; `url` — `https://www.instagram.com/accounts/suspended/?next=https%3A%2F%2Fwww.instagram.com%2Faccounts%2Fedit%2F...`. Пользователь прислал скрин — на экране есть кнопка «Continue», но бот её не нажимал.
 

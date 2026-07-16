@@ -193,18 +193,38 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
   const [rereading, setRereading] = useState(false)
   const [rereadOut, setRereadOut] = useState('')
   const [rereadShot, setRereadShot] = useState('')
+  // ВРЕМЕННО (тот же жизненный цикл, что rereadUsername): IG иногда показывает во время
+  // перечитывания ника image-капчу (цифры/текст на картинке). 2captcha пробует решить сама
+  // на воркере; если не вышло — просим пользователя ввести код прямо сюда.
+  const [captchaImg, setCaptchaImg] = useState('')
+  const [captchaCode, setCaptchaCode] = useState('')
+  const [submittingCaptcha, setSubmittingCaptcha] = useState(false)
   const rereadUsername = async () => {
     if (!ra?.id) { setRereadOut('нет id аккаунта'); return }
-    setRereading(true); setRereadOut(''); setRereadShot('')
+    setRereading(true); setRereadOut(''); setRereadShot(''); setCaptchaImg(''); setCaptchaCode('')
     try {
       const r = await fetch(`/api/accounts/${ra.id}/reread-username`, { method: 'POST' })
       const data = await r.json()
-      const { screenshot, ...rest } = data
+      const { screenshot, captchaImage, ...rest } = data
       setRereadShot(screenshot ?? '')
+      if (data.needsCaptcha && captchaImage) setCaptchaImg(captchaImage)
       setRereadOut(JSON.stringify(rest, null, 2))
       if (data.ok && data.changed) onChanged?.()
     } catch (e: any) { setRereadOut('ошибка: ' + String(e?.message ?? e)) }
     finally { setRereading(false) }
+  }
+  const submitCaptcha = async () => {
+    if (!ra?.id || !captchaCode.trim()) return
+    setSubmittingCaptcha(true)
+    try {
+      const r = await fetch(`/api/accounts/${ra.id}/reread-username/captcha`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: captchaCode.trim() }),
+      })
+      const data = await r.json()
+      setRereadOut(JSON.stringify(data, null, 2))
+      if (data.ok) { setCaptchaImg(''); setCaptchaCode(''); if (data.changed) onChanged?.() }
+    } catch (e: any) { setRereadOut('ошибка: ' + String(e?.message ?? e)) }
+    finally { setSubmittingCaptcha(false) }
   }
 
   // §13.11 — авто-приём заявок в подписчики (для закрытых/приватных аккаунтов).
@@ -337,6 +357,25 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
                   <img src={rereadShot} alt="Что реально показал браузер" className="w-full rounded-xl border border-black/10" />
                   <span className="block text-subt text-[11px] mt-1">📷 Скрин страницы, на которой бот не смог прочитать ник (клик — открыть крупно)</span>
                 </a>
+              )}
+              {captchaImg && (
+                <div className="mt-3 rounded-xl border border-warn/30 bg-warn/5 p-3">
+                  <div className="text-[12px] font-semibold text-ink mb-2">🧩 Instagram просит код с картинки — введите, что видите:</div>
+                  <img src={captchaImg} alt="Капча" className="max-w-full rounded-lg border border-black/10 bg-white mb-2" />
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={captchaCode}
+                      onChange={(e) => setCaptchaCode(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') submitCaptcha() }}
+                      placeholder="Текст с картинки"
+                      className="flex-1 text-[13px] rounded-lg border border-line/60 px-3 py-2 bg-white"
+                      disabled={submittingCaptcha}
+                    />
+                    <Button size="sm" onClick={submitCaptcha} disabled={submittingCaptcha || !captchaCode.trim()}>
+                      {submittingCaptcha ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Подтвердить'}
+                    </Button>
+                  </div>
+                </div>
               )}
             </div>
           )}

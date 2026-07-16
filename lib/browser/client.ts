@@ -108,7 +108,15 @@ export function browserRereadUsername(storageState: object, proxy?: string, user
   return browserFetch<{
     ok: boolean; username: string | null; browserState?: object; error?: string
     sessionAlive?: boolean; url?: string; diag?: { url?: string; title?: string; screenshot?: string | null }; dom?: unknown
+    needsCaptcha?: boolean; captchaImage?: string | null
   }>('/session/username', { storageState, proxy, username, locale, timezoneId })
+}
+
+// ВРЕМЕННО (тот же жизненный цикл, что browserRereadUsername выше): человек ввёл текст/цифры
+// с картинки капчи, которую IG показал во время перечитывания ника — довершает застрявшую сессию
+// на живом контексте воркера (pendingCaptcha), заново читает ник.
+export function browserSubmitCaptcha(username: string, code: string) {
+  return browserFetch<{ ok: boolean; username: string; browserState: object }>('/session/captcha', { username, code })
 }
 
 // Здоровье воркера — ПЛОСКИЙ GET на /health (воркер отдаёт его без секрета). Раньше тут был

@@ -48,6 +48,35 @@ export async function solveFunCaptcha({ publicKey, surl, url }) {
   return pollResult(id)
 }
 
+// Простая image-капча (искажённый текст/цифры НА КАРТИНКЕ, без JS-виджета) — Instagram иногда
+// показывает такую на identity-checkpoint экранах (напр. после /accounts/suspended/). Отдельный
+// метод 2captcha — «Normal Captcha» (тот же in.php/res.php, method=base64 + сырой base64 картинки).
+export async function solveImageCaptcha(base64Image) {
+  if (!captchaConfigured()) throw new Error('2captcha_not_configured: TWOCAPTCHA_API_KEY не задан')
+  const id = await submitTask({ method: 'base64', body: base64Image })
+  return pollResult(id, { timeoutMs: 90000, intervalMs: 5000 })
+}
+
+// Найти на странице img-капчу (искажённый текст, не виджет) по подсказкам в src/alt/id/class,
+// по ВСЕМ фреймам — возвращает Locator (нужен для .screenshot()), не текст/токен.
+export async function findImageCaptchaLocator(page) {
+  const candidates = [
+    'img[src*="captcha" i]',
+    'img[alt*="captcha" i]',
+    'img[id*="captcha" i]',
+    'img[class*="captcha" i]',
+  ]
+  for (const frame of page.frames()) {
+    for (const sel of candidates) {
+      try {
+        const loc = frame.locator(sel).first()
+        if (await loc.isVisible({ timeout: 800 }).catch(() => false)) return loc
+      } catch {}
+    }
+  }
+  return null
+}
+
 // Найти капчу по ВСЕМ фреймам страницы (виджет часто рисуется в главном документе,
 // а сам вызов/iframe — вложенный; сначала ищем data-атрибуты, потом URL iframe).
 export async function detectCaptcha(page) {
