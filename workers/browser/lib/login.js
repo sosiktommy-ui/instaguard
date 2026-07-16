@@ -44,13 +44,53 @@ const CAPTCHA_INPUT_SELECTORS = [
   'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]):not([name="username"]):not([name="email"]):not([name="pass"]):not([name="password"])',
 ]
 
+// Живой провал (2026-07-16): domSummary показал 0 <input> ВООБЩЕ ни в одном из фреймов, хотя
+// картинка капчи точно нашлась и человек видел на скрине поле для ввода — вероятно, поле НЕ
+// <input> (защита от автозаполнения/скриптовых ботов часто рисует поле как textarea/
+// contenteditable-div/role=textbox). Расширяем поиск до этих тегов ПЕРЕД координатным фолбэком.
+async function findCaptchaFieldAnyFrame(page) {
+  const input = await firstVisibleAnyFrame(page, CAPTCHA_INPUT_SELECTORS, 1500)
+  if (input) return { kind: 'input', locator: input }
+  const editable = await firstVisibleAnyFrame(page, ['textarea', '[contenteditable="true"]', '[role="textbox"]'], 1500)
+  if (editable) return { kind: 'editable', locator: editable }
+  return null
+}
+
 export async function fillImageCaptcha(page, text) {
-  const input = await firstVisibleAnyFrame(page, CAPTCHA_INPUT_SELECTORS, 3000)
-  if (!input) return false
-  await input.fill('').catch(() => {})
-  await humanType(input, String(text))
-  await submitCodeForm(page, input)
-  return true
+  const found = await findCaptchaFieldAnyFrame(page)
+  if (found) {
+    await found.locator.click({ timeout: 3000 }).catch(() => {})
+    if (found.kind === 'input') {
+      await found.locator.fill('').catch(() => {})
+      await humanType(found.locator, String(text))
+    } else {
+      // textarea/contenteditable/role=textbox — очищаем клавиатурой (fill() на них ненадёжен),
+      // затем печатаем как человек.
+      await page.keyboard.press('Control+A').catch(() => {})
+      await page.keyboard.press('Backspace').catch(() => {})
+      await page.keyboard.type(String(text), { delay: 60 }).catch(() => {})
+    }
+    await submitCodeForm(page, found.kind === 'input' ? found.locator : null)
+    return true
+  }
+  // Последний шанс: НИ ОДНОГО DOM-кандидата (input/textarea/contenteditable/role=textbox) — поле,
+  // возможно, управляется JS без явного focusable-тега (canvas/кастомная клавиатура). Кликаем НИЖЕ
+  // картинки капчи (типичная раскладка «картинка сверху → поле снизу») и печатаем вслепую клавиатурой —
+  // клик задаёт фокус куда бы он ни ушёл, keyboard.type() не зависит от того, какой это элемент.
+  const capLoc = await findImageCaptchaLocator(page).catch(() => null)
+  if (capLoc) {
+    try {
+      const box = await capLoc.boundingBox()
+      if (box) {
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height + 30)
+        await page.waitForTimeout(300)
+        await page.keyboard.type(String(text), { delay: 60 })
+        await submitCodeForm(page, null)
+        return true
+      }
+    } catch {}
+  }
+  return false
 }
 
 // Простая image-капча (искажённый текст/цифры на картинке, БЕЗ JS-виджета — отдельно от
@@ -151,7 +191,16 @@ export async function domSummary(page) {
           aria: el.getAttribute('aria-label') || null,
           visible: Boolean(el.offsetWidth || el.offsetHeight || el.getClientRects().length),
         }))
-        return { url: location.href, forms: document.querySelectorAll('form').length, inputs, ready: document.readyState }
+        // textarea/contenteditable/role=textbox — некоторые поля (напр. капча-виджеты, защита от
+        // автозаполнения) НЕ используют <input> вообще; без них домSummary молчаливо показывал
+        // «0 инпутов», хотя визуально поле на экране есть (живой провал 2026-07-16).
+        const editables = [...document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"]')].slice(0, 10).map((el) => ({
+          tag: el.tagName.toLowerCase(),
+          name: el.getAttribute('name') || null,
+          aria: el.getAttribute('aria-label') || null,
+          visible: Boolean(el.offsetWidth || el.offsetHeight || el.getClientRects().length),
+        }))
+        return { url: location.href, forms: document.querySelectorAll('form').length, inputs, editables, ready: document.readyState }
       }).catch(() => null)
       if (d) perFrame.push(d)
     }
@@ -227,8 +276,10 @@ async function buttonsSummary(page) {
   } catch { return null }
 }
 
-// Отправить форму кода (challenge/2FA) НАДЁЖНО: кнопка (CSS ИЛИ текст) — по ВСЕМ фреймам,
-// затем Enter по полю как последний фолбэк.
+// Отправить форму кода (challenge/2FA/капча) НАДЁЖНО: кнопка (CSS ИЛИ текст) — по ВСЕМ фреймам,
+// затем Enter как последний фолбэк. codeInput может быть null (координатный фолбэк
+// fillImageCaptcha — фокус выставлен кликом, а не через локатор) — тогда Enter идёт клавиатурой
+// на весь page, а не через конкретный элемент.
 async function submitCodeForm(page, codeInput) {
   const btn = await findButtonAnyFrame(page, SEL.codeSubmitCss, SEL.codeSubmit, 4000)
   if (btn) {
@@ -237,7 +288,8 @@ async function submitCodeForm(page, codeInput) {
     await btn.click({ delay: 60 }).catch(() => {})
     return
   }
-  await codeInput.press('Enter').catch(() => {})
+  if (codeInput) await codeInput.press('Enter').catch(() => {})
+  else await page.keyboard.press('Enter').catch(() => {})
 }
 
 // Найти форму входа устойчиво: дождаться, пока React-форма догрузится (networkidle),

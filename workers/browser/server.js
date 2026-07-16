@@ -15,7 +15,7 @@ import { fingerprintSelfTest } from './lib/selftest.js'
 import { captchaConfigured } from './lib/captcha.js'
 import { warmupFeed } from './lib/human.js'
 
-const BUILD = '2026-07-16-browser-72-captcha-input-diag'
+const BUILD = '2026-07-16-browser-73-captcha-coord-fallback'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -260,8 +260,8 @@ app.post('/session/captcha', async (req, res) => {
         // нашлась (мы её показали), а поле ввода — нет; без этого дальнейшая подгонка
         // CAPTCHA_INPUT_SELECTORS (login.js) — гадание вслепую, как уже было с формой входа.
         const dom = await domSummary(page).catch(() => null)
-        const domTxt = dom ? ` · фреймов: ${dom.frameCount}, инпуты по фреймам: ${JSON.stringify(dom.frames.map((f) => ({ url: f.url.slice(0, 60), inputs: f.inputs })))}` : ''
-        const err = new Error(`captcha_input_not_found: поле ввода капчи не найдено на экране.${domTxt}`)
+        const domTxt = dom ? ` · фреймов: ${dom.frameCount}, DOM по фреймам: ${JSON.stringify(dom.frames.map((f) => ({ url: f.url.slice(0, 60), forms: f.forms, inputs: f.inputs, editables: f.editables })))}` : ''
+        const err = new Error(`captcha_input_not_found: поле ввода капчи не найдено на экране (пробовали и координатный клик под картинкой).${domTxt}`)
         try { err.diag = await captureDiag(page) } catch {}
         throw err
       }
