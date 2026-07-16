@@ -6,6 +6,7 @@ import { formatFollowers } from '@/lib/store'
 import ClientOnly from '@/components/common/ClientOnly'
 import { cn } from '@/lib/utils'
 import { readStat, ACTION_KEYS } from '@/lib/stats'
+import { humanizeLog, isDiagnostic } from '@/lib/logText'
 import { PageHeader } from '@/components/common/PageHeader'
 import { StatCard } from '@/components/common/StatCard'
 import { IconTile } from '@/components/common/IconTile'
@@ -264,10 +265,10 @@ function Stats() {
         <div className="font-semibold text-[15px] mb-4">Журнал событий</div>
         <div className="space-y-1">
           {logs.length === 0 && <div className="py-6 text-center text-subt text-[13px]">Пусто</div>}
-          {logs.slice(0, 12).map((l) => (
+          {logs.filter((l) => !isDiagnostic(l.message)).slice(0, 12).map((l) => (
             <div key={l.id} className="flex items-center gap-3 py-2.5 border-b border-black/[0.04] last:border-0">
               {logIcon(l.level)}
-              <span className="text-[13px] text-ink/80 truncate flex-1">{l.message}</span>
+              <span className="text-[13px] text-ink/80 truncate flex-1">{humanizeLog(l.message)}</span>
               <span className="text-[12px] text-subt shrink-0">@{l.account?.username ?? '—'}</span>
               <span className="text-[11px] text-subt shrink-0 w-12 text-right tabular-nums">
                 {new Date(l.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
