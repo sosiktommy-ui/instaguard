@@ -116,3 +116,22 @@ test('host:port:user:pass приоритетнее, если порт стоит
     scheme: null, hostPort: '1.2.3.4:8080', username: 'bob', password: '9999',
   })
 })
+
+// ── ВСЕ 4 формата, которые предлагает бот провайдера (rp.proxxxymiron.cc) ──────
+// Пользователь может переключить формат в кабинете — бот обязан понять любой.
+test('все 4 формата провайдера разбираются одинаково', () => {
+  const want = { hostPort: 'rp.proxxxymiron.cc:1000', username: 'u36387_h35p', password: 'PaSs_session-XX_lifetime-1440' }
+  const variants = [
+    'u36387_h35p:PaSs_session-XX_lifetime-1440@rp.proxxxymiron.cc:1000',   // login:password@host:port
+    'u36387_h35p:PaSs_session-XX_lifetime-1440:rp.proxxxymiron.cc:1000',   // login:password:host:port
+    'rp.proxxxymiron.cc:1000@u36387_h35p:PaSs_session-XX_lifetime-1440',   // host:port@login:password
+    'rp.proxxxymiron.cc:1000:u36387_h35p:PaSs_session-XX_lifetime-1440',   // host:port:login:password
+  ]
+  for (const v of variants) {
+    const p = splitProxy(v)
+    assert.ok(p, `не разобрался: ${v}`)
+    assert.equal(p.hostPort, want.hostPort, `hostPort у: ${v}`)
+    assert.equal(p.username, want.username, `username у: ${v}`)
+    assert.equal(p.password, want.password, `password у: ${v}`)
+  }
+})

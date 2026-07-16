@@ -33,8 +33,14 @@ export function splitProxy(raw) {
   let username, password, hostPort
   if (s.includes('@')) {
     const at = s.lastIndexOf('@')
-    const creds = s.slice(0, at), hp = s.slice(at + 1)
-    hostPort = hp
+    const left = s.slice(0, at), right = s.slice(at + 1)
+    // Обе ориентации '@': «user:pass@host:port» (обычная) И «host:port@user:pass» (инвертированная —
+    // её предлагают некоторые провайдеры, напр. rp.proxxxymiron.cc в списке форматов). Определяем по
+    // тому, с какой стороны стоит ВАЛИДНЫЙ host:port (порт — число), а не по позиции.
+    let creds
+    if (validHostPort(right)) { hostPort = right; creds = left }
+    else if (validHostPort(left)) { hostPort = left; creds = right }
+    else { hostPort = right; creds = left }   // ни одна сторона не похожа на host:port → отсеется ниже
     const ci = creds.indexOf(':')
     if (ci >= 0) { username = creds.slice(0, ci); password = creds.slice(ci + 1) }
     else username = creds
