@@ -32,6 +32,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ ok: false, username: clean, error: `Прочитан ник @${clean}, но сохранить не удалось (возможно, уже есть аккаунт с таким ником): ${e?.message ?? e}` })
     }
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? 'Ошибка воркера' }, { status: 400 })
+    // e.diag.screenshot — свежий скрин экрана В МОМЕНТ провала (напр. поле капчи не нашлось
+    // новыми селекторами / код не принят) — контекст воркера НЕ закрывается при ошибке
+    // (см. server.js /session/captcha), можно смотреть скрин и пробовать снова.
+    return NextResponse.json({ ok: false, error: e?.message ?? 'Ошибка воркера', screenshot: e?.diag?.screenshot ?? null }, { status: 400 })
   }
 }

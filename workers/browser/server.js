@@ -2,7 +2,7 @@
 // См. plan.md §4. Контракт ответов согласован с lib/browser/client.ts в Next.js.
 import express from 'express'
 import { getBrowser, newAccountContext, closeContextSafe, getOrCreateContext, touchContext, evictContext, isCtxWarmed, markCtxWarmed } from './lib/browser.js'
-import { attemptLogin, resumeCode, resumeWithTotp, resendCode, loginByState, testSession, warmupSession, rereadUsername, extractUsername, fillImageCaptcha } from './lib/login.js'
+import { attemptLogin, resumeCode, resumeWithTotp, resendCode, loginByState, testSession, warmupSession, rereadUsername, extractUsername, fillImageCaptcha, domSummary, captureDiag } from './lib/login.js'
 import { safeStorageState } from './lib/browser.js'
 import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment, commentLatestPost, readStoryEvents, acceptFollowRequests } from './lib/actions.js'
 import { parseFollowers, parseFollowing, parseComments, parseLikers } from './lib/parse.js'
@@ -15,7 +15,7 @@ import { fingerprintSelfTest } from './lib/selftest.js'
 import { captchaConfigured } from './lib/captcha.js'
 import { warmupFeed } from './lib/human.js'
 
-const BUILD = '2026-07-16-browser-71-suspended-captcha'
+const BUILD = '2026-07-16-browser-72-captcha-input-diag'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -255,17 +255,34 @@ app.post('/session/captcha', async (req, res) => {
       const pages = p.context.pages()
       const page = pages[pages.length - 1] || (await p.context.newPage())
       const ok = await fillImageCaptcha(page, code)
-      if (!ok) throw new Error('captcha_input_not_found: поле ввода капчи не найдено на экране (возможно, он уже изменился)')
+      if (!ok) {
+        // Диагностика: реальные name/type/aria ВСЕХ инпутов по всем фреймам — картинка капчи
+        // нашлась (мы её показали), а поле ввода — нет; без этого дальнейшая подгонка
+        // CAPTCHA_INPUT_SELECTORS (login.js) — гадание вслепую, как уже было с формой входа.
+        const dom = await domSummary(page).catch(() => null)
+        const domTxt = dom ? ` · фреймов: ${dom.frameCount}, инпуты по фреймам: ${JSON.stringify(dom.frames.map((f) => ({ url: f.url.slice(0, 60), inputs: f.inputs })))}` : ''
+        const err = new Error(`captcha_input_not_found: поле ввода капчи не найдено на экране.${domTxt}`)
+        try { err.diag = await captureDiag(page) } catch {}
+        throw err
+      }
       await page.waitForTimeout(1500)
       const uname2 = await extractUsername(page)
-      if (!uname2) throw new Error('captcha_not_accepted: ник не прочитан после ввода — код неверный либо экран изменился, попробуйте снова')
+      if (!uname2) {
+        const dom = await domSummary(page).catch(() => null)
+        const domTxt = dom ? ` · фреймов: ${dom.frameCount}, url: ${page.url()}` : ''
+        const err = new Error(`captcha_not_accepted: ник не прочитан после ввода — код неверный либо экран изменился, попробуйте снова.${domTxt}`)
+        try { err.diag = await captureDiag(page) } catch {}
+        throw err
+      }
       return { username: uname2, storageState: await safeStorageState(p.context) }
     })
     await clearPendingCaptcha(uname)
     res.json({ ok: true, username: result.username, browserState: result.storageState })
   } catch (e) {
     const { kind, message } = errStatus(e.message)
-    res.status(400).json({ error: kind, message })
+    // Контекст НЕ закрываем при ошибке (кроме expired) — остаётся в pendingCaptcha для повтора
+    // (сессия ввода капчи может истечь, если код правда неверный и IG перегенерировал картинку).
+    res.status(400).json({ error: kind, message, diag: e.diag ?? undefined })
   }
 })
 

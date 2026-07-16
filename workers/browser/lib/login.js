@@ -24,13 +24,28 @@ async function handleCaptchaIfPresent(page) {
 // Вписать РАЗГАДАННЫЙ текст image-капчи в ближайшее подходящее текстовое поле (НЕ логин/пароль/
 // username) и отправить форму — используется и авто-решением (handleImageCaptcha), и ручным
 // вводом человеком (server.js /session/captcha, тот же экран, код пришёл позже отдельным запросом).
+// Селекторы поля ввода капчи — от узких (имя/aria/placeholder содержит «captcha») к широким.
+// ВАЖНО: `input[type="text"]` матчит ТОЛЬКО если атрибут type ЛИТЕРАЛЬНО есть в разметке —
+// у инпута БЕЗ атрибута type (частый случай, браузер дефолтит на text сам) этот CSS-селектор
+// молча пропустит поле. Поэтому ниже есть отдельный `input:not([type])` — самый вероятный
+// корень первого живого провала (`captcha_input_not_found`, картинка нашлась, поле — нет).
+const CAPTCHA_INPUT_SELECTORS = [
+  'input[name*="captcha" i]',
+  'input[aria-label*="captcha" i]',
+  'input[placeholder*="captcha" i]',
+  'input[autocomplete="one-time-code"]',
+  'input[inputmode="numeric"]',
+  'input[type="tel"]',
+  'input[maxlength="6"]',
+  'input[maxlength="8"]',
+  'input[type="text"]:not([name="username"]):not([name="email"]):not([name="pass"]):not([name="password"])',
+  'input:not([type]):not([name="username"]):not([name="email"]):not([name="pass"]):not([name="password"])',
+  // последний шанс — вообще любое видимое НЕ hidden/checkbox/radio/submit/button поле, не логин/пароль
+  'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]):not([name="username"]):not([name="email"]):not([name="pass"]):not([name="password"])',
+]
+
 export async function fillImageCaptcha(page, text) {
-  const input = await firstVisibleAnyFrame(page, [
-    'input[name*="captcha" i]',
-    'input[aria-label*="captcha" i]',
-    'input[placeholder*="captcha" i]',
-    'input[type="text"]:not([name="username"]):not([name="email"]):not([name="pass"]):not([name="password"])',
-  ], 3000)
+  const input = await firstVisibleAnyFrame(page, CAPTCHA_INPUT_SELECTORS, 3000)
   if (!input) return false
   await input.fill('').catch(() => {})
   await humanType(input, String(text))
@@ -126,7 +141,7 @@ async function fail(page, message) {
 // первых инпутов страницы + число фреймов/форм — без этого скриншот не отличает «Instagram
 // переименовал атрибуты» от «форма во фрейме» от «поля правда нет». Считаем ПО ВСЕМ фреймам,
 // не только главному — если форма во фрейме, это сразу видно (frame > 0 c инпутами).
-async function domSummary(page) {
+export async function domSummary(page) {
   try {
     const perFrame = []
     for (const frame of page.frames()) {

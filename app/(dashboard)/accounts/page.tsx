@@ -221,8 +221,13 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: captchaCode.trim() }),
       })
       const data = await r.json()
-      setRereadOut(JSON.stringify(data, null, 2))
+      const { screenshot, ...rest } = data
+      setRereadOut(JSON.stringify(rest, null, 2))
       if (data.ok) { setCaptchaImg(''); setCaptchaCode(''); if (data.changed) onChanged?.() }
+      // Провал: контекст воркера НЕ закрылся (можно повторить) — показываем свежий скрин
+      // экрана В МОМЕНТ провала, чтобы понять, что реально произошло (не найдено поле /
+      // код не принят / картинка сменилась), а капчу и код оставляем для повторной попытки.
+      else if (screenshot) setRereadShot(screenshot)
     } catch (e: any) { setRereadOut('ошибка: ' + String(e?.message ?? e)) }
     finally { setSubmittingCaptcha(false) }
   }
