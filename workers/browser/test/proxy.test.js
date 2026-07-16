@@ -82,3 +82,37 @@ test('реальный формат резидентного прокси с ses
     password: 'KGLvZQv6GFOqyFepEA5m_session-2LOtwC9Q_lifetime-1440',
   })
 })
+
+// ── Формат «user:pass:host:port» (порт ПОСЛЕДНИЙ, без '@') ────────────────────
+// Реальная строка провайдера rp.proxxxymiron.cc (живой кейс 2026-07-16): раньше логин
+// принимался за хост → ERR_PROXY_CONNECTION_FAILED на РАБОЧЕМ прокси.
+test('socks5://user:pass:host:port — реальный формат провайдера', () => {
+  assert.deepEqual(
+    splitProxy('socks5://u36387_h35p:KGLvZQv6GFOqyFepEA5m_session-2LOtwC9Q_lifetime-1440:rp.proxxxymiron.cc:1002'),
+    {
+      scheme: 'socks5',
+      hostPort: 'rp.proxxxymiron.cc:1002',
+      username: 'u36387_h35p',
+      password: 'KGLvZQv6GFOqyFepEA5m_session-2LOtwC9Q_lifetime-1440',
+    },
+  )
+})
+
+test('user:pass:host:port без схемы', () => {
+  assert.deepEqual(splitProxy('bob:secret:1.2.3.4:8080'), {
+    scheme: null, hostPort: '1.2.3.4:8080', username: 'bob', password: 'secret',
+  })
+})
+
+test('user:pass:host:port — пароль с двоеточием (середина склеивается)', () => {
+  assert.deepEqual(splitProxy('bob:pa:ss_session-X:1.2.3.4:8080'), {
+    scheme: null, hostPort: '1.2.3.4:8080', username: 'bob', password: 'pa:ss_session-X',
+  })
+})
+
+// Порт ВТОРОЙ выигрывает у порта последнего — классика «host:port:user:pass» не ломается.
+test('host:port:user:pass приоритетнее, если порт стоит вторым', () => {
+  assert.deepEqual(splitProxy('1.2.3.4:8080:bob:9999'), {
+    scheme: null, hostPort: '1.2.3.4:8080', username: 'bob', password: '9999',
+  })
+})

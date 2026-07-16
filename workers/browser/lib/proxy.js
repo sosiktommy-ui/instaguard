@@ -40,12 +40,21 @@ export function splitProxy(raw) {
     else username = creds
   } else {
     const parts = s.split(':')
-    // host:port:user:pass — порт обязан быть числом (иначе это НЕ этот формат). Пароль может
-    // содержать ':' (у резидентных провайдеров в пароль зашиты session/lifetime) → склеиваем хвост.
-    if (parts.length >= 4 && /^\d{1,5}$/.test(parts[1])) {
-      hostPort = `${parts[0]}:${parts[1]}`
+    const isPort = (x) => /^\d{1,5}$/.test(x) && Number(x) >= 1 && Number(x) <= 65535
+    // Два ходовых формата БЕЗ '@' различаем по тому, ГДЕ стоит числовой порт:
+    //  • «host:port:user:pass»  — порт ВТОРОЙ (классика продавцов).
+    //  • «user:pass:host:port»  — порт ПОСЛЕДНИЙ (так отдаёт, напр., rp.proxxxymiron.cc:
+    //    socks5://логин:пароль:host:port). Раньше этот формат молча читался как host:port → логин
+    //    принимался за хост → ERR_PROXY_CONNECTION_FAILED на живом прокси (кейс 2026-07-16).
+    // Пароль может содержать ':' (резиденты зашивают session/lifetime) → склеиваем середину.
+    if (parts.length >= 4 && isPort(parts[1])) {
+      hostPort = `${parts[0]}:${parts[1]}`          // host:port:user:pass…
       username = parts[2]
       password = parts.slice(3).join(':')
+    } else if (parts.length >= 4 && isPort(parts[parts.length - 1])) {
+      hostPort = `${parts[parts.length - 2]}:${parts[parts.length - 1]}`   // …user:pass:host:port
+      username = parts[0]
+      password = parts.slice(1, parts.length - 2).join(':')
     } else {
       hostPort = s   // host:port без кредов
     }
