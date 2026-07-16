@@ -96,19 +96,32 @@ async function findCaptchaFieldAnyFrame(page) {
 export async function fillImageCaptcha(page, text) {
   const found = await findCaptchaFieldAnyFrame(page)
   if (found) {
-    await found.locator.click({ timeout: 3000 }).catch(() => {})
-    if (found.kind === 'input') {
-      await found.locator.fill('').catch(() => {})
-      await humanType(found.locator, String(text))
-    } else {
-      // textarea/contenteditable/role=textbox — очищаем клавиатурой (fill() на них ненадёжен),
-      // затем печатаем как человек.
-      await page.keyboard.press('Control+A').catch(() => {})
-      await page.keyboard.press('Backspace').catch(() => {})
-      await page.keyboard.type(String(text), { delay: 60 }).catch(() => {})
+    // ВАЖНО (живой провал 2026-07-16): контекст задаёт context.setDefaultTimeout(45000)
+    // (browser.js) — ЛЮБОЕ Playwright-действие БЕЗ явного {timeout} ждёт до 45с, если
+    // actionability не проходит (элемент найден isVisible=true, но закрыт оверлеем/не
+    // стабилен/вне вьюпорта). Раньше здесь был humanType(), чей ПЕРВЫЙ click() шёл без
+    // таймаута — повесил эту функцию на 45с ВНУТРИ extractUsername, на критичном пути логина,
+    // раздув общий запрос до сотен секунд и уронив клиента в «Ошибка сети». Поэтому — ТОЛЬКО
+    // явные короткие таймауты, никакого humanType (который рассчитан на уже-найденные удобные
+    // поля формы входа, не на потенциально нестабильные капча-виджеты).
+    try {
+      await found.locator.click({ timeout: 4000 })
+      if (found.kind === 'input') {
+        await found.locator.fill('', { timeout: 3000 }).catch(() => {})
+        await found.locator.pressSequentially(String(text), { delay: 50, timeout: 6000 })
+      } else {
+        // textarea/contenteditable/role=textbox — очищаем клавиатурой (fill() на них ненадёжен).
+        await page.keyboard.press('Control+A').catch(() => {})
+        await page.keyboard.press('Backspace').catch(() => {})
+        await page.keyboard.type(String(text), { delay: 50 })
+      }
+      await submitCodeForm(page, found.kind === 'input' ? found.locator : null)
+      return true
+    } catch {
+      // Поле «нашлось» (isVisible=true), но кликнуть/напечатать не вышло за отведённые
+      // секунды (закрыто оверлеем/анимация/не в вьюпорте) — падаем в координатный фолбэк
+      // ниже, а НЕ висим до общего дефолта.
     }
-    await submitCodeForm(page, found.kind === 'input' ? found.locator : null)
-    return true
   }
   // Последний шанс: НИ ОДНОГО DOM-кандидата (input/textarea/contenteditable/role=textbox) — поле,
   // возможно, управляется JS без явного focusable-тега (canvas/кастомная клавиатура). Кликаем НИЖЕ
@@ -408,11 +421,14 @@ export async function extractUsername(page) {
         await dismissInterstitials(page).catch(() => {})
       }
     }
-    // «Continue» иногда ведёт не сразу на next=, а на простую image-капчу (цифры на картинке) —
-    // best-effort авто-решение через 2captcha; если не настроено/не решилось — просто продолжаем
-    // (rereadUsername ниже сам поймает пустой username и предложит ручной ввод человеку).
-    const cap = await handleImageCaptcha(page).catch(() => ({ status: 'none' }))
-    if (cap.status === 'solved') await page.waitForTimeout(800)
+    // «Continue» иногда ведёт не сразу на next=, а на простую image-капчу (цифры на картинке).
+    // НЕ пытаемся решить её ЗДЕСЬ (см. живой провал 2026-07-16): auto-solve через 2captcha
+    // может занять до ~90с (ожидание ответа API) — на КРИТИЧНОМ пути обычного логина
+    // (attemptLogin/loginByState вызывают extractUsername сразу после успешного входа) это
+    // риск раздуть общий запрос за клиентский таймаут («Ошибка сети» вместо честного успеха).
+    // extractUsername здесь просто НЕ найдёт username и вернёт null — вызывающий код (attemptLogin)
+    // и так фолбэчит на переданный логин; полноценный auto-solve + ручной ввод человеком — только
+    // в rereadUsername ниже (там уже есть UI-спиннер, рассчитанный именно на такое ожидание).
     const inp = page.locator('input[name="username"], input#pepUsername, input[maxlength="30"]').first()
     if (await inp.isVisible().catch(() => false)) {
       const v = (await inp.inputValue().catch(() => '')).trim()
@@ -748,11 +764,20 @@ export async function rereadUsername(context) {
     await page.waitForTimeout(1500)
     await dismissInterstitials(page).catch(() => {})
     const sessionAlive = await hasSessionCookie(context)
-    const uname = await extractUsername(page)
+    let uname = await extractUsername(page)
     if (uname) return { username: uname, sessionAlive, storageState: await safeStorageState(context) }
-    // Ник не нашли — прежде чем уходить в общую диагностику, проверим: вдруг на экране ЕЩЁ
-    // стоит НЕРЕШЁННАЯ image-капча (2captcha не настроен на воркере / решение не подошло внутри
-    // extractUsername). Тогда это не «страница не та» — это явный запрос кода у ЧЕЛОВЕКА.
+    // Ник не нашли — здесь (в отличие от extractUsername на обычном логине) можно позволить
+    // себе полноценную попытку auto-solve через 2captcha (до ~90с) — эта функция вызывается
+    // ЯВНО пользователем (кнопка 🔤), UI уже показывает спиннер и рассчитан на ожидание.
+    const cap = await handleImageCaptcha(page).catch(() => ({ status: 'none' }))
+    if (cap.status === 'solved') {
+      await page.waitForTimeout(800)
+      uname = await extractUsername(page)
+      if (uname) return { username: uname, sessionAlive, storageState: await safeStorageState(context) }
+    }
+    // Всё ещё не нашли — прежде чем уходить в общую диагностику, проверим: вдруг на экране ЕЩЁ
+    // стоит НЕРЕШЁННАЯ image-капча (2captcha не настроен на воркере / решение не подошло).
+    // Тогда это не «страница не та» — это явный запрос кода у ЧЕЛОВЕКА.
     // Контекст/страницу НЕ закрываем здесь (это делает server.js) — их держат живыми для
     // последующего /session/captcha с введённым текстом.
     const capLoc = await findImageCaptchaLocator(page).catch(() => null)
