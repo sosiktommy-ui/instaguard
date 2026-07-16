@@ -52,3 +52,33 @@ test('host:port без кредов', () => {
 test('нет двоеточия в hostPort → null', () => {
   assert.equal(splitProxy('justhost'), null)
 })
+
+// ── Регресс живого кейса 2026-07-16 ────────────────────────────────────────────
+// Пользователь вставил ТОЛЬКО логин:пароль резидентного прокси (шлюз host:port провайдер даёт
+// отдельно). Раньше это молча трактовалось как host:port → Chromium получал несуществующий хост
+// и «порт»-строку → ERR_PROXY_CONNECTION_FAILED («прокси моргнул»), хотя прокси живой.
+test('логин:пароль БЕЗ host:port → null (порт не число)', () => {
+  assert.equal(splitProxy('u36387_h35p:KGLvZQv6GFOqyFepEA5m_session-2LOtwC9Q_lifetime-1440'), null)
+})
+
+test('порт не число → null (не принимаем за host:port)', () => {
+  assert.equal(splitProxy('host:notaport'), null)
+  assert.equal(splitProxy('user:pass'), null)
+  assert.equal(splitProxy('1.2.3.4:99999'), null)   // порт вне 1..65535
+})
+
+// Резидентные провайдеры зашивают session/lifetime В ПАРОЛЬ; пароль может содержать ':'.
+test('host:port:user:pass — пароль с двоеточием склеивается', () => {
+  assert.deepEqual(splitProxy('gate.provider.com:7000:u36387_h35p:pa:ss_session-XX'), {
+    scheme: null, hostPort: 'gate.provider.com:7000', username: 'u36387_h35p', password: 'pa:ss_session-XX',
+  })
+})
+
+test('реальный формат резидентного прокси с session/lifetime в пароле', () => {
+  assert.deepEqual(splitProxy('gate.provider.com:7000:u36387_h35p:KGLvZQv6GFOqyFepEA5m_session-2LOtwC9Q_lifetime-1440'), {
+    scheme: null,
+    hostPort: 'gate.provider.com:7000',
+    username: 'u36387_h35p',
+    password: 'KGLvZQv6GFOqyFepEA5m_session-2LOtwC9Q_lifetime-1440',
+  })
+})

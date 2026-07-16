@@ -7,6 +7,20 @@
 // симптом, с которым столкнулся пользователь на реальном прокси.
 const _schemeCache = new Map() // hostPort → рабочая схема (кеш на процесс)
 
+// «host:port» валиден, только если порт — ЧИСЛО 1..65535. Без этой проверки строка вида
+// «u36387_h35p:KGLvZQv6..._session-XXX_lifetime-1440» (это ЛОГИН:ПАРОЛЬ резидентного прокси
+// БЕЗ адреса шлюза — частая ошибка: провайдер даёт креды и шлюз отдельно) молча трактовалась
+// как host:port → Chromium получал несуществующий хост и «порт»-строку → ERR_PROXY_CONNECTION_FAILED
+// («прокси моргнул»), хотя прокси живой и дело в формате строки (живой кейс 2026-07-16).
+function validHostPort(hp) {
+  if (!hp || !hp.includes(':')) return false
+  const i = hp.lastIndexOf(':')
+  const host = hp.slice(0, i)
+  const port = hp.slice(i + 1)
+  if (!host) return false
+  return /^\d{1,5}$/.test(port) && Number(port) >= 1 && Number(port) <= 65535
+}
+
 export function splitProxy(raw) {
   if (!raw || typeof raw !== 'string') return null
   let s = raw.trim()
@@ -26,10 +40,17 @@ export function splitProxy(raw) {
     else username = creds
   } else {
     const parts = s.split(':')
-    if (parts.length === 4) { hostPort = `${parts[0]}:${parts[1]}`; username = parts[2]; password = parts[3] }
-    else hostPort = s
+    // host:port:user:pass — порт обязан быть числом (иначе это НЕ этот формат). Пароль может
+    // содержать ':' (у резидентных провайдеров в пароль зашиты session/lifetime) → склеиваем хвост.
+    if (parts.length >= 4 && /^\d{1,5}$/.test(parts[1])) {
+      hostPort = `${parts[0]}:${parts[1]}`
+      username = parts[2]
+      password = parts.slice(3).join(':')
+    } else {
+      hostPort = s   // host:port без кредов
+    }
   }
-  if (!hostPort || !hostPort.includes(':')) return null
+  if (!validHostPort(hostPort)) return null
   return { scheme, hostPort, username, password }
 }
 
@@ -86,7 +107,19 @@ async function probeSchemesOnce(browser, p) {
 
 export async function resolveProxy(getBrowser, raw) {
   const p = splitProxy(raw)
-  if (!p) return null
+  if (!p) {
+    // Прокси НЕ задан вообще — законно (работа без прокси регулируется настройкой allowNoProxy).
+    if (!raw || !String(raw).trim()) return null
+    // Прокси ЗАДАН, но строка не разобралась. НЕЛЬЗЯ молча вернуть null: выше (newAccountContext)
+    // это значит «контекст без прокси» → браузер пойдёт НАПРЯМУЮ с датацентр-IP сервера, Instagram
+    // увидит серверный IP = прямой риск бана, и всё это молча. Падаем с понятной причиной.
+    throw new Error(
+      'proxy_bad_format: строка прокси не распознана. Нужен формат «host:port:логин:пароль» ' +
+      '(или «логин:пароль@host:port», или «socks5://host:port»). Похоже, указаны только логин и пароль ' +
+      'БЕЗ адреса шлюза — возьмите host и port резидентного прокси в личном кабинете провайдера ' +
+      'и поставьте их ПЕРЕД логином. Порт обязан быть числом.',
+    )
+  }
   if (p.scheme) return toPlaywrightProxy(p.scheme, p)
 
   const cached = _schemeCache.get(p.hostPort)
