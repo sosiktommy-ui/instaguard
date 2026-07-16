@@ -255,6 +255,15 @@ export async function extractUsername(page) {
     await jitter(800, 1600)
     // На этой странице может выскочить СВОЙ интерстишл (не только на главной) — дожимаем перед чтением.
     await dismissInterstitials(page).catch(() => {})
+    // Иногда вместо редактирования подсовывается /accounts/suspended/?next=... — см. комментарий
+    // у SEL.suspendedContinue: жмём «Continue»/«Это я» и ждём редиректа обратно на next=.
+    if (/\/accounts\/suspended/.test(page.url())) {
+      const clicked = await clickByText(page, SEL.suspendedContinue, { timeout: 3000 })
+      if (clicked) {
+        await page.waitForTimeout(1800)
+        await dismissInterstitials(page).catch(() => {})
+      }
+    }
     const inp = page.locator('input[name="username"], input#pepUsername, input[maxlength="30"]').first()
     if (await inp.isVisible().catch(() => false)) {
       const v = (await inp.inputValue().catch(() => '')).trim()

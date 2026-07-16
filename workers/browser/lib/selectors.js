@@ -64,6 +64,13 @@ export const SEL = {
   // Диалоги после входа
   notNowButtons: ['Not Now', 'Not now', 'Не сейчас', 'Cancel', 'Отмена'],
   saveInfoDialog: ['Save your login info?', 'Save Your Login Info?', 'Сохранить данные для входа'],
+  // Экран /accounts/suspended/?next=... — часто НЕ окончательный бан, а confirm-чекпоинт
+  // («Это вы?»/«Continue»), после которого Instagram сам редиректит на next= (напр. обратно
+  // на /accounts/edit/). extractUsername пробует пройти его, прежде чем сдаться.
+  suspendedContinue: [
+    'Continue', 'Продолжить', 'This Was Me', 'This was me', 'Это я',
+    'Get Started', 'Начать', 'Confirm', 'Подтвердить', 'I understand', 'Понятно', 'OK', 'Ок',
+  ],
 
   // Код подтверждения (challenge / 2FA / codeentry)
   codeInput: [
