@@ -419,10 +419,21 @@ async function clickRecaptchaCheckbox(page) {
     await sleep(120 + Math.floor(Math.random() * 240))
     await page.mouse.click(x, y)
   }
-  // (1) ТОЧНЫЙ клик по элементу чекбокса внутри anchor-фрейма reCAPTCHA.
+  // (0) ГЛАВНЫЙ способ — Playwright frameLocator: сам спускается в ВЛОЖЕННЫЕ кросс-ориджин фреймы
+  //     (top → fbsbx iframe → google anchor iframe) и кликает чекбокс с проверкой actionability
+  //     (скролл, стабильность). Надёжнее ручного перебора фреймов + координат (тот промахивался).
+  const chains = [
+    () => page.frameLocator('iframe[src*="/captcha/recaptcha/iframe"]').frameLocator('iframe[src*="anchor"], iframe[title*="reCAPTCHA" i], iframe[title*="captcha" i]').locator('#recaptcha-anchor, .recaptcha-checkbox').first(),
+    () => page.frameLocator('iframe[src*="anchor"], iframe[title*="reCAPTCHA" i]').locator('#recaptcha-anchor, .recaptcha-checkbox').first(),
+    () => page.frameLocator('iframe[src*="/captcha/recaptcha/iframe"]').locator('#recaptcha-anchor, .recaptcha-checkbox, [role="checkbox"]').first(),
+  ]
+  for (const make of chains) {
+    try { await make().click({ timeout: 5000 }); return 'frameLocator' } catch {}
+  }
+  // (1) Перебор фреймов: anchor-фрейм (ЛЮБОЙ путь с …recaptcha…anchor — api2/enterprise/bare), клик по элементу.
   for (const f of page.frames()) {
     let u = ''; try { u = f.url() || '' } catch {}
-    if (!/recaptcha\/(enterprise\/)?anchor/i.test(u)) continue
+    if (!/recaptcha.*anchor/i.test(u)) continue
     try {
       const cb = f.locator('#recaptcha-anchor, .recaptcha-checkbox, [role="checkbox"]').first()
       if (await cb.isVisible({ timeout: 2500 }).catch(() => false)) {
