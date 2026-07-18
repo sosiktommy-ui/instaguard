@@ -14,6 +14,10 @@ const TIMEOUT_MS = Number(process.env.BROWSER_WORKER_TIMEOUT_MS) || 180_000
 // включают прогрев ленты + человеческие паузы → на медленном резидентном прокси легко выходят за 180с.
 // Даём им отдельный, БОЛЬШИЙ бюджет. Воркер сам ограничивает конкуренцию, так что это безопасно.
 const VISIT_TIMEOUT_MS = Number(process.env.BROWSER_VISIT_TIMEOUT_MS) || 300_000
+// Вход может включать решение reCAPTCHA через 2captcha (до ~135с) поверх прогрева/навигации на
+// медленном прокси — в 180с не влезает, и клиент рвёт fetch РАНЬШЕ, чем воркер вернёт исход/скрин
+// (симптом «network», хотя капча ещё решалась). Даём входу отдельный, больший бюджет.
+const LOGIN_TIMEOUT_MS = Number(process.env.BROWSER_LOGIN_TIMEOUT_MS) || 240_000
 
 /** Задеплоен ли браузерный воркер (задан URL). Если нет — движок остаётся legacy. */
 export function browserConfigured(): boolean {
@@ -68,14 +72,14 @@ export interface BrowserLoginResult {
 
 /** locale/timezoneId — гео отпечатка по стране прокси (plan.md §349, lib/browser/geo.ts). Опционально: без них воркер берёт дефолт en-US/America/New_York. */
 export function browserLogin(username: string, password: string, proxy?: string, totpSecret?: string, locale?: string, timezoneId?: string) {
-  return browserFetch<BrowserLoginResult>('/login', { username, password, proxy, totpSecret, locale, timezoneId })
+  return browserFetch<BrowserLoginResult>('/login', { username, password, proxy, totpSecret, locale, timezoneId }, LOGIN_TIMEOUT_MS)
 }
 
 // manual=true пропускает авто-TOTP на воркере (даже если 2FA-ключ известен) и заставляет
 // использовать РОВНО тот code, что передан — фолбэк для случая, когда авто-решение (resumeWithTotp)
 // само не справилось (DOM/тайминг), а у пользователя есть свежий код (свой authenticator/подсчитанный).
 export function submitBrowserCheckpoint(username: string, code: string, proxy?: string, manual?: boolean) {
-  return browserFetch<{ ok: boolean; browserState: object; username: string }>('/login/checkpoint', { username, code, proxy, manual })
+  return browserFetch<{ ok: boolean; browserState: object; username: string }>('/login/checkpoint', { username, code, proxy, manual }, LOGIN_TIMEOUT_MS)
 }
 
 /** Повтор кода. Браузерный воркер сам определяет канал по странице — method принимается для сигнатурной совместимости. */
@@ -85,7 +89,7 @@ export function resendBrowserCode(username: string, _method: 'email' | 'sms' = '
 
 export function browserLoginByCookies(input: object | string, proxy?: string, locale?: string, timezoneId?: string) {
   const payload = typeof input === 'string' ? { cookies: input } : { storageState: input }
-  return browserFetch<{ ok: boolean; browserState: object; username: string }>('/login/cookies', { ...payload, proxy, locale, timezoneId })
+  return browserFetch<{ ok: boolean; browserState: object; username: string }>('/login/cookies', { ...payload, proxy, locale, timezoneId }, LOGIN_TIMEOUT_MS)
 }
 
 export async function browserTestSession(storageState: object, proxy?: string, username?: string, locale?: string, timezoneId?: string): Promise<boolean> {

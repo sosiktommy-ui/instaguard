@@ -36,7 +36,10 @@ export async function solveRecaptchaV2({ sitekey, url, invisible = false, enterp
   // robot» от Meta). БЕЗ этого флага 2captcha решает капчу как обычную v2, и enterprise-виджет такой
   // токен ОТВЕРГАЕТ → вход не проходит (таймаут «network»). Именно это ломало вход с reCAPTCHA-экраном.
   const id = await submitTask({ method: 'userrecaptcha', googlekey: sitekey, pageurl: url, invisible: invisible ? '1' : '0', ...(enterprise ? { enterprise: '1' } : {}) })
-  return pollResult(id)
+  // Таймаут 135с (не дефолтные 150) — чтобы воркер успел вписать токен и вернуть исход в клиентском
+  // бюджете входа (см. LOGIN_TIMEOUT_MS в lib/browser/client.ts). enterprise reCAPTCHA на 2captcha
+  // обычно решается за 20–60с, 135с — с запасом.
+  return pollResult(id, { timeoutMs: 135000 })
 }
 
 export async function solveHCaptcha({ sitekey, url }) {
@@ -124,27 +127,27 @@ export async function detectCaptcha(page) {
 }
 
 // Вписать токен решения в форму + дёрнуть JS-callback виджета (нужно многим виджетам,
-// иначе форма не считает капчу пройденной, даже если textarea заполнена).
+// иначе форма не считает капчу пройденной, даже если textarea заполнена). Возвращает
+// { textarea, callback } — заполнили ли поле ответа и нашёлся ли колбэк (для диагностики).
 async function injectToken(page, type, token) {
+  const result = { textarea: false, callback: false }
   const script = ({ tok, kind }) => {
+    const out = { textarea: false, callback: false }
+    const fire = (el) => { try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })) } catch {} }
     if (kind === 'hcaptcha') {
-      const el = document.querySelector('textarea[name="h-captcha-response"], #h-captcha-response')
-      if (el) { el.value = tok; el.innerHTML = tok }
-      try {
-        const cfg = window.hcaptcha
-        if (cfg && typeof cfg.getRespKey === 'function') { /* no-op, читаем только */ }
-      } catch {}
-      return
+      document.querySelectorAll('textarea[name="h-captcha-response"], #h-captcha-response, textarea[name="g-recaptcha-response"]').forEach((el) => { el.value = tok; el.innerHTML = tok; fire(el); out.textarea = true })
+      return out
     }
     if (kind === 'funcaptcha') {
       const el = document.querySelector('textarea[name="fc-token"], #fc-token, input[name="fc-token"]')
-      if (el) el.value = tok
-      try { if (typeof window.onFunCaptchaSuccess === 'function') window.onFunCaptchaSuccess(tok) } catch {}
-      return
+      if (el) { el.value = tok; fire(el); out.textarea = true }
+      try { if (typeof window.onFunCaptchaSuccess === 'function') { window.onFunCaptchaSuccess(tok); out.callback = true } } catch {}
+      return out
     }
-    // recaptcha v2
-    const el = document.querySelector('textarea[name="g-recaptcha-response"], #g-recaptcha-response')
-    if (el) { el.value = tok; el.innerHTML = tok }
+    // recaptcha v2 / ENTERPRISE: заполняем ВСЕ textarea ответа (id может быть g-recaptcha-response-N) +
+    // дёргаем ВСЕ найденные колбэки из ___grecaptcha_cfg (структура varies по версии/enterprise —
+    // раньше выходили по первому найденному, у enterprise реальный колбэк бывает вложен глубже).
+    document.querySelectorAll('textarea[name="g-recaptcha-response"], textarea[id^="g-recaptcha-response"], #g-recaptcha-response').forEach((el) => { el.value = tok; el.innerHTML = tok; fire(el); out.textarea = true })
     try {
       const cfg = window.___grecaptcha_cfg
       if (cfg && cfg.clients) {
@@ -152,22 +155,26 @@ async function injectToken(page, type, token) {
           const client = cfg.clients[k]
           for (const kk in client) {
             const obj = client[kk]
-            if (obj && typeof obj.callback === 'function') { obj.callback(tok); return }
-            // вложенный объект с колбэком (структура ___grecaptcha_cfg varies по версии)
+            if (obj && typeof obj.callback === 'function') { try { obj.callback(tok); out.callback = true } catch {} }
             if (obj && typeof obj === 'object') {
               for (const kkk in obj) {
                 const inner = obj[kkk]
-                if (inner && typeof inner.callback === 'function') { inner.callback(tok); return }
+                if (inner && typeof inner.callback === 'function') { try { inner.callback(tok); out.callback = true } catch {} }
               }
             }
           }
         }
       }
     } catch {}
+    return out
   }
   for (const frame of page.frames()) {
-    try { await frame.evaluate(script, { tok: token, kind: type }) } catch {}
+    try {
+      const r = await frame.evaluate(script, { tok: token, kind: type })
+      if (r) { result.textarea = result.textarea || r.textarea; result.callback = result.callback || r.callback }
+    } catch {}
   }
+  return result
 }
 
 // Обнаружить и решить капчу на текущей странице, вписав токен в форму.
@@ -202,32 +209,68 @@ function detectFromFrameUrls(page) {
   return null
 }
 
+// reCAPTCHA грузится вложенными фреймами (fbsbx → google/recaptcha/(enterprise/)anchor → bframe)
+// АСИНХРОННО. Если решать ДО их загрузки — anchor-фрейм ещё about:blank, enterprise-флаг не
+// определится, а виджет не готов принять токен. Ждём появления anchor-фрейма (готовность виджета).
+async function waitForRecaptchaReady(page, timeoutMs = 9000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const ready = page.frames().some((f) => { try { return /recaptcha\/(enterprise\/)?anchor/i.test(f.url() || '') } catch { return false } })
+    if (ready) return true
+    await sleep(500)
+  }
+  return false
+}
+
+// reCAPTCHA ENTERPRISE или обычная v2? Для 2captcha это КРИТИЧНО: enterprise-виджет ОТВЕРГАЕТ
+// токен, решённый без enterprise=1 (подтверждённый живой баг — enterprise:false → вход зависал).
+// Определяем НЕЗАВИСИМО ОТ ТАЙМИНГА загрузки google-фреймов: главный признак — top-URL Instagram
+// `auth_platform/recaptcha` (Meta показывает там ИМЕННО enterprise «I'm not a robot»). Плюс флаг из
+// детектора и любой фрейм с /recaptcha/enterprise/ (когда уже догрузились).
+function isEnterpriseRecaptcha(page, found) {
+  if (found && found.enterprise) return true
+  try { if (/auth_platform\/recaptcha/i.test(page.url() || '')) return true } catch {}
+  return page.frames().some((f) => { try { return /recaptcha\/enterprise/i.test(f.url() || '') } catch { return false } })
+}
+
+// Обнаружить и решить капчу. Возвращает { solved, detected, log } — log несёт человекочитаемую
+// трассу (что распознали, enterprise ли, что ответила 2captcha, вписан ли токен), которую login.js
+// прикладывает к ошибке входа в UI — чтобы НЕ гадать вслепую, почему капча не прошла.
 export async function trySolveCaptcha(page) {
-  if (!captchaConfigured()) return false
+  const t = []
+  if (!captchaConfigured()) return { solved: false, detected: false, log: '2captcha не настроена (TWOCAPTCHA_API_KEY не задан на воркере)' }
+
+  // Дать вложенным фреймам reCAPTCHA догрузиться — иначе enterprise-флаг/виджет не готовы (см. helper).
+  await waitForRecaptchaReady(page).catch(() => {})
+
   let found = await detectCaptcha(page).catch(() => null)
-  if (!found) found = detectFromFrameUrls(page)   // фолбэк по URL фреймов (кросс-ориджин reCAPTCHA)
-  if (!found) { console.error('[captcha] капча не распознана (нет sitekey ни в DOM, ни в URL фреймов)'); return false }
+  let via = 'dom'
+  if (!found) { found = detectFromFrameUrls(page); via = 'frame-url' }   // фолбэк по URL фреймов (кросс-ориджин reCAPTCHA)
+  if (!found) { console.error('[captcha] капча не распознана (нет sitekey ни в DOM, ни в URL фреймов)'); return { solved: false, detected: false, log: 'капча не распознана (нет sitekey ни в DOM, ни в URL фреймов)' } }
+
   // pageurl для 2captcha — домен ХОСТА капчи. Instagram рендерит reCAPTCHA в iframe fbsbx.com, и
   // sitekey привязан к fbsbx (не к instagram). С pageurl=instagram 2captcha даёт ERROR_CAPTCHA_UNSOLVABLE.
-  // Считаем НЕЗАВИСИМО от того, какой детектор нашёл sitekey (detectCaptcha мог найти без pageurl).
   let url = found.pageurl || page.url()
   for (const f of page.frames()) {
     let u = ''; try { u = f.url() || '' } catch {}
     if (/\/captcha\/(recaptcha|hcaptcha)\/iframe/i.test(u)) { try { const p = new URL(u); url = p.origin + p.pathname } catch { url = u } ; break }
   }
-  // reCAPTCHA ENTERPRISE — по флагу из detectCaptcha ИЛИ по ЛЮБОМУ фрейму с /recaptcha/enterprise/
-  // (Meta-экран «I'm not a robot» на /auth_platform/recaptcha/ грузит enterprise-anchor/bframe).
-  const enterprise = Boolean(found.enterprise) || page.frames().some((f) => { try { return /recaptcha\/enterprise/i.test(f.url()) } catch { return false } })
-  console.error('[captcha] распознана:', found.type, 'enterprise:', enterprise, 'pageurl:', url, 'sitekey:', String(found.sitekey).slice(0, 12) + '…')
+  const enterprise = isEnterpriseRecaptcha(page, found)
+  const skHead = String(found.sitekey || found.publicKey || '').slice(0, 14)
+  t.push(`распознана ${found.type}${enterprise ? ' ENTERPRISE' : ''} (via ${via}), sitekey ${skHead}…, pageurl ${url}`)
+  console.error('[captcha]', t[t.length - 1])
   try {
     let token
     if (found.type === 'hcaptcha') token = await solveHCaptcha({ sitekey: found.sitekey, url })
     else if (found.type === 'funcaptcha') token = await solveFunCaptcha({ publicKey: found.publicKey, surl: found.surl, url })
     else token = await solveRecaptchaV2({ sitekey: found.sitekey, url, enterprise })
-    await injectToken(page, found.type, token)
-    return true
+    const applied = await injectToken(page, found.type, token)
+    t.push(`2captcha OK: токен получен (len ${token ? token.length : 0}), вписан [textarea ${applied.textarea ? '✓' : '✗'}, callback ${applied.callback ? '✓' : '✗'}]`)
+    console.error('[captcha]', t[t.length - 1])
+    return { solved: true, detected: true, log: t.join(' | ') }
   } catch (e) {
-    console.error('[captcha] решение 2captcha не удалось:', e.message)
-    return false
+    t.push('2captcha ОШИБКА: ' + (e?.message || String(e)))
+    console.error('[captcha] решение 2captcha не удалось:', e?.message || e)
+    return { solved: false, detected: true, log: t.join(' | ') }
   }
 }

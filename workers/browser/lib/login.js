@@ -10,15 +10,19 @@ import { trySolveCaptcha, captchaConfigured, findImageCaptchaLocator, solveImage
 // Капча встретилась → решаем через 2captcha, вписываем токен, жмём «Продолжить»/submit,
 // какой найдётся на экране. captchaTried гасит повторные попытки на ТОМ ЖЕ экране —
 // 2captcha не бесплатна и решение занимает 10–40с, повторять его в каждой итерации poll-а нельзя.
+// Возвращает { detected, solved, log }: detected=капча была на экране (даже если решить не вышло —
+// тогда НЕ долбим 2captcha повторно в этом входе), solved=токен получен и вписан, log=трасса для UI.
 async function handleCaptchaIfPresent(page) {
-  if (!captchaConfigured()) return false
-  const solved = await trySolveCaptcha(page).catch(() => false)
-  if (!solved) return false
-  await page.waitForTimeout(1200)
+  if (!captchaConfigured()) return { detected: false, solved: false, log: '' }
+  let r
+  try { r = await trySolveCaptcha(page) } catch (e) { r = { solved: false, detected: false, log: 'captcha_exception: ' + (e?.message || e) } }
+  if (!r || !r.solved) return { detected: Boolean(r && r.detected), solved: false, log: (r && r.log) || '' }
+  await page.waitForTimeout(1500)
+  // enterprise-виджет часто авто-сабмитится по callback, но подстрахуемся кнопкой продолжения.
   const btn = await firstVisible(page, ['button[type="submit"]:not([disabled])', ...SEL.codeSubmitCss], 3000).catch(() => null)
   if (btn) await btn.click({ delay: 60 }).catch(() => {})
-  else await clickByText(page, [...SEL.codeSubmit, 'Verify', 'Проверить'], { timeout: 3000 }).catch(() => {})
-  return true
+  else await clickByText(page, [...SEL.codeSubmit, 'Verify', 'Проверить', 'Continue', 'Продолжить'], { timeout: 3000 }).catch(() => {})
+  return { detected: true, solved: true, log: r.log }
 }
 
 // Вписать РАЗГАДАННЫЙ текст image-капчи в ближайшее подходящее текстовое поле (НЕ логин/пароль/
@@ -590,6 +594,7 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
   let deadline = Date.now() + 28000
   let approvalExtended = false
   let captchaTried = false
+  let captchaLog = ''   // трасса капчи (что распознали / что ответила 2captcha) — в ошибку для UI
   let totpExtended = false
   let totpWindow = -1
   let totpAttempts = 0
@@ -684,10 +689,14 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
     // (новый IP/прокси/устройство). Пробуем решить ОДИН раз через 2captcha (решение занимает
     // 10–40с — на это время продлеваем дедлайн, иначе цикл выйдет по таймауту, не дождавшись ответа).
     if (!captchaTried) {
-      const attempted = await handleCaptchaIfPresent(page)
-      if (attempted) {
+      const c = await handleCaptchaIfPresent(page)
+      if (c.log) captchaLog = c.log
+      if (c.detected) {
+        // Капча была на экране: НЕ пробуем решить её повторно в этом входе (2captcha платная,
+        // решение уже отправлено). Если решили — ждём, что виджет проведёт дальше (+30с); если
+        // 2captcha не справилась — цикл добежит до таймаута, а captchaLog покажет ПРИЧИНУ в UI.
         captchaTried = true
-        deadline = Math.max(deadline, Date.now() + 40000)
+        if (c.solved) deadline = Math.max(deadline, Date.now() + 30000)
         continue
       }
     }
@@ -719,8 +728,13 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
   }
   const dom = await domSummary(page)
   console.error('[login] исход не распознан за отведённое время, DOM-дамп:', JSON.stringify(dom))
-  const domTxt = dom ? ` · URL: ${dom.topUrl || ''} · фреймы: ${JSON.stringify(dom.frames.map((f) => f.url))} · HTML(обрезан): ${(dom.html || '').replace(/\s+/g, ' ').slice(0, 1000)}` : ''
-  await fail(page, `network: Instagram не ответил понятным исходом за отведённое время.${domTxt}`)
+  // ПОЛНЫЙ дамп (фреймы+HTML) уходит в логи воркера выше. В UI — компактно: трасса капчи (главное для
+  // этого кейса — почему 2captcha не прошла) + короткий URL. Визуал экрана несёт приложенный скрин (fail).
+  const capTxt = captchaLog
+    ? `\n\n🔐 Капча: ${captchaLog}`
+    : (captchaConfigured() ? '\n\n🔐 Капча: на этом экране не обнаружена.' : '\n\n🔐 Капча: 2captcha НЕ настроена на воркере (TWOCAPTCHA_API_KEY).')
+  const shortUrl = (() => { try { const u = new URL(dom?.topUrl || page.url()); return u.origin + u.pathname } catch { return dom?.topUrl || '' } })()
+  await fail(page, `network: Instagram не ответил понятным исходом за отведённое время.${capTxt}\n\n🔗 Экран: ${shortUrl} (фреймов: ${dom?.frameCount ?? '?'})`)
 }
 
 /**
