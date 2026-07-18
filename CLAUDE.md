@@ -120,6 +120,16 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-19 (3) (🔴 КАПЧА, КОРЕНЬ по data-attrs: `data-action=ig_login_recaptcha`, НЕТ data-s → enterprise-решение переведено на новый API 2captcha `createTask` с `enterprisePayload.action`)
+
+⚠️ **Редеплой воркера** (build → `2026-07-19-browser-88-recaptcha-enterprise-createtask`). По живой трассе (build-87): `data-attrs={data-action:"ig_login_recaptcha", data-sitekey:"6LeyIlka…", data-size:"normal"}`, **data-s НЕТ**. Исходник `successCallback` = `p({CAPTCHA_SOLVED, token})` — мы её вызываем, сообщение уходит, но экран не сменяется → **токен отвергается бэкендом Meta**.
+
+- **Корень:** капча — reCAPTCHA **Enterprise v2-чекбокс с action `ig_login_recaptcha`**. Легаси-метод 2captcha (`in.php` `userrecaptcha`) НЕ передаёт action для enterprise-v2 → токен решается без action → Meta при `createAssessment` видит `tokenProperties.action ≠ ig_login_recaptcha` и отбраковывает. Клиентская отправка у нас уже идентична штатной (вызываем родную `successCallback`) — дело именно в токене.
+- **Фикс (`captcha.js`):** новый `solveRecaptchaEnterprise` через **JSON-API 2captcha `createTask`** (`RecaptchaV2EnterpriseTaskProxyless`) с `enterprisePayload.action = ig_login_recaptcha` (+ `s`, если есть) — 2captcha рендерит виджет С нужным action, токен несёт action. `trySolveCaptcha` роутит enterprise-recaptcha сюда; легаси `solveRecaptchaV2` остаётся для НЕ-enterprise. Трасса: `solve via createTask ENTERPRISE (action=…)`.
+- **⚠️ Честная оговорка:** если Meta режет токен не по action, а по СКОРУ (farm-solved enterprise-токен получает низкий risk-score) — это уже не лечится параметрами 2captcha; тогда путь = доверенный IP (не триггерить капчу) / куки. Узнаем по следующей трассе: `createTask ENTERPRISE` + `verify: капча УШЛА ✓` = решено; если снова ✗ — это скор-стена.
+
+Проверено: `node --check` чист, воркер-тесты 35/35. ⚠️ **Не тестировать на блокирующемся аккаунте** — дать ему остыть / взять свежий; каждая попытка приближает temp-block.
+
 ### 2026-07-19 (2) (🔴 КАПЧА, КОРЕНЬ найден по исходнику successCallback: токен отвергается Meta без `data-s` → извлекаем и шлём data-s/action)
 
 ⚠️ **Редеплой воркера** (build → `2026-07-19-browser-87-captcha-data-s`). По исходнику `successCallback` (дамп build-86): `function c(e){ p({type: CAPTCHA_SOLVED, token: e}) }` — просто постит родителю `{CAPTCHA_SOLVED, token}`. Мы её ВЫЗЫВАЕМ (сообщение уходит), клиентская отправка теперь ИДЕНТИЧНА штатной — но экран не сменяется. Вывод: **токен ОТВЕРГАЕТСЯ бэкендом Meta**, а не «не отправлен».

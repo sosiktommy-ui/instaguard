@@ -56,6 +56,49 @@ async function solveWithRetry(params, { attempts = 2, timeoutMs = 75000, onAttem
   throw lastErr
 }
 
+// ── reCAPTCHA ENTERPRISE через НОВЫЙ JSON-API 2captcha (createTask) ───────────────────────────
+// Легаси in.php (method=userrecaptcha) НЕ умеет передать ACTION для enterprise-v2 → 2captcha решает
+// капчу без action, токен без action, и бэкенд Meta его ОТВЕРГАЕТ (assessment.action ≠ ig_login_recaptcha;
+// живой кейс 2026-07-19: клиентская отправка идентична штатной, экран не сменяется = токен не принят).
+// createTask + enterprisePayload.action заставляет 2captcha отрендерить виджет С нужным action → токен
+// несёт action, как ждёт Meta. (Плюс s, если попадётся.)
+const CT_URL = 'https://api.2captcha.com/createTask'
+const RT_URL = 'https://api.2captcha.com/getTaskResult'
+
+async function solveEnterpriseOnce(task, { timeoutMs = 90000, intervalMs = 6000 } = {}) {
+  const cr = await fetch(CT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clientKey: API_KEY, task }) })
+  const cd = await cr.json().catch(() => null)
+  if (!cd || cd.errorId) throw new Error('2captcha_create_failed: ' + (cd?.errorCode || cd?.errorDescription || 'нет ответа createTask'))
+  const taskId = cd.taskId
+  const deadline = Date.now() + timeoutMs
+  await sleep(intervalMs)
+  while (Date.now() < deadline) {
+    const rr = await fetch(RT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clientKey: API_KEY, taskId }) })
+    const rd = await rr.json().catch(() => null)
+    if (rd && rd.status === 'ready') return (rd.solution && (rd.solution.gRecaptchaResponse || rd.solution.token)) || ''
+    if (rd && rd.errorId) throw new Error('2captcha_failed: ' + (rd.errorCode || rd.errorDescription))
+    await sleep(intervalMs)
+  }
+  throw new Error('2captcha_timeout: enterprise-решение не пришло за отведённое время')
+}
+
+// reCAPTCHA v2 ENTERPRISE (чекбокс «I'm not a robot» на auth_platform/recaptcha). Передаёт action и s
+// в enterprisePayload — без этого токен не проходит assessment Meta (см. коммент выше). 2 попытки.
+export async function solveRecaptchaEnterprise({ sitekey, url, action, dataS, onAttempt }) {
+  if (!captchaConfigured()) throw new Error('2captcha_not_configured: TWOCAPTCHA_API_KEY не задан')
+  const ep = {}
+  if (action) ep.action = action
+  if (dataS) ep.s = dataS
+  const task = { type: 'RecaptchaV2EnterpriseTaskProxyless', websiteURL: url, websiteKey: sitekey }
+  if (Object.keys(ep).length) task.enterprisePayload = ep
+  let lastErr
+  for (let i = 0; i < 2; i++) {
+    try { return await solveEnterpriseOnce(task) }
+    catch (e) { lastErr = e; const m = e?.message || String(e); if (onAttempt) { try { onAttempt(i + 1, m) } catch {} } if (FATAL_2CAPTCHA.test(m)) throw e }
+  }
+  throw lastErr
+}
+
 export async function solveRecaptchaV2({ sitekey, url, invisible = false, enterprise = false, dataS, action, onAttempt }) {
   if (!captchaConfigured()) throw new Error('2captcha_not_configured: TWOCAPTCHA_API_KEY не задан')
   // enterprise=1 — для reCAPTCHA ENTERPRISE (Instagram /auth_platform/recaptcha/, экран «I'm not a
@@ -398,7 +441,11 @@ export async function trySolveCaptcha(page) {
     let token
     if (found.type === 'hcaptcha') token = await solveHCaptcha({ sitekey: found.sitekey, url, onAttempt })
     else if (found.type === 'funcaptcha') token = await solveFunCaptcha({ publicKey: found.publicKey, surl: found.surl, url, onAttempt })
-    else token = await solveRecaptchaV2({ sitekey: found.sitekey, url, enterprise, dataS: found.dataS, action: found.action, onAttempt })
+    else if (found.type === 'recaptcha' && enterprise) {
+      // ENTERPRISE → новый createTask API с enterprisePayload.action (легаси in.php action не передаёт).
+      t.push(`solve via createTask ENTERPRISE (action=${found.action || '—'}${found.dataS ? ', s=есть' : ''})`)
+      token = await solveRecaptchaEnterprise({ sitekey: found.sitekey, url, action: found.action, dataS: found.dataS, onAttempt })
+    } else token = await solveRecaptchaV2({ sitekey: found.sitekey, url, enterprise, dataS: found.dataS, action: found.action, onAttempt })
     const solveSec = Math.round((Date.now() - started) / 1000)
     const applied = await injectToken(page, found.type, token)
     // Проверяем, что капча РЕАЛЬНО ушла (экран сменился / iframe отвалился) — а не «токен вписан вслепую».
