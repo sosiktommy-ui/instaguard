@@ -495,6 +495,20 @@ async function clickRecaptchaCheckbox(page) {
 // прикладывает к ошибке входа в UI — чтобы НЕ гадать вслепую, почему капча не прошла.
 export async function trySolveCaptcha(page, opts = {}) {
   const t = []
+  // Сетевой лог капча-запросов: когда наш токен уходит в Meta, она дёргает эндпоинт проверки —
+  // его СТАТУС и есть «почему отвергнут» (низкий скор → часто 4xx/особый JSON). Ловим статусы
+  // капча/verify-запросов и на неудаче прикладываем к трассе — видно СЕРВЕРНУЮ причину, не гадаем.
+  const netLog = []
+  try {
+    page.on('response', (r) => {
+      try {
+        const ru = r.url()
+        if (/\/captcha\/|recaptcha|auth_platform|userverify|reload|bloks|challenge/i.test(ru) && netLog.length < 16) {
+          netLog.push(`${r.status()} ${ru.replace(/^https?:\/\//, '').slice(0, 70)}`)
+        }
+      } catch {}
+    })
+  } catch {}
   if (!captchaConfigured()) return { solved: false, detected: false, advanced: false, log: '2captcha не настроена (TWOCAPTCHA_API_KEY не задан на воркере)' }
 
   // Дать вложенным фреймам reCAPTCHA догрузиться — иначе enterprise-флаг/виджет не готовы (см. helper).
@@ -556,7 +570,11 @@ export async function trySolveCaptcha(page, opts = {}) {
     const advanced = await waitCaptchaCleared(page)
     const retryTxt = attemptNotes.length > 1 ? ` [ретраи: ${attemptNotes.slice(0, -1).join('; ')}]` : ''
     let verifyTxt = advanced ? 'капча УШЛА ✓' : 'экран НЕ сменился ✗'
-    if (!advanced) { try { verifyTxt += ' | frames: ' + (await captchaFramesDump(page)) } catch {} }   // дамп fbsbx — чего ждёт для отправки
+    if (!advanced) {
+      try { verifyTxt += ' | frames: ' + (await captchaFramesDump(page)) } catch {}   // дамп fbsbx — чего ждёт для отправки
+      await sleep(1500)   // дать verify-запросу Meta уйти после инъекции токена, прежде чем снять netLog
+      if (netLog.length) verifyTxt += ' | net: ' + JSON.stringify(netLog.slice(-10))   // статусы капча/verify-запросов = серверная причина отказа
+    }
     t.push(`2captcha OK: токен len ${token ? token.length : 0} за ${solveSec}с${retryTxt}, вписан [textarea ${applied.textarea ? '✓' : '✗'}, getResponse ${applied.getResponse ? '✓' : '✗'}, data-callback ${applied.dataCallback ? '✓' : '✗'}, cfg-callback ${applied.cfgCallback ? '✓' : '✗'}, form-submit ${applied.formSubmit ? '✓' : '✗'}, postMessage ${applied.postMessage ? '✓' : '✗'}] → verify: ${verifyTxt}`)
     console.error('[captcha]', t[t.length - 1])
     return { solved: true, detected: true, advanced, log: t.join(' | ') }
