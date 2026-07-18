@@ -173,10 +173,31 @@ async function injectToken(page, type, token) {
 // Обнаружить и решить капчу на текущей странице, вписав токен в форму.
 // НЕ кликает «Продолжить»/submit — это делает вызывающий код (login.js), т.к. кнопка
 // и её текст зависят от конкретного экрана (форма входа / challenge / device-approval).
+// Снять sitekey ПРЯМО ИЗ URL фреймов reCAPTCHA/hCaptcha (anchor/bframe несут ?k=/&sitekey=). Надёжнее
+// evaluate внутри кросс-ориджин фрейма (fbsbx/google часто блокируют доступ → detectCaptcha возвращал
+// null → 2captcha не вызывалась → таймаут «network», баланс не тратился). Это и был живой корень.
+function detectFromFrameUrls(page) {
+  for (const f of page.frames()) {
+    let u = ''
+    try { u = f.url() || '' } catch { u = '' }
+    if (/recaptcha/i.test(u)) {
+      const m = u.match(/[?&]k=([^&]+)/)
+      if (m) return { type: 'recaptcha', sitekey: decodeURIComponent(m[1]), enterprise: /enterprise/i.test(u) }
+    }
+    if (/hcaptcha/i.test(u)) {
+      const m = u.match(/[?&]sitekey=([^&]+)/)
+      if (m) return { type: 'hcaptcha', sitekey: decodeURIComponent(m[1]) }
+    }
+  }
+  return null
+}
+
 export async function trySolveCaptcha(page) {
   if (!captchaConfigured()) return false
-  const found = await detectCaptcha(page).catch(() => null)
-  if (!found) return false
+  let found = await detectCaptcha(page).catch(() => null)
+  if (!found) found = detectFromFrameUrls(page)   // фолбэк по URL фреймов (кросс-ориджин reCAPTCHA)
+  if (!found) { console.error('[captcha] капча не распознана (нет sitekey ни в DOM, ни в URL фреймов)'); return false }
+  console.error('[captcha] распознана:', found.type, 'enterprise:', Boolean(found.enterprise), 'sitekey:', String(found.sitekey).slice(0, 12) + '…')
   const url = page.url()
   // reCAPTCHA ENTERPRISE — по флагу из detectCaptcha ИЛИ по ЛЮБОМУ фрейму с /recaptcha/enterprise/
   // (Meta-экран «I'm not a robot» на /auth_platform/recaptcha/ грузит enterprise-anchor/bframe).
