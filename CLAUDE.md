@@ -120,6 +120,19 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-18 (4) (🔴 КАПЧА, ЖИВАЯ ТРАССА: callback ✓, но экран не сменился (verify ✗) → getResponse-override + submit-any-form + postMessage + дамп фреймов fbsbx)
+
+⚠️ **Нужен редеплой браузерного воркера** (build → `2026-07-18-browser-85-captcha-getresponse-submit`). Next.js не трогал. По ЖИВОЙ трассе входа (build-84, аккаунт cheidy.ite, reCAPTCHA Enterprise):
+```
+2captcha OK: токен len 2028 за 44с, вписан [textarea ✓, data-callback ✓, cfg-callback ✓, form-submit ✗] → verify: экран НЕ сменился ✗
+```
+- **Что подтвердилось:** фикс `callback ✗` из записи (2) РАБОТАЕТ — `data-callback ✓` + `cfg-callback ✓` (раньше ✗), 2captcha решает (токен 2028/44с). Осталась ПОСЛЕДНЯЯ МИЛЯ: колбэки дёрнулись, но экран `auth_platform/recaptcha` не сменился.
+- **Гипотеза (сильная):** Meta/fbsbx читает решение через `grecaptcha.enterprise.getResponse()`, а не из textarea. Заполнение textarea НЕ меняет внутреннее состояние reCAPTCHA → success-хендлер получал ПУСТО → постбэк без токена → экран стоит. Плюс `form-submit ✗`: textarea reCAPTCHA лежит в google-подфрейме, не в форме fbsbx → `closest('form')` пуст.
+- **Фикс (`captcha.js injectToken`):** добавлено (2) **подмена `grecaptcha(.enterprise).getResponse` → возвращает наш токен** (чтобы хендлер fbsbx получил решение); (5) submit **ЛЮБОЙ** формы во фрейме (не только с textarea); (6) `postMessage` наверх (сырой токен + типовые структуры). Трасса расширена флагами `getResponse`/`postMessage`.
+- **Диагностика (`captchaFramesDump`):** при `verify ✗` в трассу добавляется КОМПАКТНЫЙ дамп фреймов капчи (forms/action, buttons, data-callback, grecaptcha/enterprise, глобальные fn-хендлеры) — чтобы следующая итерация делалась ТОЧНО по вёрстке fbsbx, а не вслепую.
+
+Проверено: `node --check` чист, воркер-тесты **35/35**. ⚠️ **Живьём не подтверждено** — нужен редеплой + повтор входа. **Что затестить:** вход с reCAPTCHA → в трассе `verify:` либо `капча УШЛА ✓` (getResponse-override сработал), либо `экран НЕ сменился ✗ | frames: {...}` — прислать этот `frames:`-дамп, по нему добью fbsbx-постбэк точечно. **Новая память [[login-passwords-always-correct]]** — пароли тестовых аккаунтов всегда верные (юзер входит руками до бота), bad_password = не креды.
+
 ### 2026-07-18 (3) (КАПЧА, продолжение PLAN-LOGIN: Фаза 2 §4.5/§4.6 (счётчик попыток + дедлайны) + Фаза 3 §4.3 B8 (enterprise в DOM) + Фаза 4 §9 (капча в loginByState))
 
 ⚠️ **Нужен редеплой браузерного воркера** (build → `2026-07-18-browser-84-captcha-attempts-enterprise-dom`) + передеплой Next.js (только `lib/browser/client.ts` — таймаут 240→280с). Продолжение записи (2) по `PLAN-LOGIN.md`.

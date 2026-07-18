@@ -164,9 +164,9 @@ export async function detectCaptcha(page) {
 // ВСЁ: textarea + прямой вызов data-callback-атрибута + РЕКУРСИВНЫЙ обход cfg + submit формы.
 // Возвращает { textarea, dataCallback, cfgCallback, formSubmit } — для трассы в UI.
 async function injectToken(page, type, token) {
-  const result = { textarea: false, dataCallback: false, cfgCallback: false, formSubmit: false }
+  const result = { textarea: false, getResponse: false, dataCallback: false, cfgCallback: false, formSubmit: false, postMessage: false }
   const script = ({ tok, kind }) => {
-    const out = { textarea: false, dataCallback: false, cfgCallback: false, formSubmit: false }
+    const out = { textarea: false, getResponse: false, dataCallback: false, cfgCallback: false, formSubmit: false, postMessage: false }
     const fire = (el) => { try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })) } catch {} }
     if (kind === 'funcaptcha') {
       const el = document.querySelector('textarea[name="fc-token"], #fc-token, input[name="fc-token"]')
@@ -177,7 +177,15 @@ async function injectToken(page, type, token) {
     // recaptcha v2 / ENTERPRISE / hcaptcha:
     // (1) заполнить ВСЕ textarea ответа (id может быть g-recaptcha-response-N)
     document.querySelectorAll('textarea[name="g-recaptcha-response"], textarea[id^="g-recaptcha-response"], #g-recaptcha-response, textarea[name="h-captcha-response"], #h-captcha-response').forEach((el) => { el.value = tok; el.innerHTML = tok; fire(el); out.textarea = true })
-    // (2) ДЁРНУТЬ data-callback НАПРЯМУЮ — штатный success-хендлер fbsbx (ГЛАВНЫЙ фикс callback ✗):
+    // (2) ПОДМЕНИТЬ grecaptcha(.enterprise).getResponse → возвращать наш токен. КЛЮЧЕВОЕ: заполнение
+    //     textarea НЕ меняет внутреннее состояние reCAPTCHA, а success-хендлер Meta/fbsbx читает решение
+    //     через grecaptcha.enterprise.getResponse() → получал ПУСТО (живой кейс 2026-07-18: data-callback
+    //     ✓/cfg-callback ✓, но verify ✗ — колбэк дёрнулся, а токена в getResponse нет → экран не сменился).
+    try {
+      const patchGR = (g) => { if (g && typeof g.getResponse === 'function') { try { g.getResponse = () => tok; out.getResponse = true } catch {} } }
+      if (window.grecaptcha) { patchGR(window.grecaptcha); if (window.grecaptcha.enterprise) patchGR(window.grecaptcha.enterprise) }
+    } catch {}
+    // (3) ДЁРНУТЬ data-callback НАПРЯМУЮ — штатный success-хендлер fbsbx:
     //     атрибут data-callback у виджета — это ИМЯ глобальной функции, которую reCAPTCHA зовёт с токеном.
     try {
       document.querySelectorAll('.g-recaptcha[data-callback], [data-sitekey][data-callback], .h-captcha[data-callback], [data-hcaptcha-widget-id][data-callback]').forEach((w) => {
@@ -185,7 +193,7 @@ async function injectToken(page, type, token) {
         if (name && typeof window[name] === 'function') { try { window[name](tok); out.dataCallback = true } catch {} }
       })
     } catch {}
-    // (3) РЕКУРСИВНЫЙ обход ___grecaptcha_cfg — вызвать ВСЕ функции-колбэки (у ENTERPRISE вложены
+    // (4) РЕКУРСИВНЫЙ обход ___grecaptcha_cfg — вызвать ВСЕ функции-колбэки (у ENTERPRISE вложены
     //     глубже, чем 2 уровня, которыми мы ограничивались раньше — потому колбэк и не находился).
     try {
       const cfg = window.___grecaptcha_cfg
@@ -204,11 +212,21 @@ async function injectToken(page, type, token) {
         for (const k in cfg.clients) visit(cfg.clients[k], 0)
       }
     } catch {}
-    // (4) SUBMIT формы с textarea ответа — если fbsbx использует form submit, а не postMessage/callback.
+    // (5) SUBMIT формы: сначала форма с textarea ответа, ИНАЧЕ любая форма во фрейме (Meta-форма fbsbx,
+    //     textarea reCAPTCHA часто лежит в google-подфрейме, а не в форме fbsbx → closest('form') пуст).
     try {
       const area = document.querySelector('textarea[name="g-recaptcha-response"], textarea[name="h-captcha-response"]')
-      const form = area && area.closest('form')
+      const form = (area && area.closest('form')) || document.querySelector('form')
       if (form) { try { (form.requestSubmit ? form.requestSubmit() : form.submit()); out.formSubmit = true } catch {} }
+    } catch {}
+    // (6) postMessage НАВЕРХ — fbsbx-iframe отдаёт результат родителю Instagram через message-канал.
+    //     Формат нам неизвестен, поэтому шлём и сырой токен, и пару типовых структур (родитель игнорит чужое).
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage(tok, '*')
+        try { window.parent.postMessage(JSON.stringify({ type: 'captcha', event: 'success', token: tok, response: tok }), '*') } catch {}
+        out.postMessage = true
+      }
     } catch {}
     return out
   }
@@ -217,13 +235,39 @@ async function injectToken(page, type, token) {
       const r = await frame.evaluate(script, { tok: token, kind: type })
       if (r) {
         result.textarea = result.textarea || r.textarea
+        result.getResponse = result.getResponse || r.getResponse
         result.dataCallback = result.dataCallback || r.dataCallback
         result.cfgCallback = result.cfgCallback || r.cfgCallback
         result.formSubmit = result.formSubmit || r.formSubmit
+        result.postMessage = result.postMessage || r.postMessage
       }
     } catch {}
   }
   return result
+}
+
+// Компактный дамп фреймов капчи ПРИ НЕУДАЧЕ (verify ✗) — чтобы увидеть, ЧЕГО именно ждёт fbsbx для
+// отправки решения: сколько форм и куда (action), какие кнопки, имя data-callback, есть ли
+// grecaptcha(.enterprise), какие глобальные функции похожи на success/submit-хендлеры. По этому
+// дампу следующая итерация фикса делается ТОЧНО, а не вслепую (frame.evaluate внутри своего origin — ADR-002).
+async function captchaFramesDump(page) {
+  const parts = []
+  for (const f of page.frames()) {
+    let u = ''; try { u = f.url() || '' } catch {}
+    if (!/\/captcha\/(recaptcha|hcaptcha)\/iframe|auth_platform\/(recaptcha|captcha)|recaptcha\/(enterprise\/)?(anchor|bframe)/i.test(u)) continue
+    try {
+      const info = await f.evaluate(() => {
+        const forms = [...document.querySelectorAll('form')].map((fm) => (fm.getAttribute('action') || fm.method || 'form').slice(0, 50))
+        const btns = [...document.querySelectorAll('button, [role=button], input[type=submit], a[role=button]')].map((b) => (b.innerText || b.value || b.getAttribute('aria-label') || '').trim().slice(0, 22)).filter(Boolean).slice(0, 6)
+        const cb = document.querySelector('[data-callback]') && document.querySelector('[data-callback]').getAttribute('data-callback')
+        const globals = Object.getOwnPropertyNames(window).filter((n) => /callback|verify|submit|onCaptcha|onSuccess|onToken/i.test(n)).slice(0, 8)
+        return { forms, btns, cb: cb || null, gr: !!window.grecaptcha, ent: !!(window.grecaptcha && window.grecaptcha.enterprise), globals }
+      })
+      let tag = u.slice(0, 45); try { tag = new URL(u).pathname } catch {}
+      parts.push(`{${tag}: forms=${JSON.stringify(info.forms)} btns=${JSON.stringify(info.btns)} data-cb=${info.cb} gr=${info.gr}/ent=${info.ent} fns=${JSON.stringify(info.globals)}}`)
+    } catch { parts.push(`{${u.slice(0, 40)}: evaluate недоступен (кросс-ориджин)}`) }
+  }
+  return parts.join(' ') || 'нет фреймов капчи'
 }
 
 // Обнаружить и решить капчу на текущей странице, вписав токен в форму.
@@ -340,7 +384,9 @@ export async function trySolveCaptcha(page) {
     // Проверяем, что капча РЕАЛЬНО ушла (экран сменился / iframe отвалился) — а не «токен вписан вслепую».
     const advanced = await waitCaptchaCleared(page)
     const retryTxt = attemptNotes.length > 1 ? ` [ретраи: ${attemptNotes.slice(0, -1).join('; ')}]` : ''
-    t.push(`2captcha OK: токен len ${token ? token.length : 0} за ${solveSec}с${retryTxt}, вписан [textarea ${applied.textarea ? '✓' : '✗'}, data-callback ${applied.dataCallback ? '✓' : '✗'}, cfg-callback ${applied.cfgCallback ? '✓' : '✗'}, form-submit ${applied.formSubmit ? '✓' : '✗'}] → verify: ${advanced ? 'капча УШЛА ✓' : 'экран НЕ сменился ✗'}`)
+    let verifyTxt = advanced ? 'капча УШЛА ✓' : 'экран НЕ сменился ✗'
+    if (!advanced) { try { verifyTxt += ' | frames: ' + (await captchaFramesDump(page)) } catch {} }   // дамп fbsbx — чего ждёт для отправки
+    t.push(`2captcha OK: токен len ${token ? token.length : 0} за ${solveSec}с${retryTxt}, вписан [textarea ${applied.textarea ? '✓' : '✗'}, getResponse ${applied.getResponse ? '✓' : '✗'}, data-callback ${applied.dataCallback ? '✓' : '✗'}, cfg-callback ${applied.cfgCallback ? '✓' : '✗'}, form-submit ${applied.formSubmit ? '✓' : '✗'}, postMessage ${applied.postMessage ? '✓' : '✗'}] → verify: ${verifyTxt}`)
     console.error('[captcha]', t[t.length - 1])
     return { solved: true, detected: true, advanced, log: t.join(' | ') }
   } catch (e) {
