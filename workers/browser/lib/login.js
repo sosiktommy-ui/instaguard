@@ -259,7 +259,12 @@ export async function domSummary(page) {
     // бан) vs cookie-стена vs пусто. Надёжнее скрина (скрин иногда не доходит до UI).
     let text = ''
     try { text = await page.evaluate(() => (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 400)) } catch {}
-    return { frameCount: page.frames().length, frames: perFrame, text }
+    // HTML верхнего фрейма (обрезанный) + ПОЛНЫЙ url — по запросу: на какой ссылке был скрин + код страницы.
+    let html = ''
+    try { html = await page.evaluate(() => document.documentElement.outerHTML.slice(0, 2500)) } catch {}
+    let topUrl = ''
+    try { topUrl = page.url() } catch {}
+    return { frameCount: page.frames().length, frames: perFrame, text, html, topUrl }
   } catch { return null }
 }
 
@@ -566,7 +571,7 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
     const dom = await domSummary(page)
     console.error('[login] форма не найдена, DOM-дамп:', JSON.stringify(dom))
     const domTxt = dom
-      ? ` · фреймов: ${dom.frameCount}, инпуты по фреймам: ${JSON.stringify(dom.frames.map((f) => ({ url: f.url.slice(0, 60), forms: f.forms, inputs: f.inputs })))}`
+      ? ` · URL: ${dom.topUrl || ''} · инпуты по фреймам: ${JSON.stringify(dom.frames.map((f) => ({ url: f.url, forms: f.forms, inputs: f.inputs })))} · HTML(обрезан): ${(dom.html || '').replace(/\s+/g, ' ').slice(0, 1000)}`
       : ' · DOM-дамп не снят'
     // Текст экрана — по нему сразу видно причину (мягкий бан / «подождите» / cookie-стена / пусто).
     const pageTxt = dom?.text ? ` · ТЕКСТ ЭКРАНА: «${dom.text}»` : ''
@@ -714,7 +719,7 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
   }
   const dom = await domSummary(page)
   console.error('[login] исход не распознан за отведённое время, DOM-дамп:', JSON.stringify(dom))
-  const domTxt = dom ? ` · фреймов: ${dom.frameCount}, инпуты по фреймам: ${JSON.stringify(dom.frames.map((f) => ({ url: f.url.slice(0, 60), forms: f.forms, inputs: f.inputs })))}` : ''
+  const domTxt = dom ? ` · URL: ${dom.topUrl || ''} · фреймы: ${JSON.stringify(dom.frames.map((f) => f.url))} · HTML(обрезан): ${(dom.html || '').replace(/\s+/g, ' ').slice(0, 1000)}` : ''
   await fail(page, `network: Instagram не ответил понятным исходом за отведённое время.${domTxt}`)
 }
 

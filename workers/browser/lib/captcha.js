@@ -177,16 +177,26 @@ async function injectToken(page, type, token) {
 // evaluate внутри кросс-ориджин фрейма (fbsbx/google часто блокируют доступ → detectCaptcha возвращал
 // null → 2captcha не вызывалась → таймаут «network», баланс не тратился). Это и был живой корень.
 function detectFromFrameUrls(page) {
-  for (const f of page.frames()) {
+  const frames = page.frames()
+  // pageurl для 2captcha ДОЛЖЕН быть на домене, где зарегистрирован sitekey. У Instagram капча
+  // рендерится в iframe fbsbx.com (`/captcha/recaptcha/iframe`), и sitekey привязан к fbsbx.com
+  // (anchor-URL: co=<base64 https://www.fbsbx.com>). Если слать pageurl=instagram.com — 2captcha
+  // отвечает ERROR_CAPTCHA_UNSOLVABLE. Поэтому берём URL фрейма-хоста капчи.
+  let host = ''
+  for (const f of frames) {
+    let u = ''; try { u = f.url() || '' } catch {}
+    if (/\/captcha\/recaptcha\/iframe|\/captcha\/hcaptcha/i.test(u)) { try { const p = new URL(u); host = p.origin + p.pathname } catch { host = u } ; break }
+  }
+  for (const f of frames) {
     let u = ''
     try { u = f.url() || '' } catch { u = '' }
     if (/recaptcha/i.test(u)) {
       const m = u.match(/[?&]k=([^&]+)/)
-      if (m) return { type: 'recaptcha', sitekey: decodeURIComponent(m[1]), enterprise: /enterprise/i.test(u) }
+      if (m) return { type: 'recaptcha', sitekey: decodeURIComponent(m[1]), enterprise: /enterprise/i.test(u), pageurl: host || undefined }
     }
     if (/hcaptcha/i.test(u)) {
       const m = u.match(/[?&]sitekey=([^&]+)/)
-      if (m) return { type: 'hcaptcha', sitekey: decodeURIComponent(m[1]) }
+      if (m) return { type: 'hcaptcha', sitekey: decodeURIComponent(m[1]), pageurl: host || undefined }
     }
   }
   return null
@@ -197,11 +207,18 @@ export async function trySolveCaptcha(page) {
   let found = await detectCaptcha(page).catch(() => null)
   if (!found) found = detectFromFrameUrls(page)   // фолбэк по URL фреймов (кросс-ориджин reCAPTCHA)
   if (!found) { console.error('[captcha] капча не распознана (нет sitekey ни в DOM, ни в URL фреймов)'); return false }
-  console.error('[captcha] распознана:', found.type, 'enterprise:', Boolean(found.enterprise), 'sitekey:', String(found.sitekey).slice(0, 12) + '…')
-  const url = page.url()
+  // pageurl для 2captcha — домен ХОСТА капчи. Instagram рендерит reCAPTCHA в iframe fbsbx.com, и
+  // sitekey привязан к fbsbx (не к instagram). С pageurl=instagram 2captcha даёт ERROR_CAPTCHA_UNSOLVABLE.
+  // Считаем НЕЗАВИСИМО от того, какой детектор нашёл sitekey (detectCaptcha мог найти без pageurl).
+  let url = found.pageurl || page.url()
+  for (const f of page.frames()) {
+    let u = ''; try { u = f.url() || '' } catch {}
+    if (/\/captcha\/(recaptcha|hcaptcha)\/iframe/i.test(u)) { try { const p = new URL(u); url = p.origin + p.pathname } catch { url = u } ; break }
+  }
   // reCAPTCHA ENTERPRISE — по флагу из detectCaptcha ИЛИ по ЛЮБОМУ фрейму с /recaptcha/enterprise/
   // (Meta-экран «I'm not a robot» на /auth_platform/recaptcha/ грузит enterprise-anchor/bframe).
   const enterprise = Boolean(found.enterprise) || page.frames().some((f) => { try { return /recaptcha\/enterprise/i.test(f.url()) } catch { return false } })
+  console.error('[captcha] распознана:', found.type, 'enterprise:', enterprise, 'pageurl:', url, 'sitekey:', String(found.sitekey).slice(0, 12) + '…')
   try {
     let token
     if (found.type === 'hcaptcha') token = await solveHCaptcha({ sitekey: found.sitekey, url })
