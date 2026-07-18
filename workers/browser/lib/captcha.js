@@ -30,9 +30,12 @@ async function pollResult(id, { timeoutMs = 150000, intervalMs = 6000 } = {}) {
   throw new Error('2captcha_timeout: решение не пришло за отведённое время')
 }
 
-export async function solveRecaptchaV2({ sitekey, url, invisible = false }) {
+export async function solveRecaptchaV2({ sitekey, url, invisible = false, enterprise = false }) {
   if (!captchaConfigured()) throw new Error('2captcha_not_configured: TWOCAPTCHA_API_KEY не задан')
-  const id = await submitTask({ method: 'userrecaptcha', googlekey: sitekey, pageurl: url, invisible: invisible ? '1' : '0' })
+  // enterprise=1 — для reCAPTCHA ENTERPRISE (Instagram /auth_platform/recaptcha/, экран «I'm not a
+  // robot» от Meta). БЕЗ этого флага 2captcha решает капчу как обычную v2, и enterprise-виджет такой
+  // токен ОТВЕРГАЕТ → вход не проходит (таймаут «network»). Именно это ломало вход с reCAPTCHA-экраном.
+  const id = await submitTask({ method: 'userrecaptcha', googlekey: sitekey, pageurl: url, invisible: invisible ? '1' : '0', ...(enterprise ? { enterprise: '1' } : {}) })
   return pollResult(id)
 }
 
@@ -99,7 +102,7 @@ export async function detectCaptcha(page) {
         const rcFrame = document.querySelector('iframe[src*="recaptcha"]')
         if (rcFrame) {
           const m = rcFrame.src.match(/[?&]k=([^&]+)/)
-          if (m) return { type: 'recaptcha', sitekey: decodeURIComponent(m[1]) }
+          if (m) return { type: 'recaptcha', sitekey: decodeURIComponent(m[1]), enterprise: /enterprise/i.test(rcFrame.src) }
         }
         const hcFrame = document.querySelector('iframe[src*="hcaptcha"]')
         if (hcFrame) {
@@ -175,11 +178,14 @@ export async function trySolveCaptcha(page) {
   const found = await detectCaptcha(page).catch(() => null)
   if (!found) return false
   const url = page.url()
+  // reCAPTCHA ENTERPRISE — по флагу из detectCaptcha ИЛИ по ЛЮБОМУ фрейму с /recaptcha/enterprise/
+  // (Meta-экран «I'm not a robot» на /auth_platform/recaptcha/ грузит enterprise-anchor/bframe).
+  const enterprise = Boolean(found.enterprise) || page.frames().some((f) => { try { return /recaptcha\/enterprise/i.test(f.url()) } catch { return false } })
   try {
     let token
     if (found.type === 'hcaptcha') token = await solveHCaptcha({ sitekey: found.sitekey, url })
     else if (found.type === 'funcaptcha') token = await solveFunCaptcha({ publicKey: found.publicKey, surl: found.surl, url })
-    else token = await solveRecaptchaV2({ sitekey: found.sitekey, url })
+    else token = await solveRecaptchaV2({ sitekey: found.sitekey, url, enterprise })
     await injectToken(page, found.type, token)
     return true
   } catch (e) {
