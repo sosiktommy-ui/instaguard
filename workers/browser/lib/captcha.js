@@ -56,13 +56,13 @@ async function solveWithRetry(params, { attempts = 2, timeoutMs = 75000, onAttem
   throw lastErr
 }
 
-export async function solveRecaptchaV2({ sitekey, url, invisible = false, enterprise = false, dataS, onAttempt }) {
+export async function solveRecaptchaV2({ sitekey, url, invisible = false, enterprise = false, dataS, action, onAttempt }) {
   if (!captchaConfigured()) throw new Error('2captcha_not_configured: TWOCAPTCHA_API_KEY не задан')
   // enterprise=1 — для reCAPTCHA ENTERPRISE (Instagram /auth_platform/recaptcha/, экран «I'm not a
   // robot» от Meta). БЕЗ этого флага 2captcha решает капчу как обычную v2, и enterprise-виджет такой
   // токен ОТВЕРГАЕТ → вход не проходит (таймаут «network»). data-s — доп. токен, который иногда
   // несёт enterprise-виджет Meta; передаём, если удалось снять (см. detectFromFrameUrls/detectCaptcha).
-  const params = { method: 'userrecaptcha', googlekey: sitekey, pageurl: url, invisible: invisible ? '1' : '0', ...(enterprise ? { enterprise: '1' } : {}), ...(dataS ? { 'data-s': dataS } : {}) }
+  const params = { method: 'userrecaptcha', googlekey: sitekey, pageurl: url, invisible: invisible ? '1' : '0', ...(enterprise ? { enterprise: '1' } : {}), ...(dataS ? { 'data-s': dataS } : {}), ...(action ? { action } : {}) }
   // attempts=2 × ≤75с — с запасом под клиентский бюджет входа (LOGIN_TIMEOUT_MS). UNSOLVABLE
   // 2captcha обычно возвращает быстро (~15–40с), так что 2 попытки редко упираются в потолок.
   return solveWithRetry(params, { attempts: 2, timeoutMs: 75000, onAttempt })
@@ -122,7 +122,15 @@ export async function detectCaptcha(page) {
           const ent = !!(window.grecaptcha && window.grecaptcha.enterprise)
             || !!document.querySelector('script[src*="recaptcha/enterprise.js"], script[src*="/enterprise.js"]')
             || /^(1|true)$/i.test(rc.getAttribute('data-enterprise') || '')
-          return { type: 'recaptcha', sitekey: rc.getAttribute('data-sitekey'), enterprise: ent }
+          // data-s / data-action — КРИТИЧНО для reCAPTCHA на сервисах Meta/Google: без секретного
+          // `data-s` 2captcha решает капчу «в отрыве», и Meta ОТВЕРГАЕТ токен (живой кейс 2026-07-19:
+          // клиентская отправка идентична штатной, но экран не сменялся → токен не принят бэкендом).
+          const dataS = rc.getAttribute('data-s') || undefined
+          const action = rc.getAttribute('data-action') || undefined
+          // Все data-* атрибуты виджета — в диагностику (увидеть реальные имена параметров, если data-s звучит иначе).
+          const dataAttrs = {}
+          for (const a of rc.attributes) { if (/^data-/.test(a.name)) dataAttrs[a.name] = (a.value || '').slice(0, 60) }
+          return { type: 'recaptcha', sitekey: rc.getAttribute('data-sitekey'), enterprise: ent, dataS, action, dataAttrs }
         }
         const hc = document.querySelector('.h-captcha[data-sitekey], [data-hcaptcha-widget-id]')
         if (hc && hc.getAttribute('data-sitekey')) {
@@ -303,7 +311,8 @@ function detectFromFrameUrls(page) {
     try { u = f.url() || '' } catch { u = '' }
     if (/recaptcha/i.test(u)) {
       const m = u.match(/[?&]k=([^&]+)/)
-      if (m) return { type: 'recaptcha', sitekey: decodeURIComponent(m[1]), enterprise: /enterprise/i.test(u), pageurl: host || undefined }
+      const sM = u.match(/[?&]s=([^&]+)/)   // data-s из URL anchor-фрейма (фолбэк, если в DOM не нашли)
+      if (m) return { type: 'recaptcha', sitekey: decodeURIComponent(m[1]), enterprise: /enterprise/i.test(u), pageurl: host || undefined, dataS: sM ? decodeURIComponent(sM[1]) : undefined }
     }
     if (/hcaptcha/i.test(u)) {
       const m = u.match(/[?&]sitekey=([^&]+)/)
@@ -380,7 +389,7 @@ export async function trySolveCaptcha(page) {
   }
   const enterprise = isEnterpriseRecaptcha(page, found)
   const skHead = String(found.sitekey || found.publicKey || '').slice(0, 14)
-  t.push(`распознана ${found.type}${enterprise ? ' ENTERPRISE' : ''} (via ${via}), sitekey ${skHead}…, pageurl ${url}`)
+  t.push(`распознана ${found.type}${enterprise ? ' ENTERPRISE' : ''} (via ${via}), sitekey ${skHead}…, pageurl ${url}, data-s ${found.dataS ? ('есть len ' + String(found.dataS).length) : 'НЕТ'}${found.dataAttrs ? ' data-attrs=' + JSON.stringify(found.dataAttrs) : ''}`)
   console.error('[captcha]', t[t.length - 1])
   const attemptNotes = []
   const onAttempt = (n, msg) => { attemptNotes.push(`п.${n}: ${msg}`) }
@@ -389,7 +398,7 @@ export async function trySolveCaptcha(page) {
     let token
     if (found.type === 'hcaptcha') token = await solveHCaptcha({ sitekey: found.sitekey, url, onAttempt })
     else if (found.type === 'funcaptcha') token = await solveFunCaptcha({ publicKey: found.publicKey, surl: found.surl, url, onAttempt })
-    else token = await solveRecaptchaV2({ sitekey: found.sitekey, url, enterprise, dataS: found.dataS, onAttempt })
+    else token = await solveRecaptchaV2({ sitekey: found.sitekey, url, enterprise, dataS: found.dataS, action: found.action, onAttempt })
     const solveSec = Math.round((Date.now() - started) / 1000)
     const applied = await injectToken(page, found.type, token)
     // Проверяем, что капча РЕАЛЬНО ушла (экран сменился / iframe отвалился) — а не «токен вписан вслепую».

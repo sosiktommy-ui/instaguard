@@ -120,6 +120,16 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-19 (2) (🔴 КАПЧА, КОРЕНЬ найден по исходнику successCallback: токен отвергается Meta без `data-s` → извлекаем и шлём data-s/action)
+
+⚠️ **Редеплой воркера** (build → `2026-07-19-browser-87-captcha-data-s`). По исходнику `successCallback` (дамп build-86): `function c(e){ p({type: CAPTCHA_SOLVED, token: e}) }` — просто постит родителю `{CAPTCHA_SOLVED, token}`. Мы её ВЫЗЫВАЕМ (сообщение уходит), клиентская отправка теперь ИДЕНТИЧНА штатной — но экран не сменяется. Вывод: **токен ОТВЕРГАЕТСЯ бэкендом Meta**, а не «не отправлен».
+
+- **Корень (сильная гипотеза):** reCAPTCHA на сервисах Meta/Google требует секретный параметр **`data-s`** при решении. Без него 2captcha решает капчу «в отрыве» → токен валиден по форме, но Meta не принимает. Мы `data-s` НЕ извлекали и НЕ слали (`found.dataS` всегда undefined) — это недостающее звено.
+- **Фикс (`captcha.js`):** `detectCaptcha` (DOM-ветка) извлекает `data-s`/`data-action` из виджета + дампит ВСЕ `data-*` атрибуты в диагностику; `detectFromFrameUrls` тянет `&s=` из URL anchor-фрейма (фолбэк); `solveRecaptchaV2` шлёт `data-s` (было) + `action` (новое) в 2captcha; трасса показывает `data-s есть/НЕТ` + `data-attrs`.
+- **Что затестить:** повтор входа → в трассе `🔐 Капча:` смотри `data-s есть len N` (нашли) или `data-s НЕТ` + `data-attrs={...}`. Если `data-s есть` и `verify: капча УШЛА ✓` — 🎉 решено. Если `data-s НЕТ` — прислать `data-attrs={...}` (увижу реальное имя параметра). Если `data-s есть`, но всё равно ✗ — токен рубится по другой причине (пришлём трассу, копаем pageurl/session-binding).
+
+Проверено: `node --check` чист, воркер-тесты 35/35.
+
 ### 2026-07-19 (🔴 КАПЧА, живой дамп фреймов: fbsbx-фрейм = data-callback `successCallback`, БЕЗ формы/кнопки → нужен ИСХОДНИК successCallback)
 
 ⚠️ **Редеплой воркера** (build → `2026-07-19-browser-86-captcha-handler-src-dump`). Диагностическая итерация. По живой трассе (build-85, cheidy.ite): `вписан [textarea ✓, getResponse ✓, data-callback ✓, cfg-callback ✓, form-submit ✗, postMessage ✓] → verify: экран НЕ сменился ✗`. Дамп фреймов показал: верхний `/auth_platform/recaptcha/` пуст; fbsbx `/captcha/recaptcha/iframe/` — `data-callback=successCallback`, `grecaptcha.enterprise` есть, глобалы `successCallback`/`expiredCallback`, **форм и кнопок НЕТ** → отправка ТОЛЬКО через `successCallback`, которую мы уже дёргаем, но экран не сменяется.
