@@ -15,7 +15,7 @@ import { fingerprintSelfTest } from './lib/selftest.js'
 import { captchaConfigured } from './lib/captcha.js'
 import { warmupFeed } from './lib/human.js'
 
-const BUILD = '2026-07-18-browser-77-login-screen-text'
+const BUILD = '2026-07-18-browser-78-2fa-tryanotherway-email'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -115,7 +115,7 @@ app.post('/login', async (req, res) => {
         // ручного кода от пользователя (см. resumeWithTotp).
         pending.set(uname, { context, createdAt: Date.now(), totpSecret: r.needs2fa ? totpSecret : undefined })
         return r.needs2fa
-          ? { needs2fa: true, username: uname }
+          ? { needs2fa: true, username: uname, diag: r.diag ?? undefined }
           : { needsCheckpoint: true, channel: r.channel ?? null, username: uname, diag: r.diag ?? undefined }
       } catch (e) {
         await closeContextSafe(context)

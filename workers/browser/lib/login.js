@@ -513,6 +513,22 @@ async function chooseEmailChannel(page) {
   return null
 }
 
+// Экран «Go to your authentication app» (2FA-приложение), а СВОЕГО 2FA-ключа у нас нет → код из
+// приложения бот сгенерить не может, а на почту IG для 2FA-app сам НИЧЕГО не шлёт. Жмём «Try another
+// way» и на экране выбора метода выбираем ПОЧТУ → IG отправит код на email (к которому есть доступ).
+// Строго best-effort: не нашли кнопку/почту → false, поведение как раньше (needs2fa на ручной код).
+async function tryAnotherWayToEmail(page) {
+  const ANOTHER = ['Try another way', 'Try Another Way', 'Try another', 'Другой способ', 'Другим способом', 'Попробовать другой способ', 'Выбрать другой способ', 'Use another method']
+  try {
+    const clicked = await clickByText(page, ANOTHER, { timeout: 3000 })
+    if (!clicked) return false
+    await page.waitForTimeout(1200)
+    // На экране списка методов выбираем e-mail (радио/строка) и жмём отправить (переиспользуем логику).
+    const ch = await chooseEmailChannel(page)
+    return ch === 'email'
+  } catch { return false }
+}
+
 /**
  * Одна попытка входа по логину/паролю на переданном контексте.
  * @returns один из:
@@ -572,6 +588,7 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
   let totpExtended = false
   let totpWindow = -1
   let totpAttempts = 0
+  let anotherWayTried = false   // 2FA-app без ключа → один раз пробуем «Try another way» → почта
   while (Date.now() < deadline) {
     await page.waitForTimeout(700)
 
@@ -617,7 +634,18 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
         await page.waitForTimeout(1000)
         continue
       }
-      return { needs2fa: true }
+      // Своего 2FA-ключа нет → код из приложения не сгенерить, а на почту IG для 2FA-app сам не шлёт.
+      // ОДИН раз пробуем «Try another way» → выбрать ПОЧТУ: тогда IG отправит код на email (с доступом).
+      if (!totpSecret && !anotherWayTried) {
+        anotherWayTried = true
+        if (await tryAnotherWayToEmail(page)) {
+          let diag = null; try { diag = await captureDiag(page) } catch {}
+          return { needsCheckpoint: true, channel: 'email', diag }   // код ушёл на почту — ждём ввод кода
+        }
+      }
+      // Скрин РЕАЛЬНОГО экрана 2FA (раньше needs2fa отдавался без diag → в UI не было скриншота).
+      let diag2fa = null; try { diag2fa = await captureDiag(page) } catch {}
+      return { needs2fa: true, diag: diag2fa }
     }
 
     if (urlHas(url, URLS.challenge) || (await firstVisible(page, SEL.codeInput, 500))) {
@@ -677,7 +705,7 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
   // Ничего явного за отведённое время — прикладываем DOM-дамп (как при «форма не найдена»),
   // чтобы следующий необъяснённый провал сразу показал реальный текст/структуру, а не
   // расплывчатое «unknown»/«network».
-  if (await firstVisible(page, SEL.codeInput, 500)) return { needsCheckpoint: true, channel: null }
+  if (await firstVisible(page, SEL.codeInput, 500)) { let d = null; try { d = await captureDiag(page) } catch {} ; return { needsCheckpoint: true, channel: null, diag: d } }
   // Ждали подтверждения на устройстве, но его так и не пришло за ~2.5 мин — НЕ «ошибка входа»,
   // а «не успел подтвердить». Понятное сообщение + повтор (не «network», из-за которого раньше
   // казалось, что вход сломался, хотя нужно было просто нажать «Это я» в приложении).
