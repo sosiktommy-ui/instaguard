@@ -116,7 +116,13 @@ export async function detectCaptcha(page) {
       found = await frame.evaluate(() => {
         const rc = document.querySelector('.g-recaptcha[data-sitekey], [data-sitekey][data-callback], div[data-sitekey]')
         if (rc && rc.getAttribute('data-sitekey')) {
-          return { type: 'recaptcha', sitekey: rc.getAttribute('data-sitekey') }
+          // §4.3 B8: определить enterprise ПРЯМО В DOM-ветке (не только по URL фреймов, которые к
+          // моменту детекта ещё about:blank) — по grecaptcha.enterprise / скрипту enterprise.js /
+          // атрибуту data-enterprise. isEnterpriseRecaptcha остаётся страховкой по top-URL.
+          const ent = !!(window.grecaptcha && window.grecaptcha.enterprise)
+            || !!document.querySelector('script[src*="recaptcha/enterprise.js"], script[src*="/enterprise.js"]')
+            || /^(1|true)$/i.test(rc.getAttribute('data-enterprise') || '')
+          return { type: 'recaptcha', sitekey: rc.getAttribute('data-sitekey'), enterprise: ent }
         }
         const hc = document.querySelector('.h-captcha[data-sitekey], [data-hcaptcha-widget-id]')
         if (hc && hc.getAttribute('data-sitekey')) {

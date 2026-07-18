@@ -600,7 +600,9 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
   // Ждём исход до ~28с (при device-approval/капче/2FA дедлайн продлевается — см. ниже).
   let deadline = Date.now() + 28000
   let approvalExtended = false
-  let captchaTried = false
+  let captchaAttempts = 0        // §4.5: сколько раз пробовали решить капчу в ЭТОМ входе (лимит ниже)
+  let captchaBudgetEnd = 0       // §4.6: общий потолок времени на капчу (ставим при первом обнаружении)
+  const CAPTCHA_MAX_ATTEMPTS = 2
   let captchaLog = ''   // трасса капчи (что распознали / что ответила 2captcha) — в ошибку для UI
   let totpExtended = false
   let totpWindow = -1
@@ -695,16 +697,27 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
     // Капча (reCAPTCHA/hCaptcha/Arkose) — Instagram запрашивает её при подозрительном входе
     // (новый IP/прокси/устройство). Пробуем решить ОДИН раз через 2captcha (решение занимает
     // 10–40с — на это время продлеваем дедлайн, иначе цикл выйдет по таймауту, не дождавшись ответа).
-    if (!captchaTried) {
-      const c = await handleCaptchaIfPresent(page)
-      if (c.log) captchaLog = c.log
-      if (c.detected) {
-        // Капча была на экране: НЕ пробуем решить её повторно в этом входе (2captcha платная,
-        // решение уже отправлено). Если решили — ждём, что виджет проведёт дальше (+30с); если
-        // 2captcha не справилась — цикл добежит до таймаута, а captchaLog покажет ПРИЧИНУ в UI.
-        captchaTried = true
-        if (c.solved) deadline = Math.max(deadline, Date.now() + 30000)
-        continue
+    // Капча при подозрительном входе. handleCaptchaIfPresent решает её через 2captcha (с ВНУТРЕННИМИ
+    // ретраями транзиентных UNSOLVABLE/таймаутов — §4.2) и вписывает токен. §4.5/§4.6: до
+    // CAPTCHA_MAX_ATTEMPTS попыток, ПОКА капча ещё на экране (captchaOnScreen) и не пройдена. Вторую
+    // попытку начинаем ТОЛЬКО при достаточном запасе времени под ПОЛНЫЙ solve — иначе клиент порвёт
+    // fetch раньше воркера (ложный «network»). Практически это значит: 2-я попытка идёт лишь если
+    // 1-я была быстрой (токен получен, но виджет не провёл дальше) → повторный solve+inject уместен.
+    if (captchaOnScreen(page)) {
+      if (!captchaBudgetEnd) captchaBudgetEnd = Date.now() + 200000   // общий потолок работы капчи (< клиентских LOGIN_TIMEOUT_MS)
+      const roomForAttempt = Date.now() + 155000 <= captchaBudgetEnd  // хватит ли времени ещё на один полный solve (2×75с)
+      if (captchaAttempts < CAPTCHA_MAX_ATTEMPTS && roomForAttempt) {
+        captchaAttempts++
+        const c = await handleCaptchaIfPresent(page)
+        if (c.log) captchaLog = c.log
+        if (c.detected) {
+          // advanced=капча РЕАЛЬНО ушла (verify §4.4) → ждём следующий экран/успех; иначе токен вписан,
+          // но виджет не провёл → даём время и (если остались попытки/бюджет) повторим solve.
+          deadline = c.advanced
+            ? Math.max(deadline, Date.now() + 25000)
+            : Math.min(captchaBudgetEnd, Math.max(deadline, Date.now() + 60000))
+          continue
+        }
       }
     }
 
@@ -948,6 +961,11 @@ export async function loginByState(context) {
   const page = await context.newPage()
   await gotoResilient(page, 'https://www.instagram.com/', { timeout: 25000, retries: 1, backoffMs: [2000] })
   await page.waitForTimeout(2500)
+
+  // §9: заход по куке РЕДКО, но может упереться в капчу (bot-wall на подозрительном IP) ДО того, как
+  // сессия применится. Решаем её той же машинерией, что и обычный вход (§4.1), прежде чем судить о
+  // валидности сессии. Best-effort — сбой не должен ломать вход по куке (дальше обычные проверки).
+  if (captchaOnScreen(page)) { await handleCaptchaIfPresent(page).catch(() => null); await page.waitForTimeout(1500) }
 
   if (!(await hasSessionCookie(context))) {
     if (!hadBefore) {

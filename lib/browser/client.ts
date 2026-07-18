@@ -17,7 +17,7 @@ const VISIT_TIMEOUT_MS = Number(process.env.BROWSER_VISIT_TIMEOUT_MS) || 300_000
 // Вход может включать решение reCAPTCHA через 2captcha (до ~135с) поверх прогрева/навигации на
 // медленном прокси — в 180с не влезает, и клиент рвёт fetch РАНЬШЕ, чем воркер вернёт исход/скрин
 // (симптом «network», хотя капча ещё решалась). Даём входу отдельный, больший бюджет.
-const LOGIN_TIMEOUT_MS = Number(process.env.BROWSER_LOGIN_TIMEOUT_MS) || 240_000
+const LOGIN_TIMEOUT_MS = Number(process.env.BROWSER_LOGIN_TIMEOUT_MS) || 280_000
 
 /** Задеплоен ли браузерный воркер (задан URL). Если нет — движок остаётся legacy. */
 export function browserConfigured(): boolean {
