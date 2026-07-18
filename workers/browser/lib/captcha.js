@@ -435,59 +435,85 @@ function isEnterpriseRecaptcha(page, found) {
 // который Meta скорит низко/бракует по action). Это самый дешёвый и правильный шанс. Клик мышью по
 // координатам (кросс-ориджин google-фрейм — coordinates от boundingBox корректны и для под-фрейма).
 async function clickRecaptchaCheckbox(page) {
+  const rnd = (n) => Math.floor(Math.random() * n)
+  // Подводим курсор ПО-ЧЕЛОВЕЧЕСКИ: сначала пара случайных движений (энтропия — reCAPTCHA смотрит на
+  // траекторию мыши; «холодный» клик без движения подозрителен), затем кривой подвод к цели и клик.
   const humanClickAt = async (x, y) => {
-    await page.mouse.move(x + (Math.random() * 6 - 3), y + (Math.random() * 6 - 3), { steps: 6 + Math.floor(Math.random() * 10) })
-    await sleep(120 + Math.floor(Math.random() * 240))
+    try {
+      const vp = page.viewportSize() || { width: 1280, height: 800 }
+      await page.mouse.move(rnd(vp.width), rnd(vp.height), { steps: 5 + rnd(8) }); await sleep(80 + rnd(160))
+      await page.mouse.move(rnd(vp.width), rnd(vp.height), { steps: 5 + rnd(8) }); await sleep(60 + rnd(140))
+    } catch {}
+    await page.mouse.move(x + (Math.random() * 8 - 4), y + (Math.random() * 8 - 4), { steps: 8 + rnd(14) })
+    await sleep(140 + rnd(260))
     await page.mouse.click(x, y)
   }
-  // (0) ГЛАВНЫЙ способ — Playwright frameLocator: сам спускается в ВЛОЖЕННЫЕ кросс-ориджин фреймы
-  //     (top → fbsbx iframe → google anchor iframe) и кликает чекбокс с проверкой actionability
-  //     (скролл, стабильность). Надёжнее ручного перебора фреймов + координат (тот промахивался).
-  const chains = [
-    () => page.frameLocator('iframe[src*="/captcha/recaptcha/iframe"]').frameLocator('iframe[src*="anchor"], iframe[title*="reCAPTCHA" i], iframe[title*="captcha" i]').locator('#recaptcha-anchor, .recaptcha-checkbox').first(),
-    () => page.frameLocator('iframe[src*="anchor"], iframe[title*="reCAPTCHA" i]').locator('#recaptcha-anchor, .recaptcha-checkbox').first(),
-    () => page.frameLocator('iframe[src*="/captcha/recaptcha/iframe"]').locator('#recaptcha-anchor, .recaptcha-checkbox, [role="checkbox"]').first(),
-  ]
-  for (const make of chains) {
-    try { await make().click({ timeout: 5000 }); return 'frameLocator' } catch {}
+  // Прочитать aria-checked чекбокса (true = reCAPTCHA пропустила/в процессе; false = не отреагировала/челлендж).
+  const readChecked = async () => {
+    for (const f of page.frames()) {
+      let u = ''; try { u = f.url() || '' } catch {}
+      if (!/recaptcha.*anchor/i.test(u)) continue
+      try { const a = await f.locator('#recaptcha-anchor, .recaptcha-checkbox').first().getAttribute('aria-checked', { timeout: 1200 }); if (a != null) return a } catch {}
+    }
+    return 'unknown'
   }
-  // (1) Перебор фреймов: anchor-фрейм (ЛЮБОЙ путь с …recaptcha…anchor — api2/enterprise/bare), клик по элементу.
-  for (const f of page.frames()) {
-    let u = ''; try { u = f.url() || '' } catch {}
-    if (!/recaptcha.*anchor/i.test(u)) continue
+  // Открылся ли челлендж-фрейм (bframe с картинками)? Значит клик СРАБОТАЛ, но нужен грид-солвинг.
+  const challengeOpen = () => page.frames().some((f) => { try { return /recaptcha.*bframe/i.test(f.url() || '') } catch { return false } })
+
+  // Один проход всех способов клика. Возвращает метод или null.
+  const doClick = async () => {
+    // (a) frameLocator во ВЛОЖЕННЫЕ фреймы (top→fbsbx→google anchor) — ждём кликабельности, человечный клик.
     try {
-      const cb = f.locator('#recaptcha-anchor, .recaptcha-checkbox, [role="checkbox"]').first()
-      if (await cb.isVisible({ timeout: 2500 }).catch(() => false)) {
-        const box = await cb.boundingBox().catch(() => null)
-        if (box) { await humanClickAt(box.x + box.width / 2, box.y + box.height / 2); return 'anchor-el' }
-        await cb.click({ timeout: 3000 }); return 'anchor-el'
-      }
+      const cb = page.frameLocator('iframe[src*="/captcha/recaptcha/iframe"]').frameLocator('iframe[src*="anchor"], iframe[title*="reCAPTCHA" i], iframe[title*="captcha" i]').locator('#recaptcha-anchor, .recaptcha-checkbox').first()
+      await cb.waitFor({ state: 'visible', timeout: 10000 })
+      const box = await cb.boundingBox().catch(() => null)
+      if (box) { await humanClickAt(box.x + box.width / 2, box.y + box.height / 2); return 'frameLocator' }
+      await cb.click({ timeout: 5000 }); return 'frameLocator-el'
     } catch {}
-  }
-  // (2) ФОЛБЭК по КООРДИНАТАМ: чекбокс — у ЛЕВОГО края anchor-iframe. Берём bounding box самого
-  //     anchor-iframe-элемента (он лежит внутри fbsbx-фрейма) и кликаем ~28px от левого края по центру высоты.
-  for (const f of page.frames()) {
-    let u = ''; try { u = f.url() || '' } catch {}
-    if (!/\/captcha\/recaptcha\/iframe/i.test(u)) continue
-    try {
-      const el = await f.$('iframe[src*="/anchor"], iframe[title*="recaptcha" i], iframe[src*="recaptcha"]')
-      if (el) {
-        const box = await el.boundingBox().catch(() => null)
+    // (b) перебор фреймов anchor (любой путь …recaptcha…anchor: api2/enterprise/bare).
+    for (const f of page.frames()) {
+      let u = ''; try { u = f.url() || '' } catch {}
+      if (!/recaptcha.*anchor/i.test(u)) continue
+      try {
+        const cb = f.locator('#recaptcha-anchor, .recaptcha-checkbox, [role="checkbox"]').first()
+        if (await cb.isVisible({ timeout: 3000 }).catch(() => false)) {
+          const box = await cb.boundingBox().catch(() => null)
+          if (box) { await humanClickAt(box.x + box.width / 2, box.y + box.height / 2); return 'anchor-el' }
+          await cb.click({ timeout: 3000 }); return 'anchor-el'
+        }
+      } catch {}
+    }
+    // (c) координаты anchor-iframe (левый край = чекбокс).
+    for (const f of page.frames()) {
+      let u = ''; try { u = f.url() || '' } catch {}
+      if (!/\/captcha\/recaptcha\/iframe/i.test(u)) continue
+      try {
+        const el = await f.$('iframe[src*="/anchor"], iframe[title*="reCAPTCHA" i], iframe[src*="recaptcha"]')
+        const box = el && await el.boundingBox().catch(() => null)
         if (box) { await humanClickAt(box.x + 28, box.y + box.height / 2); return 'anchor-coord' }
-      }
-    } catch {}
+      } catch {}
+    }
+    // (d) крайнее — левый край fbsbx-iframe виджета.
+    for (const f of page.frames()) {
+      let u = ''; try { u = f.url() || '' } catch {}
+      if (!/\/captcha\/recaptcha\/iframe/i.test(u)) continue
+      try { const fe = await f.frameElement().catch(() => null); const box = fe && await fe.boundingBox().catch(() => null); if (box) { await humanClickAt(box.x + 28, box.y + 26); return 'fbsbx-coord' } } catch {}
+    }
+    return null
   }
-  // (3) КРАЙНИЙ фолбэк: клик по левому краю самого fbsbx-iframe капчи (виджет «I'm not a robot»).
-  for (const f of page.frames()) {
-    let u = ''; try { u = f.url() || '' } catch {}
-    if (!/\/captcha\/recaptcha\/iframe/i.test(u)) continue
-    try {
-      const fe = await f.frameElement().catch(() => null)
-      const box = fe && await fe.boundingBox().catch(() => null)
-      if (box) { await humanClickAt(box.x + 28, box.y + 26); return 'fbsbx-coord' }
-    } catch {}
+
+  let method = await doClick()
+  if (!method) return { method: null, checked: 'unknown', challenge: false }
+  await sleep(1600)
+  let checked = await readChecked()
+  let challenge = challengeOpen()
+  // Клик не зарегистрировался (галочка не среагировала И челленджа нет) — ОДНА повторная попытка.
+  if (checked !== 'true' && !challenge) {
+    await sleep(900)
+    const m2 = await doClick()
+    if (m2) { method += '+retry(' + m2 + ')'; await sleep(1600); checked = await readChecked(); challenge = challengeOpen() }
   }
-  return null
+  return { method, checked, challenge }
 }
 
 // Обнаружить и решить капчу. Возвращает { solved, detected, log } — log несёт человекочитаемую
@@ -535,16 +561,17 @@ export async function trySolveCaptcha(page, opts = {}) {
   // без картинок (Meta примет). Если появится картинка-челлендж/не пройдёт за 6с — падаем на 2captcha ниже.
   if (found.type === 'recaptcha') {
     try {
-      const clicked = await clickRecaptchaCheckbox(page)
-      if (clicked) {
-        if (await waitCaptchaCleared(page, 7000)) {
-          t.push(`клик чекбокса (${clicked}) → verify: капча УШЛА ✓ (РОДНОЙ токен, без 2captcha)`)
+      const cr = await clickRecaptchaCheckbox(page)
+      if (cr.method) {
+        if (await waitCaptchaCleared(page, 8000)) {
+          t.push(`клик чекбокса (${cr.method}, aria-checked=${cr.checked}) → verify: капча УШЛА ✓ (РОДНОЙ токен, без 2captcha)`)
           console.error('[captcha]', t[t.length - 1])
           return { solved: true, detected: true, advanced: true, log: t.join(' | ') }
         }
-        t.push(`клик чекбокса (${clicked}) СДЕЛАН, но капча не ушла за 7с (картинка-челлендж/недоверенный IP) → 2captcha`)
+        // Диагноз ТОЧНО: клик зарегистрировался? выпала ли картинка? — по aria-checked + bframe.
+        t.push(`клик чекбокса (${cr.method}) СДЕЛАН: aria-checked=${cr.checked}, картинка-челлендж=${cr.challenge ? 'ДА' : 'нет'} → капча не ушла → 2captcha`)
       } else {
-        t.push('чекбокс НЕ найден для клика (anchor-фрейм не загружен?) → 2captcha')
+        t.push('чекбокс НЕ найден для клика (anchor-фрейм не загрузился?) → 2captcha')
       }
     } catch (e) { t.push('клик чекбокса: ошибка ' + (e?.message || e)) }
   }
