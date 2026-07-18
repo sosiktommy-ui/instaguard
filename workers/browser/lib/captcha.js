@@ -414,24 +414,48 @@ function isEnterpriseRecaptcha(page, found) {
 // который Meta скорит низко/бракует по action). Это самый дешёвый и правильный шанс. Клик мышью по
 // координатам (кросс-ориджин google-фрейм — coordinates от boundingBox корректны и для под-фрейма).
 async function clickRecaptchaCheckbox(page) {
+  const humanClickAt = async (x, y) => {
+    await page.mouse.move(x + (Math.random() * 6 - 3), y + (Math.random() * 6 - 3), { steps: 6 + Math.floor(Math.random() * 10) })
+    await sleep(120 + Math.floor(Math.random() * 240))
+    await page.mouse.click(x, y)
+  }
+  // (1) ТОЧНЫЙ клик по элементу чекбокса внутри anchor-фрейма reCAPTCHA.
   for (const f of page.frames()) {
     let u = ''; try { u = f.url() || '' } catch {}
     if (!/recaptcha\/(enterprise\/)?anchor/i.test(u)) continue
     try {
       const cb = f.locator('#recaptcha-anchor, .recaptcha-checkbox, [role="checkbox"]').first()
-      if (!(await cb.isVisible({ timeout: 2500 }).catch(() => false))) continue
-      const box = await cb.boundingBox().catch(() => null)
-      if (box) {
-        await page.mouse.move(box.x + box.width / 2 + (Math.random() * 6 - 3), box.y + box.height / 2 + (Math.random() * 6 - 3), { steps: 6 + Math.floor(Math.random() * 10) })
-        await sleep(120 + Math.floor(Math.random() * 240))
-        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
-      } else {
-        await cb.click({ timeout: 3000 })
+      if (await cb.isVisible({ timeout: 2500 }).catch(() => false)) {
+        const box = await cb.boundingBox().catch(() => null)
+        if (box) { await humanClickAt(box.x + box.width / 2, box.y + box.height / 2); return 'anchor-el' }
+        await cb.click({ timeout: 3000 }); return 'anchor-el'
       }
-      return true
     } catch {}
   }
-  return false
+  // (2) ФОЛБЭК по КООРДИНАТАМ: чекбокс — у ЛЕВОГО края anchor-iframe. Берём bounding box самого
+  //     anchor-iframe-элемента (он лежит внутри fbsbx-фрейма) и кликаем ~28px от левого края по центру высоты.
+  for (const f of page.frames()) {
+    let u = ''; try { u = f.url() || '' } catch {}
+    if (!/\/captcha\/recaptcha\/iframe/i.test(u)) continue
+    try {
+      const el = await f.$('iframe[src*="/anchor"], iframe[title*="recaptcha" i], iframe[src*="recaptcha"]')
+      if (el) {
+        const box = await el.boundingBox().catch(() => null)
+        if (box) { await humanClickAt(box.x + 28, box.y + box.height / 2); return 'anchor-coord' }
+      }
+    } catch {}
+  }
+  // (3) КРАЙНИЙ фолбэк: клик по левому краю самого fbsbx-iframe капчи (виджет «I'm not a robot»).
+  for (const f of page.frames()) {
+    let u = ''; try { u = f.url() || '' } catch {}
+    if (!/\/captcha\/recaptcha\/iframe/i.test(u)) continue
+    try {
+      const fe = await f.frameElement().catch(() => null)
+      const box = fe && await fe.boundingBox().catch(() => null)
+      if (box) { await humanClickAt(box.x + 28, box.y + 26); return 'fbsbx-coord' }
+    } catch {}
+  }
+  return null
 }
 
 // Обнаружить и решить капчу. Возвращает { solved, detected, log } — log несёт человекочитаемую
@@ -465,15 +489,18 @@ export async function trySolveCaptcha(page) {
   // без картинок (Meta примет). Если появится картинка-челлендж/не пройдёт за 6с — падаем на 2captcha ниже.
   if (found.type === 'recaptcha') {
     try {
-      if (await clickRecaptchaCheckbox(page)) {
-        if (await waitCaptchaCleared(page, 6000)) {
-          t.push('клик чекбокса → verify: капча УШЛА ✓ (РОДНОЙ токен, без 2captcha)')
+      const clicked = await clickRecaptchaCheckbox(page)
+      if (clicked) {
+        if (await waitCaptchaCleared(page, 7000)) {
+          t.push(`клик чекбокса (${clicked}) → verify: капча УШЛА ✓ (РОДНОЙ токен, без 2captcha)`)
           console.error('[captcha]', t[t.length - 1])
           return { solved: true, detected: true, advanced: true, log: t.join(' | ') }
         }
-        t.push('клик чекбокса не прошёл (картинка-челлендж/недоверенный IP) → 2captcha')
+        t.push(`клик чекбокса (${clicked}) СДЕЛАН, но капча не ушла за 7с (картинка-челлендж/недоверенный IP) → 2captcha`)
+      } else {
+        t.push('чекбокс НЕ найден для клика (anchor-фрейм не загружен?) → 2captcha')
       }
-    } catch {}
+    } catch (e) { t.push('клик чекбокса: ошибка ' + (e?.message || e)) }
   }
 
   const attemptNotes = []
