@@ -12,10 +12,10 @@ import { trySolveCaptcha, captchaConfigured, captchaOnScreen, findImageCaptchaLo
 // 2captcha не бесплатна и решение занимает 10–40с, повторять его в каждой итерации poll-а нельзя.
 // Возвращает { detected, solved, log }: detected=капча была на экране (даже если решить не вышло —
 // тогда НЕ долбим 2captcha повторно в этом входе), solved=токен получен и вписан, log=трасса для UI.
-async function handleCaptchaIfPresent(page) {
+async function handleCaptchaIfPresent(page, proxy) {
   if (!captchaConfigured()) return { detected: false, solved: false, advanced: false, log: '' }
   let r
-  try { r = await trySolveCaptcha(page) } catch (e) { r = { solved: false, detected: false, advanced: false, log: 'captcha_exception: ' + (e?.message || e) } }
+  try { r = await trySolveCaptcha(page, { proxy }) } catch (e) { r = { solved: false, detected: false, advanced: false, log: 'captcha_exception: ' + (e?.message || e) } }
   if (!r || !r.solved) return { detected: Boolean(r && r.detected), solved: false, advanced: false, log: (r && r.log) || '' }
   // trySolveCaptcha уже вписал токен И проверил, ушла ли капча (advanced). Если ушла — готово.
   if (r.advanced) return { detected: true, solved: true, advanced: true, log: r.log }
@@ -553,7 +553,7 @@ async function tryAnotherWayToEmail(page) {
  *  { needs2fa:true }
  * @throws Error('bad_password'|'suspended'|'network'|'unknown: ...') на жёстких исходах
  */
-export async function attemptLogin(context, { username, password, totpSecret }) {
+export async function attemptLogin(context, { username, password, totpSecret, proxy }) {
   const page = await context.newPage()
   // Заходим на ДОМАШНЮЮ (наименее блокируемый URL), а к форме входа идём по ссылке «Log in»
   // внутри findLoginForm (client-side переход, как человек). Холодный заход СРАЗУ на deep-URL
@@ -566,7 +566,7 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
   await idleMouse(page)
   // Изредка Instagram показывает капчу ДО формы входа (бот-стена на подозрительном IP) —
   // пробуем решить её здесь же, прежде чем искать поля username/password.
-  await handleCaptchaIfPresent(page).catch(() => false)
+  await handleCaptchaIfPresent(page, proxy).catch(() => false)
 
   const { userInput, passInput } = await findLoginForm(page)
   if (!userInput || !passInput) {
@@ -708,7 +708,7 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
       const roomForAttempt = Date.now() + 155000 <= captchaBudgetEnd  // хватит ли времени ещё на один полный solve (2×75с)
       if (captchaAttempts < CAPTCHA_MAX_ATTEMPTS && roomForAttempt) {
         captchaAttempts++
-        const c = await handleCaptchaIfPresent(page)
+        const c = await handleCaptchaIfPresent(page, proxy)
         if (c.log) captchaLog = c.log
         if (c.detected) {
           // advanced=капча РЕАЛЬНО ушла (verify §4.4) → ждём следующий экран/успех; иначе токен вписан,

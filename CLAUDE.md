@@ -120,6 +120,17 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-19 (5) (🔴 КАПЧА: PROXY-задача 2captcha — решаем ЧЕРЕЗ наш IP+UA (по докам 2captcha; verify ✗ = скор/IP-стена) + реальный клик чекбокса через frameLocator)
+
+⚠️ **Редеплой воркера** (build → `2026-07-19-browser-92-recaptcha-proxy-task`). По изучению доков 2captcha ([api-docs/recaptcha-v2-enterprise](https://2captcha.com/api-docs/recaptcha-v2-enterprise)) и живой трассе (build-90: `клик (fbsbx-coord) СДЕЛАН но капча не ушла` + `createTask ENTERPRISE action=ig_login_recaptcha` → `verify: экран НЕ сменился ✗`).
+
+- **Диагноз verify ✗:** даже токен createTask с ПРАВИЛЬНЫМ action Meta отвергает → пересадка токена упёрлась в **скор/IP-стену**: proxyless-задача решается с датацентр-IP 2captcha, токен «чужой» нашему входу → Meta-assessment скорит низко. Доки 2captcha прямо дают решение: **PROXY-задача** (`RecaptchaV2EnterpriseTask`) — 2captcha решает ЧЕРЕЗ переданный прокси + userAgent, токен привязан к тому же IP/браузеру.
+- **Фикс (`captcha.js solveRecaptchaEnterprise`):** если задан `proxy` — используем PROXY-задачу с `proxyType/proxyAddress/proxyPort/proxyLogin/proxyPassword` (из `splitProxy`) + `userAgent` (снят со страницы, тот же, что у входа). Прокинут `proxy` через `attemptLogin → handleCaptchaIfPresent → trySolveCaptcha({proxy})` (server.js `/login` уже знает proxy). Нет прокси → proxyless (как было). Импорт `splitProxy` из `proxy.js` (циклов нет — проверено).
+- **Клик чекбокса (build-91, в этом же деплое):** был «вслепую» (`fbsbx-coord`, мимо галочки — методы anchor не находили фрейм). Переведён на Playwright **`frameLocator`** (спуск в вложенные top→fbsbx→google-anchor фреймы + actionability) → реально попадает в чекбокс; перебор фреймов расширен на `/recaptcha.*anchor/` (api2/enterprise/bare).
+- **Трасса:** `solve via createTask ENTERPRISE (PROXY-задача, наш IP / proxyless, action=…)` + `клик чекбокса (frameLocator/anchor-el/…)`.
+
+Проверено: `node --check` чист, импорт captcha.js резолвится, воркер-тесты 35/35. ⚠️ **Не тестировать на блокирующемся аккаунте.** **Что затестить:** вход → трасса должна показать `PROXY-задача, наш IP` + `frameLocator`; если `verify: капча УШЛА ✓` — решено; если снова ✗ даже с PROXY-задачей — стена принципиальная (farm-solve детектится независимо от IP), тогда честный путь = чистый мобильный IP в гео аккаунта (капча не выпадает) / куки. **[[login-passwords-always-correct]]**
+
 ### 2026-07-19 (4) (🔴 КАПЧА: «человеческий» клик чекбокса ДО 2captcha — РОДНОЙ токен вместо пересаженного)
 
 ⚠️ **Редеплой воркера** (build → `2026-07-19-browser-90-checkbox-click-robust`). По идее пользователя («в reread-nick мы обошли стену»): та капча была TEXT-НА-КАРТИНКЕ (`fillImageCaptcha` — вписал текст, без токена/скора) — проще; логин-капча = reCAPTCHA Enterprise (токен + assessment). Но принцип пользователя верный: **решать В БРАУЗЕРЕ, не пересаживать токен.** ВАЖНО: в билдах ≤88 бот чекбокс НЕ кликал вообще (молча пересаживал токен → чекбокс на экране оставался пустым — ровно жалоба пользователя «не кликает»). Клик добавлен в build-89, в **build-90 сделан железобетонным**: 3 способа (элемент в anchor-фрейме → координаты anchor-iframe → координаты левого края fbsbx-виджета) + в трассе ВСЕГДА видно `клик чекбокса (метод)` / `чекбокс НЕ найден`.

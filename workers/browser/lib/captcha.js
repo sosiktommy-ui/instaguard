@@ -1,6 +1,7 @@
 // Решение капчи через 2captcha.com при входе Instagram (reCAPTCHA v2 / hCaptcha / Arkose FunCaptcha).
 // Instagram показывает капчу как доп. проверку при подозрительном входе (новый IP/прокси/устройство) —
 // отдельно от challenge-кода и 2FA. Ключ — переменная окружения TWOCAPTCHA_API_KEY на сервисе воркера.
+import { splitProxy } from './proxy.js'
 const API_KEY = process.env.TWOCAPTCHA_API_KEY || process.env.CAPTCHA_API_KEY || ''
 const IN_URL = 'https://2captcha.com/in.php'
 const RES_URL = 'https://2captcha.com/res.php'
@@ -82,14 +83,34 @@ async function solveEnterpriseOnce(task, { timeoutMs = 90000, intervalMs = 6000 
   throw new Error('2captcha_timeout: enterprise-решение не пришло за отведённое время')
 }
 
-// reCAPTCHA v2 ENTERPRISE (чекбокс «I'm not a robot» на auth_platform/recaptcha). Передаёт action и s
-// в enterprisePayload — без этого токен не проходит assessment Meta (см. коммент выше). 2 попытки.
-export async function solveRecaptchaEnterprise({ sitekey, url, action, dataS, onAttempt }) {
+// reCAPTCHA v2 ENTERPRISE (чекбокс «I'm not a robot» на auth_platform/recaptcha).
+// КЛЮЧЕВОЕ (по докам 2captcha + живой кейс 2026-07-19, verify ✗ даже с правильным action): если задан
+// proxy — используем PROXY-задачу `RecaptchaV2EnterpriseTask`, т.е. 2captcha решает капчу ЧЕРЕЗ НАШ IP
+// и с НАШИМ userAgent → токен привязан к тому же IP/браузеру, что и наш вход, и Meta-assessment скорит
+// его как консистентный (proxyless-токен решается с датацентр-IP 2captcha → Meta бракует по скору/IP).
+// enterprisePayload несёт action/s (без них assessment.action не совпадает). meta.
+export async function solveRecaptchaEnterprise({ sitekey, url, action, dataS, proxy, userAgent, onAttempt }) {
   if (!captchaConfigured()) throw new Error('2captcha_not_configured: TWOCAPTCHA_API_KEY не задан')
   const ep = {}
   if (action) ep.action = action
   if (dataS) ep.s = dataS
-  const task = { type: 'RecaptchaV2EnterpriseTaskProxyless', websiteURL: url, websiteKey: sitekey }
+  const p = proxy ? splitProxy(proxy) : null
+  let task
+  if (p && p.hostPort && p.hostPort.includes(':')) {
+    const i = p.hostPort.lastIndexOf(':')
+    task = {
+      type: 'RecaptchaV2EnterpriseTask',       // ПРОКСИ-версия: решают через наш IP
+      websiteURL: url, websiteKey: sitekey,
+      proxyType: (p.scheme && /^socks/i.test(p.scheme)) ? p.scheme.toLowerCase() : 'http',
+      proxyAddress: p.hostPort.slice(0, i),
+      proxyPort: Number(p.hostPort.slice(i + 1)),
+      ...(p.username ? { proxyLogin: p.username } : {}),
+      ...(p.password ? { proxyPassword: p.password } : {}),
+    }
+  } else {
+    task = { type: 'RecaptchaV2EnterpriseTaskProxyless', websiteURL: url, websiteKey: sitekey }
+  }
+  if (userAgent) task.userAgent = userAgent      // тот же UA, что у нашего входа — консистентный отпечаток токена
   if (Object.keys(ep).length) task.enterprisePayload = ep
   let lastErr
   for (let i = 0; i < 2; i++) {
@@ -472,7 +493,7 @@ async function clickRecaptchaCheckbox(page) {
 // Обнаружить и решить капчу. Возвращает { solved, detected, log } — log несёт человекочитаемую
 // трассу (что распознали, enterprise ли, что ответила 2captcha, вписан ли токен), которую login.js
 // прикладывает к ошибке входа в UI — чтобы НЕ гадать вслепую, почему капча не прошла.
-export async function trySolveCaptcha(page) {
+export async function trySolveCaptcha(page, opts = {}) {
   const t = []
   if (!captchaConfigured()) return { solved: false, detected: false, advanced: false, log: '2captcha не настроена (TWOCAPTCHA_API_KEY не задан на воркере)' }
 
@@ -522,9 +543,12 @@ export async function trySolveCaptcha(page) {
     if (found.type === 'hcaptcha') token = await solveHCaptcha({ sitekey: found.sitekey, url, onAttempt })
     else if (found.type === 'funcaptcha') token = await solveFunCaptcha({ publicKey: found.publicKey, surl: found.surl, url, onAttempt })
     else if (found.type === 'recaptcha' && enterprise) {
-      // ENTERPRISE → новый createTask API с enterprisePayload.action (легаси in.php action не передаёт).
-      t.push(`solve via createTask ENTERPRISE (action=${found.action || '—'}${found.dataS ? ', s=есть' : ''})`)
-      token = await solveRecaptchaEnterprise({ sitekey: found.sitekey, url, action: found.action, dataS: found.dataS, onAttempt })
+      // ENTERPRISE → createTask. Если есть наш proxy → PROXY-задача (решают через НАШ IP+UA → токен
+      // привязан к нашей сессии, Meta скорит выше). userAgent берём со страницы (тот же, что у входа).
+      let userAgent = ''
+      try { userAgent = await page.evaluate(() => navigator.userAgent) } catch {}
+      t.push(`solve via createTask ENTERPRISE (${opts.proxy ? 'PROXY-задача, наш IP' : 'proxyless'}, action=${found.action || '—'}${found.dataS ? ', s=есть' : ''})`)
+      token = await solveRecaptchaEnterprise({ sitekey: found.sitekey, url, action: found.action, dataS: found.dataS, proxy: opts.proxy, userAgent, onAttempt })
     } else token = await solveRecaptchaV2({ sitekey: found.sitekey, url, enterprise, dataS: found.dataS, action: found.action, onAttempt })
     const solveSec = Math.round((Date.now() - started) / 1000)
     const applied = await injectToken(page, found.type, token)

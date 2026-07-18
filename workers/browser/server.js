@@ -15,7 +15,7 @@ import { fingerprintSelfTest } from './lib/selftest.js'
 import { captchaConfigured } from './lib/captcha.js'
 import { warmupFeed } from './lib/human.js'
 
-const BUILD = '2026-07-19-browser-91-checkbox-framelocator'
+const BUILD = '2026-07-19-browser-92-recaptcha-proxy-task'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -107,7 +107,7 @@ app.post('/login', async (req, res) => {
       await clearPending(uname)
       const context = await newAccountContext({ username: uname, proxy, locale, timezoneId })
       try {
-        const r = await attemptLogin(context, { username: uname, password, totpSecret })
+        const r = await attemptLogin(context, { username: uname, password, totpSecret, proxy })
         if (r.ok) { await closeContextSafe(context); return { ok: true, browserState: r.storageState, username: r.username } }
         // challenge/2FA — контекст держим для ввода кода. totpSecret сохраняем ТОЛЬКО для
         // needs2fa (email/SMS-challenge не имеет TOTP-ключа) — attemptLogin уже исчерпал свои
