@@ -120,6 +120,16 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-19 (🔴 КАПЧА, живой дамп фреймов: fbsbx-фрейм = data-callback `successCallback`, БЕЗ формы/кнопки → нужен ИСХОДНИК successCallback)
+
+⚠️ **Редеплой воркера** (build → `2026-07-19-browser-86-captcha-handler-src-dump`). Диагностическая итерация. По живой трассе (build-85, cheidy.ite): `вписан [textarea ✓, getResponse ✓, data-callback ✓, cfg-callback ✓, form-submit ✗, postMessage ✓] → verify: экран НЕ сменился ✗`. Дамп фреймов показал: верхний `/auth_platform/recaptcha/` пуст; fbsbx `/captcha/recaptcha/iframe/` — `data-callback=successCallback`, `grecaptcha.enterprise` есть, глобалы `successCallback`/`expiredCallback`, **форм и кнопок НЕТ** → отправка ТОЛЬКО через `successCallback`, которую мы уже дёргаем, но экран не сменяется.
+
+- **Гипотеза сузилась:** либо `getResponse`-override не «прилипал» (свойство non-writable → ложный ✓), либо `successCallback` делает специфичный `postMessage`/навигацию, которую наш общий postMessage не воспроизводит, ЛИБО токен отвергается бэкендом Meta (параметры solve — §4.3).
+- **Фиксы:** (1) `getResponse`-override теперь через `Object.defineProperty` + РЕАЛЬНАЯ проверка `getResponse()===tok` (флаг `getResponse ✓` больше не ложный). (2) `captchaFramesDump` теперь дампит **ИСХОДНИК** (`.toString()`, до 320 симв.) не-нативных хендлеров (`successCallback`/`expiredCallback`) — по нему видно ТОЧНЫЙ механизм отправки.
+- **Что затестить:** повтор входа → прислать блок `frames: … src={...}` из трассы (исходник `successCallback`). По нему добью постбэк ТОЧНО (postMessage нужного формата / fetch / навигация) — это последняя миля.
+
+Проверено: `node --check` чист, воркер-тесты 35/35.
+
 ### 2026-07-18 (4) (🔴 КАПЧА, ЖИВАЯ ТРАССА: callback ✓, но экран не сменился (verify ✗) → getResponse-override + submit-any-form + postMessage + дамп фреймов fbsbx)
 
 ⚠️ **Нужен редеплой браузерного воркера** (build → `2026-07-18-browser-85-captcha-getresponse-submit`). Next.js не трогал. По ЖИВОЙ трассе входа (build-84, аккаунт cheidy.ite, reCAPTCHA Enterprise):

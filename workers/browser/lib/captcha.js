@@ -182,7 +182,14 @@ async function injectToken(page, type, token) {
     //     через grecaptcha.enterprise.getResponse() → получал ПУСТО (живой кейс 2026-07-18: data-callback
     //     ✓/cfg-callback ✓, но verify ✗ — колбэк дёрнулся, а токена в getResponse нет → экран не сменился).
     try {
-      const patchGR = (g) => { if (g && typeof g.getResponse === 'function') { try { g.getResponse = () => tok; out.getResponse = true } catch {} } }
+      const patchGR = (g) => {
+        if (!g || typeof g.getResponse !== 'function') return
+        // defineProperty надёжнее прямого присваивания (если свойство non-writable — присваивание
+        // молча не сработает, а out.getResponse был бы ложно-true). Затем ПРОВЕРЯЕМ, что реально вернулось.
+        try { Object.defineProperty(g, 'getResponse', { configurable: true, writable: true, value: () => tok }) }
+        catch { try { g.getResponse = () => tok } catch {} }
+        try { if (g.getResponse('') === tok || g.getResponse() === tok) out.getResponse = true } catch {}
+      }
       if (window.grecaptcha) { patchGR(window.grecaptcha); if (window.grecaptcha.enterprise) patchGR(window.grecaptcha.enterprise) }
     } catch {}
     // (3) ДЁРНУТЬ data-callback НАПРЯМУЮ — штатный success-хендлер fbsbx:
@@ -260,11 +267,15 @@ async function captchaFramesDump(page) {
         const forms = [...document.querySelectorAll('form')].map((fm) => (fm.getAttribute('action') || fm.method || 'form').slice(0, 50))
         const btns = [...document.querySelectorAll('button, [role=button], input[type=submit], a[role=button]')].map((b) => (b.innerText || b.value || b.getAttribute('aria-label') || '').trim().slice(0, 22)).filter(Boolean).slice(0, 6)
         const cb = document.querySelector('[data-callback]') && document.querySelector('[data-callback]').getAttribute('data-callback')
-        const globals = Object.getOwnPropertyNames(window).filter((n) => /callback|verify|submit|onCaptcha|onSuccess|onToken/i.test(n)).slice(0, 8)
-        return { forms, btns, cb: cb || null, gr: !!window.grecaptcha, ent: !!(window.grecaptcha && window.grecaptcha.enterprise), globals }
+        const globals = Object.getOwnPropertyNames(window).filter((n) => /callback|verify|submit|onCaptcha|onSuccess|onToken/i.test(n)).slice(0, 10)
+        // ИСХОДНИК success/callback-хендлеров (не нативных) — по нему видно ТОЧНЫЙ механизм отправки
+        // решения (postMessage какого формата / fetch / навигация), чтобы воспроизвести его без гадания.
+        const handlers = {}
+        for (const n of globals) { try { const v = window[n]; if (typeof v === 'function') { const s = String(v); if (!/\{\s*\[native code\]\s*\}/.test(s)) handlers[n] = s.replace(/\s+/g, ' ').slice(0, 320) } } catch {} }
+        return { forms, btns, cb: cb || null, gr: !!window.grecaptcha, ent: !!(window.grecaptcha && window.grecaptcha.enterprise), globals, handlers }
       })
       let tag = u.slice(0, 45); try { tag = new URL(u).pathname } catch {}
-      parts.push(`{${tag}: forms=${JSON.stringify(info.forms)} btns=${JSON.stringify(info.btns)} data-cb=${info.cb} gr=${info.gr}/ent=${info.ent} fns=${JSON.stringify(info.globals)}}`)
+      parts.push(`{${tag}: forms=${JSON.stringify(info.forms)} btns=${JSON.stringify(info.btns)} data-cb=${info.cb} gr=${info.gr}/ent=${info.ent} fns=${JSON.stringify(info.globals)} src=${JSON.stringify(info.handlers)}}`)
     } catch { parts.push(`{${u.slice(0, 40)}: evaluate недоступен (кросс-ориджин)}`) }
   }
   return parts.join(' ') || 'нет фреймов капчи'
