@@ -408,6 +408,32 @@ function isEnterpriseRecaptcha(page, found) {
   return page.frames().some((f) => { try { return /recaptcha\/enterprise/i.test(f.url() || '') } catch { return false } })
 }
 
+// Кликнуть чекбокс reCAPTCHA «I'm not a robot» в anchor-фрейме — «человеческий» проход. Если браузер/IP
+// достаточно доверенный, reCAPTCHA пропустит БЕЗ картинок и САМА дёрнет successCallback с РОДНЫМ токеном
+// (привязан к нашей сессии, нормальный risk-score → Meta примет — в отличие от пересаженного 2captcha-токена,
+// который Meta скорит низко/бракует по action). Это самый дешёвый и правильный шанс. Клик мышью по
+// координатам (кросс-ориджин google-фрейм — coordinates от boundingBox корректны и для под-фрейма).
+async function clickRecaptchaCheckbox(page) {
+  for (const f of page.frames()) {
+    let u = ''; try { u = f.url() || '' } catch {}
+    if (!/recaptcha\/(enterprise\/)?anchor/i.test(u)) continue
+    try {
+      const cb = f.locator('#recaptcha-anchor, .recaptcha-checkbox, [role="checkbox"]').first()
+      if (!(await cb.isVisible({ timeout: 2500 }).catch(() => false))) continue
+      const box = await cb.boundingBox().catch(() => null)
+      if (box) {
+        await page.mouse.move(box.x + box.width / 2 + (Math.random() * 6 - 3), box.y + box.height / 2 + (Math.random() * 6 - 3), { steps: 6 + Math.floor(Math.random() * 10) })
+        await sleep(120 + Math.floor(Math.random() * 240))
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+      } else {
+        await cb.click({ timeout: 3000 })
+      }
+      return true
+    } catch {}
+  }
+  return false
+}
+
 // Обнаружить и решить капчу. Возвращает { solved, detected, log } — log несёт человекочитаемую
 // трассу (что распознали, enterprise ли, что ответила 2captcha, вписан ли токен), которую login.js
 // прикладывает к ошибке входа в UI — чтобы НЕ гадать вслепую, почему капча не прошла.
@@ -434,6 +460,22 @@ export async function trySolveCaptcha(page) {
   const skHead = String(found.sitekey || found.publicKey || '').slice(0, 14)
   t.push(`распознана ${found.type}${enterprise ? ' ENTERPRISE' : ''} (via ${via}), sitekey ${skHead}…, pageurl ${url}, data-s ${found.dataS ? ('есть len ' + String(found.dataS).length) : 'НЕТ'}${found.dataAttrs ? ' data-attrs=' + JSON.stringify(found.dataAttrs) : ''}`)
   console.error('[captcha]', t[t.length - 1])
+
+  // ШАГ 0 — «человеческий» клик по чекбоксу ДО 2captcha. Даёт РОДНОЙ токен, если reCAPTCHA пропустит
+  // без картинок (Meta примет). Если появится картинка-челлендж/не пройдёт за 6с — падаем на 2captcha ниже.
+  if (found.type === 'recaptcha') {
+    try {
+      if (await clickRecaptchaCheckbox(page)) {
+        if (await waitCaptchaCleared(page, 6000)) {
+          t.push('клик чекбокса → verify: капча УШЛА ✓ (РОДНОЙ токен, без 2captcha)')
+          console.error('[captcha]', t[t.length - 1])
+          return { solved: true, detected: true, advanced: true, log: t.join(' | ') }
+        }
+        t.push('клик чекбокса не прошёл (картинка-челлендж/недоверенный IP) → 2captcha')
+      }
+    } catch {}
+  }
+
   const attemptNotes = []
   const onAttempt = (n, msg) => { attemptNotes.push(`п.${n}: ${msg}`) }
   try {
