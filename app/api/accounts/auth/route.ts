@@ -119,6 +119,7 @@ export async function POST(req: NextRequest) {
                 username: result.username ?? creds.login,
                 proxyId, role: accountRole, sectionId: validSection,
                 emailLogin: mobileEmail, emailPassword: mobileEmailPass,
+                screenshot: result.diag?.screenshot ?? null,
                 note: 'Куки не приняты — переключился на вход по логину/паролю из этой же строки.',
                 error: is2fa
                   ? 'Куки отклонены. Пробую логин/пароль → Instagram запросил код 2FA.'
@@ -159,6 +160,7 @@ export async function POST(req: NextRequest) {
             proxyId,
             role: accountRole,
             sectionId: validSection,
+            screenshot: result.diag?.screenshot ?? null,
             error: is2fa
               ? 'Instagram запросил код двухфакторной аутентификации (2FA).'
               : 'Instagram требует подтверждение (challenge). Введите код из письма/SMS.',

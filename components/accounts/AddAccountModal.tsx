@@ -223,6 +223,7 @@ export function AddAccountModal({
         setError('')
         setResendNote('')
         setAuto2fa('idle')
+        setShot(data.screenshot ?? '')   // скрин РЕАЛЬНОГО экрана подтверждения Instagram (видно, куда ушёл код)
         setStep('challenge')
         return
       }

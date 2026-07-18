@@ -464,6 +464,50 @@ export async function extractUsername(page) {
   return null
 }
 
+// На экране подтверждения входа Instagram («Как отправить код?») ЯВНО выбираем ПОЧТУ и жмём
+// «Отправить/Далее». Причина (живой кейс iheidy.zub, 2026-07-17): если у аккаунта привязан
+// телефон, IG по умолчанию шлёт код в SMS (на номер, которого у пользователя купленного
+// аккаунта НЕТ) → письмо с кодом на почту НЕ приходит, сколько ни жми «resend». Явный выбор
+// e-mail направляет код туда, куда у пользователя есть доступ.
+// Строго best-effort и БЕЗОПАСНО: (1) вызывается ТОЛЬКО когда поля кода ещё нет (экран выбора
+// способа, а не уже открытая форма ввода); (2) НИКОГДА не выбирает телефон; (3) ничего не нашли
+// по почте → no-op (поведение как раньше). Возвращает 'email' при удачном выборе, иначе null.
+async function chooseEmailChannel(page) {
+  const SEND = ['Send Security Code', 'Send Code', 'Send code', 'Отправить код', 'Send', 'Continue', 'Продолжить', 'Next', 'Далее', 'Отправить']
+  try {
+    // (1) Радио-варианты выбора способа: ищем тот, что про почту (value/связанный label), не телефон.
+    const radios = page.locator('input[type="radio"]')
+    const n = await radios.count().catch(() => 0)
+    for (let i = 0; i < Math.min(n, 8); i++) {
+      const r = radios.nth(i)
+      const val = ((await r.getAttribute('value').catch(() => '')) || '').toLowerCase()
+      const id = await r.getAttribute('id').catch(() => null)
+      let lbl = ''
+      if (id) lbl = ((await page.locator(`label[for="${id}"]`).first().textContent().catch(() => '')) || '').toLowerCase()
+      const hay = `${val} ${lbl}`
+      const isEmail = /email|e-mail|почт|@/.test(hay)
+      const isPhone = /phone|sms|телефон|моб/.test(hay)
+      if (isEmail && !isPhone) {
+        await r.check({ timeout: 2500 }).catch(async () => { await r.click({ timeout: 2500 }).catch(() => {}) })
+        await page.waitForTimeout(400)
+        await clickByText(page, SEND, { timeout: 3000 }).catch(() => {})
+        await page.waitForTimeout(1200)
+        return 'email'
+      }
+    }
+    // (2) Кликабельная строка/кнопка «...@...» или «...на почту» (экраны без radio-инпутов).
+    const opt = page.getByText(/(email|e-mail|почт)[^@]*@|@[a-z0-9.-]*(gmail|mail|outlook|yahoo|proton|icloud)|на почт|to email/i).first()
+    if (await opt.isVisible({ timeout: 800 }).catch(() => false)) {
+      await opt.click({ timeout: 2500 }).catch(() => {})
+      await page.waitForTimeout(400)
+      await clickByText(page, SEND, { timeout: 3000 }).catch(() => {})
+      await page.waitForTimeout(1200)
+      return 'email'
+    }
+  } catch { /* best-effort — любой сбой не должен мешать обычному challenge-флоу */ }
+  return null
+}
+
 /**
  * Одна попытка входа по логину/паролю на переданном контексте.
  * @returns один из:
@@ -570,10 +614,20 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
     }
 
     if (urlHas(url, URLS.challenge) || (await firstVisible(page, SEL.codeInput, 500))) {
-      let channel = null
-      if (await pageHasText(page, ['email', 'e-mail', 'почт'])) channel = 'email'
-      else if (await pageHasText(page, ['phone', 'SMS', 'телефон'])) channel = 'sms'
-      return { needsCheckpoint: true, channel }
+      // Если поля кода ещё НЕТ — это экран ВЫБОРА способа: явно выбираем ПОЧТУ (иначе IG шлёт код
+      // в SMS на телефон аккаунта, которого у пользователя нет → письмо не приходит). Если поле кода
+      // уже есть — IG способ уже выбрал сам, не трогаем (просто отдаём на ввод кода).
+      const codeFieldNow = await firstVisibleAnyFrame(page, SEL.codeInput, 400)
+      let channel = codeFieldNow ? null : await chooseEmailChannel(page)
+      if (!channel) {
+        if (await pageHasText(page, ['email', 'e-mail', 'почт'])) channel = 'email'
+        else if (await pageHasText(page, ['phone', 'SMS', 'телефон'])) channel = 'sms'
+      }
+      // Скрин РЕАЛЬНОГО экрана подтверждения — чтобы было видно, что именно показал Instagram
+      // (выбор способа / «код отправлен на +**89» / только SMS), а не гадать, почему нет письма.
+      let diag = null
+      try { diag = await captureDiag(page) } catch {}
+      return { needsCheckpoint: true, channel, diag }
     }
 
     // «Подтвердите вход на другом устройстве» (device-approval, БЕЗ кода): пользователь approve'ит

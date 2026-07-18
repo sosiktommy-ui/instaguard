@@ -15,7 +15,7 @@ import { fingerprintSelfTest } from './lib/selftest.js'
 import { captchaConfigured } from './lib/captcha.js'
 import { warmupFeed } from './lib/human.js'
 
-const BUILD = '2026-07-16-browser-75-captcha-latency-fix'
+const BUILD = '2026-07-17-browser-76-challenge-email-channel'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -116,7 +116,7 @@ app.post('/login', async (req, res) => {
         pending.set(uname, { context, createdAt: Date.now(), totpSecret: r.needs2fa ? totpSecret : undefined })
         return r.needs2fa
           ? { needs2fa: true, username: uname }
-          : { needsCheckpoint: true, channel: r.channel ?? null, username: uname }
+          : { needsCheckpoint: true, channel: r.channel ?? null, username: uname, diag: r.diag ?? undefined }
       } catch (e) {
         await closeContextSafe(context)
         throw e

@@ -63,6 +63,7 @@ export interface BrowserLoginResult {
   needsCheckpoint?: boolean
   needs2fa?: boolean
   channel?: 'email' | 'sms' | null
+  diag?: { url?: string; title?: string; screenshot?: string | null }
 }
 
 /** locale/timezoneId — гео отпечатка по стране прокси (plan.md §349, lib/browser/geo.ts). Опционально: без них воркер берёт дефолт en-US/America/New_York. */
