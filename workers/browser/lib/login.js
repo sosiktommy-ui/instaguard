@@ -254,7 +254,12 @@ export async function domSummary(page) {
       }).catch(() => null)
       if (d) perFrame.push(d)
     }
-    return { frameCount: page.frames().length, frames: perFrame }
+    // ВИДИМЫЙ ТЕКСТ страницы (главный фрейм) — по нему сразу видно, ЧТО показал Instagram, когда
+    // формы нет: «Suspicious login attempt» / «We restricted…» / «Please wait a few minutes» (мягкий
+    // бан) vs cookie-стена vs пусто. Надёжнее скрина (скрин иногда не доходит до UI).
+    let text = ''
+    try { text = await page.evaluate(() => (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 400)) } catch {}
+    return { frameCount: page.frames().length, frames: perFrame, text }
   } catch { return null }
 }
 
@@ -547,7 +552,9 @@ export async function attemptLogin(context, { username, password, totpSecret }) 
     const domTxt = dom
       ? ` · фреймов: ${dom.frameCount}, инпуты по фреймам: ${JSON.stringify(dom.frames.map((f) => ({ url: f.url.slice(0, 60), forms: f.forms, inputs: f.inputs })))}`
       : ' · DOM-дамп не снят'
-    await fail(page, `unknown: страница входа открылась, но поля логина/пароля не найдены (промежуточный экран или бот-защита). Скрин ниже показывает, что увидел браузер.${domTxt}`)
+    // Текст экрана — по нему сразу видно причину (мягкий бан / «подождите» / cookie-стена / пусто).
+    const pageTxt = dom?.text ? ` · ТЕКСТ ЭКРАНА: «${dom.text}»` : ''
+    await fail(page, `unknown: страница входа открылась, но поля логина/пароля не найдены (промежуточный экран или бот-защита).${pageTxt}${domTxt}`)
   }
   await humanType(userInput, username)
   await jitter(400, 900)
