@@ -30,28 +30,52 @@ async function pollResult(id, { timeoutMs = 150000, intervalMs = 6000 } = {}) {
   throw new Error('2captcha_timeout: решение не пришло за отведённое время')
 }
 
-export async function solveRecaptchaV2({ sitekey, url, invisible = false, enterprise = false }) {
+// Ретраибельные исходы 2captcha — пробуем ЗАНОВО с новой задачей: воркеры не смогли решить
+// (ERROR_CAPTCHA_UNSOLVABLE — вероятностно, Enterprise reCAPTCHA решается хуже обычной v2),
+// нет свободных слотов, таймаут/сеть. Именно отсутствие ретрая роняло весь вход с ПЕРВОГО
+// UNSOLVABLE (живой баг 2026-07-18, ошибка B). ФАТАЛЬНЫЕ коды (ретрай бессмыслен — только жжёт
+// время/баланс): неверный ключ сайта/аккаунта, ноль баланса, забаненный IP, битые параметры.
+const FATAL_2CAPTCHA = /ERROR_WRONG_GOOGLEKEY|GOOGLEKEY_INVALID|ERROR_KEY_DOES_NOT_EXIST|ERROR_ZERO_BALANCE|ERROR_WRONG_USER_KEY|ERROR_GOOGLEKEY|IP_BANNED|ERROR_PAGEURL|ERROR_BAD_PARAMETERS|not_configured/i
+
+// submit + poll с РЕТРАЯМИ: при ретраибельном исходе — новая задача (до attempts раз). Фатальные
+// коды пробрасываются сразу. onAttempt(n, msg) — для трассы (сколько попыток, чем упала предыдущая).
+async function solveWithRetry(params, { attempts = 2, timeoutMs = 75000, onAttempt } = {}) {
+  let lastErr
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const id = await submitTask(params)
+      return await pollResult(id, { timeoutMs })
+    } catch (e) {
+      lastErr = e
+      const msg = e?.message || String(e)
+      if (onAttempt) { try { onAttempt(i + 1, msg) } catch {} }
+      if (FATAL_2CAPTCHA.test(msg)) throw e   // ретрай не поможет — сразу наверх
+      // иначе (UNSOLVABLE / NO_SLOT / timeout / сеть) — следующая попытка с новой задачей
+    }
+  }
+  throw lastErr
+}
+
+export async function solveRecaptchaV2({ sitekey, url, invisible = false, enterprise = false, dataS, onAttempt }) {
   if (!captchaConfigured()) throw new Error('2captcha_not_configured: TWOCAPTCHA_API_KEY не задан')
   // enterprise=1 — для reCAPTCHA ENTERPRISE (Instagram /auth_platform/recaptcha/, экран «I'm not a
   // robot» от Meta). БЕЗ этого флага 2captcha решает капчу как обычную v2, и enterprise-виджет такой
-  // токен ОТВЕРГАЕТ → вход не проходит (таймаут «network»). Именно это ломало вход с reCAPTCHA-экраном.
-  const id = await submitTask({ method: 'userrecaptcha', googlekey: sitekey, pageurl: url, invisible: invisible ? '1' : '0', ...(enterprise ? { enterprise: '1' } : {}) })
-  // Таймаут 135с (не дефолтные 150) — чтобы воркер успел вписать токен и вернуть исход в клиентском
-  // бюджете входа (см. LOGIN_TIMEOUT_MS в lib/browser/client.ts). enterprise reCAPTCHA на 2captcha
-  // обычно решается за 20–60с, 135с — с запасом.
-  return pollResult(id, { timeoutMs: 135000 })
+  // токен ОТВЕРГАЕТ → вход не проходит (таймаут «network»). data-s — доп. токен, который иногда
+  // несёт enterprise-виджет Meta; передаём, если удалось снять (см. detectFromFrameUrls/detectCaptcha).
+  const params = { method: 'userrecaptcha', googlekey: sitekey, pageurl: url, invisible: invisible ? '1' : '0', ...(enterprise ? { enterprise: '1' } : {}), ...(dataS ? { 'data-s': dataS } : {}) }
+  // attempts=2 × ≤75с — с запасом под клиентский бюджет входа (LOGIN_TIMEOUT_MS). UNSOLVABLE
+  // 2captcha обычно возвращает быстро (~15–40с), так что 2 попытки редко упираются в потолок.
+  return solveWithRetry(params, { attempts: 2, timeoutMs: 75000, onAttempt })
 }
 
-export async function solveHCaptcha({ sitekey, url }) {
+export async function solveHCaptcha({ sitekey, url, onAttempt }) {
   if (!captchaConfigured()) throw new Error('2captcha_not_configured: TWOCAPTCHA_API_KEY не задан')
-  const id = await submitTask({ method: 'hcaptcha', sitekey, pageurl: url })
-  return pollResult(id)
+  return solveWithRetry({ method: 'hcaptcha', sitekey, pageurl: url }, { attempts: 2, timeoutMs: 110000, onAttempt })
 }
 
-export async function solveFunCaptcha({ publicKey, surl, url }) {
+export async function solveFunCaptcha({ publicKey, surl, url, onAttempt }) {
   if (!captchaConfigured()) throw new Error('2captcha_not_configured: TWOCAPTCHA_API_KEY не задан')
-  const id = await submitTask({ method: 'funcaptcha', publickey: publicKey, surl, pageurl: url })
-  return pollResult(id)
+  return solveWithRetry({ method: 'funcaptcha', publickey: publicKey, surl, pageurl: url }, { attempts: 2, timeoutMs: 110000, onAttempt })
 }
 
 // Простая image-капча (искажённый текст/цифры НА КАРТИНКЕ, без JS-виджета) — Instagram иногда
@@ -126,52 +150,71 @@ export async function detectCaptcha(page) {
   return null
 }
 
-// Вписать токен решения в форму + дёрнуть JS-callback виджета (нужно многим виджетам,
-// иначе форма не считает капчу пройденной, даже если textarea заполнена). Возвращает
-// { textarea, callback } — заполнили ли поле ответа и нашёлся ли колбэк (для диагностики).
+// Вписать токен решения В ФОРМУ + ОТПРАВИТЬ его ВСЕМИ доступными способами. На экране Meta
+// auth_platform/recaptcha КНОПКИ НЕТ — отправка целиком callback-driven: успех reCAPTCHA должен
+// дёрнуть data-callback-функцию внутри iframe fbsbx, которая постит токен обратно в Meta. Раньше мы
+// дёргали только ___grecaptcha_cfg (2 уровня) → у ENTERPRISE колбэк не находился (callback ✗) →
+// токен вписывался, но НЕ отправлялся → вход зависал (живой баг 2026-07-18, ошибка A). Теперь делаем
+// ВСЁ: textarea + прямой вызов data-callback-атрибута + РЕКУРСИВНЫЙ обход cfg + submit формы.
+// Возвращает { textarea, dataCallback, cfgCallback, formSubmit } — для трассы в UI.
 async function injectToken(page, type, token) {
-  const result = { textarea: false, callback: false }
+  const result = { textarea: false, dataCallback: false, cfgCallback: false, formSubmit: false }
   const script = ({ tok, kind }) => {
-    const out = { textarea: false, callback: false }
+    const out = { textarea: false, dataCallback: false, cfgCallback: false, formSubmit: false }
     const fire = (el) => { try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })) } catch {} }
-    if (kind === 'hcaptcha') {
-      document.querySelectorAll('textarea[name="h-captcha-response"], #h-captcha-response, textarea[name="g-recaptcha-response"]').forEach((el) => { el.value = tok; el.innerHTML = tok; fire(el); out.textarea = true })
-      return out
-    }
     if (kind === 'funcaptcha') {
       const el = document.querySelector('textarea[name="fc-token"], #fc-token, input[name="fc-token"]')
       if (el) { el.value = tok; fire(el); out.textarea = true }
-      try { if (typeof window.onFunCaptchaSuccess === 'function') { window.onFunCaptchaSuccess(tok); out.callback = true } } catch {}
+      try { if (typeof window.onFunCaptchaSuccess === 'function') { window.onFunCaptchaSuccess(tok); out.cfgCallback = true } } catch {}
       return out
     }
-    // recaptcha v2 / ENTERPRISE: заполняем ВСЕ textarea ответа (id может быть g-recaptcha-response-N) +
-    // дёргаем ВСЕ найденные колбэки из ___grecaptcha_cfg (структура varies по версии/enterprise —
-    // раньше выходили по первому найденному, у enterprise реальный колбэк бывает вложен глубже).
-    document.querySelectorAll('textarea[name="g-recaptcha-response"], textarea[id^="g-recaptcha-response"], #g-recaptcha-response').forEach((el) => { el.value = tok; el.innerHTML = tok; fire(el); out.textarea = true })
+    // recaptcha v2 / ENTERPRISE / hcaptcha:
+    // (1) заполнить ВСЕ textarea ответа (id может быть g-recaptcha-response-N)
+    document.querySelectorAll('textarea[name="g-recaptcha-response"], textarea[id^="g-recaptcha-response"], #g-recaptcha-response, textarea[name="h-captcha-response"], #h-captcha-response').forEach((el) => { el.value = tok; el.innerHTML = tok; fire(el); out.textarea = true })
+    // (2) ДЁРНУТЬ data-callback НАПРЯМУЮ — штатный success-хендлер fbsbx (ГЛАВНЫЙ фикс callback ✗):
+    //     атрибут data-callback у виджета — это ИМЯ глобальной функции, которую reCAPTCHA зовёт с токеном.
+    try {
+      document.querySelectorAll('.g-recaptcha[data-callback], [data-sitekey][data-callback], .h-captcha[data-callback], [data-hcaptcha-widget-id][data-callback]').forEach((w) => {
+        const name = w.getAttribute('data-callback')
+        if (name && typeof window[name] === 'function') { try { window[name](tok); out.dataCallback = true } catch {} }
+      })
+    } catch {}
+    // (3) РЕКУРСИВНЫЙ обход ___grecaptcha_cfg — вызвать ВСЕ функции-колбэки (у ENTERPRISE вложены
+    //     глубже, чем 2 уровня, которыми мы ограничивались раньше — потому колбэк и не находился).
     try {
       const cfg = window.___grecaptcha_cfg
       if (cfg && cfg.clients) {
-        for (const k in cfg.clients) {
-          const client = cfg.clients[k]
-          for (const kk in client) {
-            const obj = client[kk]
-            if (obj && typeof obj.callback === 'function') { try { obj.callback(tok); out.callback = true } catch {} }
-            if (obj && typeof obj === 'object') {
-              for (const kkk in obj) {
-                const inner = obj[kkk]
-                if (inner && typeof inner.callback === 'function') { try { inner.callback(tok); out.callback = true } catch {} }
-              }
-            }
+        const seen = new Set()
+        const visit = (obj, depth) => {
+          if (!obj || depth > 6) return
+          if (typeof obj === 'object') { if (seen.has(obj)) return; seen.add(obj) }
+          for (const k in obj) {
+            let v
+            try { v = obj[k] } catch { continue }
+            if (typeof v === 'function' && /callback/i.test(k)) { try { v(tok); out.cfgCallback = true } catch {} }
+            else if (v && typeof v === 'object') visit(v, depth + 1)
           }
         }
+        for (const k in cfg.clients) visit(cfg.clients[k], 0)
       }
+    } catch {}
+    // (4) SUBMIT формы с textarea ответа — если fbsbx использует form submit, а не postMessage/callback.
+    try {
+      const area = document.querySelector('textarea[name="g-recaptcha-response"], textarea[name="h-captcha-response"]')
+      const form = area && area.closest('form')
+      if (form) { try { (form.requestSubmit ? form.requestSubmit() : form.submit()); out.formSubmit = true } catch {} }
     } catch {}
     return out
   }
   for (const frame of page.frames()) {
     try {
       const r = await frame.evaluate(script, { tok: token, kind: type })
-      if (r) { result.textarea = result.textarea || r.textarea; result.callback = result.callback || r.callback }
+      if (r) {
+        result.textarea = result.textarea || r.textarea
+        result.dataCallback = result.dataCallback || r.dataCallback
+        result.cfgCallback = result.cfgCallback || r.cfgCallback
+        result.formSubmit = result.formSubmit || r.formSubmit
+      }
     } catch {}
   }
   return result
@@ -222,6 +265,25 @@ async function waitForRecaptchaReady(page, timeoutMs = 9000) {
   return false
 }
 
+// Капча ещё на экране? Верхний URL = auth_platform/recaptcha (экран Meta «I'm not a robot») ИЛИ
+// на странице есть iframe капчи fbsbx. Дёшево (только чтение URL) — можно звать в цикле входа.
+export function captchaOnScreen(page) {
+  try { if (/auth_platform\/(recaptcha|captcha)/i.test(page.url() || '')) return true } catch {}
+  return page.frames().some((f) => { try { return /\/captcha\/(recaptcha|hcaptcha)\/iframe/i.test(f.url() || '') } catch { return false } })
+}
+
+// После вписывания токена — дождаться, что капча РЕАЛЬНО ушла (верхний экран сменился / iframe
+// капчи отвалился). Возвращает true = прошли; false = токен вписан, но экран не сменился (виджет
+// не принял токен ИЛИ отправка не сработала) → вызывающий код (login.js) может повторить решение.
+async function waitCaptchaCleared(page, timeoutMs = 12000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!captchaOnScreen(page)) return true
+    await sleep(600)
+  }
+  return false
+}
+
 // reCAPTCHA ENTERPRISE или обычная v2? Для 2captcha это КРИТИЧНО: enterprise-виджет ОТВЕРГАЕТ
 // токен, решённый без enterprise=1 (подтверждённый живой баг — enterprise:false → вход зависал).
 // Определяем НЕЗАВИСИМО ОТ ТАЙМИНГА загрузки google-фреймов: главный признак — top-URL Instagram
@@ -238,7 +300,7 @@ function isEnterpriseRecaptcha(page, found) {
 // прикладывает к ошибке входа в UI — чтобы НЕ гадать вслепую, почему капча не прошла.
 export async function trySolveCaptcha(page) {
   const t = []
-  if (!captchaConfigured()) return { solved: false, detected: false, log: '2captcha не настроена (TWOCAPTCHA_API_KEY не задан на воркере)' }
+  if (!captchaConfigured()) return { solved: false, detected: false, advanced: false, log: '2captcha не настроена (TWOCAPTCHA_API_KEY не задан на воркере)' }
 
   // Дать вложенным фреймам reCAPTCHA догрузиться — иначе enterprise-флаг/виджет не готовы (см. helper).
   await waitForRecaptchaReady(page).catch(() => {})
@@ -246,7 +308,7 @@ export async function trySolveCaptcha(page) {
   let found = await detectCaptcha(page).catch(() => null)
   let via = 'dom'
   if (!found) { found = detectFromFrameUrls(page); via = 'frame-url' }   // фолбэк по URL фреймов (кросс-ориджин reCAPTCHA)
-  if (!found) { console.error('[captcha] капча не распознана (нет sitekey ни в DOM, ни в URL фреймов)'); return { solved: false, detected: false, log: 'капча не распознана (нет sitekey ни в DOM, ни в URL фреймов)' } }
+  if (!found) { console.error('[captcha] капча не распознана (нет sitekey ни в DOM, ни в URL фреймов)'); return { solved: false, detected: false, advanced: false, log: 'капча не распознана (нет sitekey ни в DOM, ни в URL фреймов)' } }
 
   // pageurl для 2captcha — домен ХОСТА капчи. Instagram рендерит reCAPTCHA в iframe fbsbx.com, и
   // sitekey привязан к fbsbx (не к instagram). С pageurl=instagram 2captcha даёт ERROR_CAPTCHA_UNSOLVABLE.
@@ -259,18 +321,26 @@ export async function trySolveCaptcha(page) {
   const skHead = String(found.sitekey || found.publicKey || '').slice(0, 14)
   t.push(`распознана ${found.type}${enterprise ? ' ENTERPRISE' : ''} (via ${via}), sitekey ${skHead}…, pageurl ${url}`)
   console.error('[captcha]', t[t.length - 1])
+  const attemptNotes = []
+  const onAttempt = (n, msg) => { attemptNotes.push(`п.${n}: ${msg}`) }
   try {
+    const started = Date.now()
     let token
-    if (found.type === 'hcaptcha') token = await solveHCaptcha({ sitekey: found.sitekey, url })
-    else if (found.type === 'funcaptcha') token = await solveFunCaptcha({ publicKey: found.publicKey, surl: found.surl, url })
-    else token = await solveRecaptchaV2({ sitekey: found.sitekey, url, enterprise })
+    if (found.type === 'hcaptcha') token = await solveHCaptcha({ sitekey: found.sitekey, url, onAttempt })
+    else if (found.type === 'funcaptcha') token = await solveFunCaptcha({ publicKey: found.publicKey, surl: found.surl, url, onAttempt })
+    else token = await solveRecaptchaV2({ sitekey: found.sitekey, url, enterprise, dataS: found.dataS, onAttempt })
+    const solveSec = Math.round((Date.now() - started) / 1000)
     const applied = await injectToken(page, found.type, token)
-    t.push(`2captcha OK: токен получен (len ${token ? token.length : 0}), вписан [textarea ${applied.textarea ? '✓' : '✗'}, callback ${applied.callback ? '✓' : '✗'}]`)
+    // Проверяем, что капча РЕАЛЬНО ушла (экран сменился / iframe отвалился) — а не «токен вписан вслепую».
+    const advanced = await waitCaptchaCleared(page)
+    const retryTxt = attemptNotes.length > 1 ? ` [ретраи: ${attemptNotes.slice(0, -1).join('; ')}]` : ''
+    t.push(`2captcha OK: токен len ${token ? token.length : 0} за ${solveSec}с${retryTxt}, вписан [textarea ${applied.textarea ? '✓' : '✗'}, data-callback ${applied.dataCallback ? '✓' : '✗'}, cfg-callback ${applied.cfgCallback ? '✓' : '✗'}, form-submit ${applied.formSubmit ? '✓' : '✗'}] → verify: ${advanced ? 'капча УШЛА ✓' : 'экран НЕ сменился ✗'}`)
     console.error('[captcha]', t[t.length - 1])
-    return { solved: true, detected: true, log: t.join(' | ') }
+    return { solved: true, detected: true, advanced, log: t.join(' | ') }
   } catch (e) {
-    t.push('2captcha ОШИБКА: ' + (e?.message || String(e)))
+    const retryTxt = attemptNotes.length ? ` [${attemptNotes.join('; ')}]` : ''
+    t.push('2captcha ОШИБКА: ' + (e?.message || String(e)) + retryTxt)
     console.error('[captcha] решение 2captcha не удалось:', e?.message || e)
-    return { solved: false, detected: true, log: t.join(' | ') }
+    return { solved: false, detected: true, advanced: false, log: t.join(' | ') }
   }
 }

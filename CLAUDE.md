@@ -120,6 +120,19 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-18 (2) (🔴 КАПЧА: отправка решённого токена (callback ✗) + ретраи 2captcha — Фаза 1 + §4.2/§4.4 из PLAN-LOGIN.md; + явный выбор ПОЧТЫ на challenge)
+
+⚠️ **Нужен редеплой браузерного воркера** (build → `2026-07-18-browser-83-captcha-callback-submit-retry`). Next.js миграций нет. Продолжение работы другого агента (оборвался на лимите) по `PLAN-LOGIN.md`; плюс мой фикс канала challenge.
+
+- **Корень (PLAN-LOGIN §1, подтверждён кодом):** на экране `auth_platform/recaptcha` (reCAPTCHA **Enterprise** в iframe `fbsbx.com`) НЕТ кнопки Continue — отправка целиком callback-driven. Старый `injectToken` вписывал токен в textarea (`textarea ✓`), но **не дёргал нужный колбэк** (`callback ✗`) → форма не отправлялась → Instagram ждал → таймаут `network`. Токен был валиден и не использован.
+- **Фикс §4.1 (`captcha.js injectToken`, главный):** после получения токена по ВСЕМ фреймам: (1) вписать во все `g-recaptcha-response`/`h-captcha-response` + input/change; (2) **прочитать `data-callback` у виджета и вызвать `window[name](token)`** — штатный success-хендлер fbsbx (закрывает `callback ✗`); (3) **рекурсивный обход `___grecaptcha_cfg.clients`** (глубина 6, cycle-safe) — вызвать все функции-колбэки (у Enterprise вложены глубже 2 уровней); (4) `form.requestSubmit()` фолбэк. Возвращает трассу `[textarea, data-callback, cfg-callback, form-submit]`.
+- **Фикс §4.2 (ретраи 2captcha):** `solveRecaptchaV2`/`solveHCaptcha`/`solveFunCaptcha` ретраят транзиентные `ERROR_CAPTCHA_UNSOLVABLE`/`NO_SLOT`/таймаут (новая задача каждый раз); фатальные (`WRONG_GOOGLEKEY`/`ZERO_BALANCE`) — сразу проброс. `onAttempt` пишет номер попытки в трассу.
+- **Фикс §4.4 (верификация):** после `injectToken` — `waitCaptchaCleared` поллит, что капча РЕАЛЬНО ушла (top-URL сменился / iframe fbsbx отвалился), а не «вписал вслепую». Трасса: `verify: капча УШЛА ✓ / экран НЕ сменился ✗`.
+- **Challenge-канал (моё, `login.js chooseEmailChannel`):** на экране подтверждения бот теперь ЯВНО выбирает ПОЧТУ (иначе IG у аккаунта с телефоном шлёт код в SMS, которого у пользователя нет — живой кейс @iheidy.zub, письмо с кодом не приходило). Best-effort: только на экране выбора способа, телефон не выбирает никогда, не нашли почту → как раньше.
+
+Проверено: `node --check` (captcha/login/server) чист, воркер-тесты **35/35**, `tsc` чист. Импорты/экспорты captcha↔login согласованы. ⚠️ **Живьём НЕ подтверждено** (Defender не даёт запустить Chromium локально) — нужен редеплой + повтор входа на @iheidy.zub. **Что затестить:** вход с reCAPTCHA → в трассе `🔐 Капча:` должно быть `data-callback ✓` ИЛИ `cfg-callback ✓` + `verify: капча УШЛА ✓`, вход завершается сессией. Если снова `network` — прислать трассу, по ней добьём.
+- **⬜ ОСТАЛОСЬ по PLAN-LOGIN.md:** §4.5 (`captchaTried` bool → `captchaAttempts` счётчик в `attemptLogin` — сейчас 1 попытка на входе; ретраи есть на уровне 2captcha, поэтому не критично) + §4.6 (дедлайны) + Фаза 3 (enterprise-детект в DOM-ветке, эксперимент pageurl/`data-s`) + Фаза 4-6 (капча в `loginByState`, живая матрица тестов §15). Мой challenge-screenshot passthrough (server.js→UI) в этот деплой НЕ вошёл (откатился) — email-выбор работает без него.
+
 ### 2026-07-18 (🔴 КОРЕНЬ подтверждён логами воркера: reCAPTCHA на входе решалась БЕЗ enterprise=1 → токен отвергался → «network». Enterprise-флаг теперь надёжен + трасса 2captcha в ошибку)
 
 ⚠️ **Нужен редеплой браузерного воркера** (build → `2026-07-18-browser-82-recaptcha-enterprise-flag`) + передеплой Next.js (только `lib/browser/client.ts` — таймаут входа). Миграций нет. По живому кейсу (@iheidy.zub, прокси `rp.proxxxymiron.cc:1000` — чистый): вход упирался в reCAPTCHA Enterprise (`k=6LeyIlka…`, iframe `fbsbx.com`, экран `auth_platform/recaptcha`), пользователь жаловался «2captcha не используется» и «нет скрина капчи».

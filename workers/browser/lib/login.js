@@ -5,7 +5,7 @@ import crypto from 'crypto'
 import { SEL, URLS } from './selectors.js'
 import { firstVisible, firstVisibleAnyFrame, clickByText, pageHasText, hasSessionCookie, gotoResilient, safeStorageState } from './browser.js'
 import { humanType, jitter, idleMouse, warmupFeed, humanClick } from './human.js'
-import { trySolveCaptcha, captchaConfigured, findImageCaptchaLocator, solveImageCaptcha } from './captcha.js'
+import { trySolveCaptcha, captchaConfigured, captchaOnScreen, findImageCaptchaLocator, solveImageCaptcha } from './captcha.js'
 
 // Капча встретилась → решаем через 2captcha, вписываем токен, жмём «Продолжить»/submit,
 // какой найдётся на экране. captchaTried гасит повторные попытки на ТОМ ЖЕ экране —
@@ -13,16 +13,23 @@ import { trySolveCaptcha, captchaConfigured, findImageCaptchaLocator, solveImage
 // Возвращает { detected, solved, log }: detected=капча была на экране (даже если решить не вышло —
 // тогда НЕ долбим 2captcha повторно в этом входе), solved=токен получен и вписан, log=трасса для UI.
 async function handleCaptchaIfPresent(page) {
-  if (!captchaConfigured()) return { detected: false, solved: false, log: '' }
+  if (!captchaConfigured()) return { detected: false, solved: false, advanced: false, log: '' }
   let r
-  try { r = await trySolveCaptcha(page) } catch (e) { r = { solved: false, detected: false, log: 'captcha_exception: ' + (e?.message || e) } }
-  if (!r || !r.solved) return { detected: Boolean(r && r.detected), solved: false, log: (r && r.log) || '' }
-  await page.waitForTimeout(1500)
-  // enterprise-виджет часто авто-сабмитится по callback, но подстрахуемся кнопкой продолжения.
-  const btn = await firstVisible(page, ['button[type="submit"]:not([disabled])', ...SEL.codeSubmitCss], 3000).catch(() => null)
+  try { r = await trySolveCaptcha(page) } catch (e) { r = { solved: false, detected: false, advanced: false, log: 'captcha_exception: ' + (e?.message || e) } }
+  if (!r || !r.solved) return { detected: Boolean(r && r.detected), solved: false, advanced: false, log: (r && r.log) || '' }
+  // trySolveCaptcha уже вписал токен И проверил, ушла ли капча (advanced). Если ушла — готово.
+  if (r.advanced) return { detected: true, solved: true, advanced: true, log: r.log }
+  // Токен вписан, но экран сам не сменился. На экранах С КНОПКОЙ (2FA/challenge, где капча —
+  // доп. проверка перед полем кода) — жмём «Продолжить»/submit: textarea уже заполнена, кнопка
+  // отправит форму. На чистом recaptcha (auth_platform/recaptcha) кнопки нет — injectToken уже
+  // дёрнул data-callback/form-submit, даём виджету/сети ещё секунду и перепроверяем.
+  await page.waitForTimeout(1200)
+  const btn = await firstVisible(page, ['button[type="submit"]:not([disabled])', ...SEL.codeSubmitCss], 2500).catch(() => null)
   if (btn) await btn.click({ delay: 60 }).catch(() => {})
-  else await clickByText(page, [...SEL.codeSubmit, 'Verify', 'Проверить', 'Continue', 'Продолжить'], { timeout: 3000 }).catch(() => {})
-  return { detected: true, solved: true, log: r.log }
+  else await clickByText(page, [...SEL.codeSubmit, 'Verify', 'Проверить', 'Continue', 'Продолжить'], { timeout: 2500 }).catch(() => {})
+  await page.waitForTimeout(1500)
+  const advanced = !captchaOnScreen(page)
+  return { detected: true, solved: true, advanced, log: r.log }
 }
 
 // Вписать РАЗГАДАННЫЙ текст image-капчи в ближайшее подходящее текстовое поле (НЕ логин/пароль/
