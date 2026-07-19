@@ -521,7 +521,10 @@
 ### 10.1 Доработки
 - [ ] **Шифровать `browserState`/`sessionData` at-rest** (сейчас plaintext JSONB) — это ЖИВЫЕ сессии IG,
   утечка БД = угон аккаунтов. Требует смены типа колонки + правки всех точек чтения — аккуратно, не сломать вход.
-- [ ] **Rate-limit на публичные роуты** (`/api/auth/login`, `/register`) — от брутфорса/перебора.
+- [x] 2026-07-19 **Rate-limit на публичные роуты** — `lib/rateLimit.ts` (in-memory fixed-window по IP,
+  чистка протухших вёдер). `/api/auth/login` 10 попыток/10 мин, `/api/auth/register` 5/час → 429 + `Retry-After`;
+  клиент показывает сообщение (login/register читают `data.error`). ⚠️ Память процесса (сброс на редеплое,
+  один инстанс) — первый слой; распределённый лимит на масштабе → Redis (§9.2).
 - [ ] **Валидация входных данных** (zod) на всех POST-роутах — уже частично; пройтись по всем.
 - [ ] **Секреты не в бандле/гите** — проверить (`BROWSER_WORKER_SECRET`, `TWOCAPTCHA_API_KEY`, `JWT_SECRET`,
   `ENCRYPTION_KEY`, `HIKER_API_KEY`, internal-secret) — только env, не дефолтные в проде.

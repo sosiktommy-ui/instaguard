@@ -2,9 +2,19 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { compareSync } from 'bcryptjs'
 import { createSession } from '@/lib/auth'
+import { rateLimit, clientIp } from '@/lib/rateLimit'
 
 export async function POST(req: NextRequest) {
   try {
+    // Анти-брутфорс (§10.1): не более 10 попыток входа с одного IP за 10 минут.
+    const rl = rateLimit(`login:${clientIp(req)}`, 10, 10 * 60_000)
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'Слишком много попыток входа. Попробуйте позже.' },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } },
+      )
+    }
+
     const { email, password } = await req.json()
 
     if (!email || !password) {

@@ -2,11 +2,21 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { hashSync } from 'bcryptjs'
 import { createSession } from '@/lib/auth'
+import { rateLimit, clientIp } from '@/lib/rateLimit'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 export async function POST(req: NextRequest) {
   try {
+    // Анти-спам регистраций (§10.1): не более 5 новых аккаунтов с одного IP за час.
+    const rl = rateLimit(`register:${clientIp(req)}`, 5, 60 * 60_000)
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'Слишком много регистраций. Попробуйте позже.' },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } },
+      )
+    }
+
     const { email, password, name } = await req.json().catch(() => ({}))
     const cleanEmail = typeof email === 'string' ? email.trim().toLowerCase() : ''
 
