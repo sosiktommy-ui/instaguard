@@ -497,7 +497,9 @@ async function readUsernameSnapshot(page) {
 
 export async function extractUsername(page) {
   try {
-    await page.goto('https://www.instagram.com/accounts/edit/', { waitUntil: 'domcontentloaded', timeout: 30000 })
+    // Таймаут навигации 30→45с — тот же запас терпения, что и у прочих переходов в этом файле
+    // (медленный/резидентный прокси может догружать документ дольше 30с, см. живой провал ниже).
+    await page.goto('https://www.instagram.com/accounts/edit/', { waitUntil: 'domcontentloaded', timeout: 45000 })
     await jitter(800, 1600)
     // На этой странице может выскочить СВОЙ интерстишл (не только на главной) — дожимаем перед чтением.
     await dismissInterstitials(page).catch(() => {})
@@ -523,9 +525,13 @@ export async function extractUsername(page) {
     // страницы — ОДНО слово «Messages» (только скелет навигации отрисован, SPA-дерево профиля ещё
     // пустое). Раньше здесь был ОДИН снимок сразу после фиксированной паузы 0.8–1.6с — на холодном
     // воркере/медленном прокси React не успевает дорисовать форму/навигацию за это время, и ник
-    // ложно считался нечитаемым. Теперь опрашиваем ВСЕ три способа (readUsernameSnapshot) до ~9с
-    // (как поиск формы входа, §P1.1 PLAN-MASTER.md) — не гадаем с одним снимком.
-    const deadline = Date.now() + 9000
+    // ложно считался нечитаемым. Опрос до ~9с (readUsernameSnapshot) СНЯЛ проблему частично, но
+    // ⚠️ пользователь ЖИВЬЁМ подтвердил ПО СКРИНУ: та же картина (пустой скелет) повторилась и
+    // ПОСЛЕ фикса — на медленном прокси 9с всё ещё не хватает. Бюджет клиента на этот вызов щедрый
+    // (`browserRereadUsername` — 180с, `attemptLogin`/`loginByState` — 280с, см. `lib/browser/client.ts`),
+    // а быстрый случай (SPA отрисовалась сразу) НЕ штрафуется (возврат при первом успешном снимке) —
+    // подняли окно опроса 9с→25с, с большим запасом под реально медленный прокси.
+    const deadline = Date.now() + 25000
     while (Date.now() < deadline) {
       const u = await readUsernameSnapshot(page)
       if (u) return u
