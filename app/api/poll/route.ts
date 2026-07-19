@@ -739,14 +739,20 @@ export async function POST(req: NextRequest) {
               // Принятые заявки с известным ником — кандидаты в NEW_FOLLOWER этого же цикла (см. merge ниже).
               // Пустой username пропускаем: без ника действие (директ/подписка-в-ответ) не выполнить,
               // такой подписчик подхватится позже из self-events, когда IG отдаст его ник.
-              acceptedFollows = (ar.approved ?? []).filter((u) => u.username && u.username.trim())
+              // DOM-приём возвращает пустой pk (в DOM его нет) → ключом дедупа/снапшота берём НИК
+              // (он уникален; совпадений с числовыми pk из self-events не будет — принятый в self-events
+              // как follow не появляется, в этом и был баг). Пустой username пропускаем (без ника не действуем).
+              acceptedFollows = (ar.approved ?? [])
+                .filter((u) => u.username && u.username.trim())
+                .map((u) => ({ pk: (u.pk && u.pk.trim()) ? u.pk : u.username.toLowerCase(), username: u.username }))
               acceptedFollows.forEach((a) => selfFollowedPks.add(String(a.pk)))   // приняты → точно followed_by (гейт)
               const acceptFail = (ar.errors ?? []).join(' ')
-              if (ar.approved?.length) await prisma.log.create({ data: { accountId: account.id, level: 'SUCCESS', message: `Приняты заявки в подписчики: ${ar.approved.map((u) => '@' + (u.username || u.pk)).join(', ')} (из ${ar.pendingCount} ожидавших) — сработает триггер «Новая подписка».` } }).catch(() => null)
+              const sampleTail = (isManual && ar.sample) ? ` | панель: «${String(ar.sample).slice(0, 200)}»` : ''
+              if (acceptedFollows.length) await prisma.log.create({ data: { accountId: account.id, level: 'SUCCESS', message: `Приняты заявки в подписчики: ${acceptedFollows.map((u) => '@' + u.username).join(', ')} — сработает триггер «Новая подписка».` } }).catch(() => null)
               else if (ar.fetchFailed && SESSION_DEAD(acceptFail)) sessionDead = true   // сессия отклонена — пометим «Требует входа» ниже
-              else if (ar.fetchFailed) await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Не удалось прочитать заявки в подписчики: ${acceptFail} — повторим автоматически.` } }).catch(() => null)
-              else if (ar.errors?.length) await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Заявки в подписчики не подтверждены (ожидавших ${ar.pendingCount}): ${ar.errors.slice(0, 3).join('; ')}` } }).catch(() => null)
-              else if (isManual) await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: `Заявок в подписчики нет (ожидающих: ${ar.pendingCount})` } }).catch(() => null)
+              else if (ar.fetchFailed) await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Не удалось открыть панель уведомлений для приёма заявок${acceptFail ? ` (${acceptFail})` : ''} — повторим автоматически.` } }).catch(() => null)
+              else if (ar.errors?.length) await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Заявки в подписчики не подтверждены: ${ar.errors.slice(0, 3).join('; ')}${sampleTail}` } }).catch(() => null)
+              else if (isManual) await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: `Заявок в подписчики нет (панель открыта, кнопок «Подтвердить» не найдено)${sampleTail}` } }).catch(() => null)
             } catch (e: any) {
               const m = String(e?.message ?? e)
               if (SESSION_DEAD(m)) sessionDead = true   // мёртвая сессия — сообщим один раз ниже

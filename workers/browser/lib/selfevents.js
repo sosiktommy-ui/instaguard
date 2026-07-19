@@ -15,7 +15,7 @@ const IG_APP_ID = '936619743392459'
 // Открыть панель уведомлений (клик по пункту навигации; accessible name мультиязычный).
 // Пробуем по роли (link/button), затем по svg[aria-label] иконки-колокольчика (иногда доступный
 // именно значок, а не подпись). Возвращаем true, если клик состоялся.
-async function openNotifications(page) {
+export async function openNotifications(page) {
   const NAME = /notification|сповіщенн|повідомленн|уведомлен|notificaci|notifikasi|bildirim|powiadomien|通知/i
   let clicked = false
   for (const role of ['link', 'button']) {

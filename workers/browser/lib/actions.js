@@ -3,6 +3,7 @@
 import { SEL } from './selectors.js'
 import { firstVisible, clickByText, findByText, pageHasText, hasSessionCookie, gotoResilient, safeStorageState } from './browser.js'
 import { humanType, jitter, idleMouse, preActionBrowse, humanClick } from './human.js'
+import { openNotifications } from './selfevents.js'   // §13.11 — DOM-приём заявок (не приватный API)
 
 // СВЕРКА ПРОФИЛЯ (§4.1): открытый URL должен вести ИМЕННО на @username. Совпадение — happy-path
 // (по прямой ссылке первый сегмент пути = ник, поведение не меняется). Несовпадение = редирект
@@ -426,57 +427,84 @@ export async function commentLatestPost(context, { targetUsername, text, dryRun 
 // ожидающие заявки и подтверждаем каждую тем же приватным web-API изнутри залогиненной страницы
 // (как readStoryEvents). Approve — POST с csrftoken из cookie. Пейсинг между подтверждениями +
 // лимит на цикл (ban-safety: приём СВОИХ подписчиков естественен, но не залпом).
+// §13.11 — авто-приём заявок в подписчики (приватный аккаунт) ЧЕЛОВЕКОПОДОБНО, через DOM.
+// ⚠️ РАНЬШЕ приём шёл через приватный API (`friendships/pending`+`approve`) — это ЖИВОЙ кейс
+// бана (2026-07-19): approve отдавал HTTP 200, но НЕ подтверждал заявку (Instagram детектит
+// приватный API-write), и СЕССИЯ УМИРАЛА сразу после (login_required) → аккаунт «кикнуло».
+// Приватный API-write = ADR-002-запрет, ровно то, ради ухода от чего проект переписан на эмуль.
+// Теперь приём как у человека: открыть панель уведомлений → нажать «Confirm»/«Підтвердити» →
+// СВЕРИТЬ, что строка исчезла (реально подтвердилось, а не «наебало»). Никаких API-вызовов.
+const CONFIRM_LABELS = /^(confirm|підтвердити|подтвердить|confirmar|confirmer|konfirmasi|onayla|potwierdź|bestätigen|conferma|承認|확인)$/i
+const REQ_GROUP = /follow requests|запити на стеження|запросы на подписку|solicitudes|permintaan mengikuti|takip istekleri/i
+
 export async function acceptFollowRequests(context, { limit = 10 } = {}) {
   await requireSession(context)
   const page = await context.newPage()
   await gotoResilient(page, 'https://www.instagram.com/', { timeout: 30000, retries: 1, backoffMs: [2000] })
-  await jitter(1200, 2200)
+  await jitter(1500, 2600)
+  await preActionBrowse(page).catch(() => {})   // микро-браузинг перед действием (не «холодный» клик)
 
-  const result = await page.evaluate(async (limit) => {
-    const csrf = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || ''
-    const headers = { 'x-ig-app-id': '936619743392459' }
-    const sleep = (ms) => new Promise((res) => setTimeout(res, ms))
-    // Чтение списка заявок с ретраем транзиентных сбоев (пустой/500/сеть) — как у news/inbox:
-    // один блип не должен выглядеть как «заявок нет» (иначе принятые не приняли, а пользователь
-    // видит «0 ожидающих» и думает, что авто-приём сломан). Осмысленный ответ (в т.ч. пустой users)
-    // возвращаем сразу; null (не прочитали) — до 3 попыток, затем сигналим fetchFailed.
-    async function getPending() {
-      for (let i = 0; i < 3; i++) {
-        try {
-          const r = await fetch('/api/v1/friendships/pending/', { headers, credentials: 'include' })
-          if (r.ok) return await r.json()
-          if (r.status === 401 || r.status === 403) return { __unauth: true }   // сессия/куки — не ретраим
-        } catch { /* сеть — ретрай */ }
-        await sleep(1000 + i * 1500)
-      }
-      return null
-    }
-    const pend = await getPending()
-    if (pend === null) return { pendingCount: 0, approved: [], errors: ['не удалось прочитать список заявок (friendships/pending не ответил)'], fetchFailed: true }
-    if (pend.__unauth) return { pendingCount: 0, approved: [], errors: ['сессия отклонена при чтении заявок (login_required)'], fetchFailed: true }
-    const users = Array.isArray(pend?.users) ? pend.users : []
-    const pendingCount = users.length
-    const approved = []
-    const errors = []
-    for (const u of users.slice(0, limit)) {
-      const pk = String(u.pk || u.pk_id || '')
-      if (!pk) continue
-      try {
-        const r = await fetch(`/api/v1/friendships/approve/${pk}/`, {
-          method: 'POST',
-          headers: { ...headers, 'x-csrftoken': csrf, 'content-type': 'application/x-www-form-urlencoded' },
-          credentials: 'include', body: '',
-        })
-        if (r.ok) approved.push({ pk, username: u.username || '' })
-        else errors.push(`approve ${u.username || pk}: http ${r.status}`)
-      } catch (e) { errors.push(`approve ${u.username || pk}: ${String(e).slice(0, 60)}`) }
-      // человекоподобная пауза между подтверждениями
-      await sleep(900 + Math.random() * 1800)
-    }
-    return { pendingCount, approved, errors, fetchFailed: false }
-  }, limit)
+  const approved = []
+  const errors = []
+  let panelOpened = false
+  let pendingCount = 0
 
-  return { ...result, storageState: await safeStorageState(context) }
+  try {
+    panelOpened = await openNotifications(page)
+    // Заявки иногда скрыты под группой «Запросы на подписку» — раскрываем в список.
+    try {
+      const grp = page.getByText(REQ_GROUP).first()
+      if (await grp.isVisible().catch(() => false)) { await grp.click({ timeout: 3000 }).catch(() => {}); await jitter(1500, 2600) }
+    } catch { /* группы нет — заявки прямо в панели */ }
+
+    pendingCount = await page.getByRole('button', { name: CONFIRM_LABELS }).count().catch(() => 0)
+
+    // Подтверждаем по одной: успешный клик убирает строку → следующая заявка становится первой.
+    for (let i = 0; i < limit; i++) {
+      const btns = page.getByRole('button', { name: CONFIRM_LABELS })
+      const before = await btns.count().catch(() => 0)
+      if (before === 0) break
+      const btn = btns.first()
+      // Ник заявителя — из ближайшей ссылки на профиль в той же строке (для триггера/лога).
+      const username = await btn.evaluate((el) => {
+        let row = el
+        for (let k = 0; k < 8 && row.parentElement; k++) {
+          row = row.parentElement
+          const a = row.querySelector('a[href^="/"]')
+          if (a) { const m = (a.getAttribute('href') || '').match(/^\/([A-Za-z0-9._]+)\/$/); if (m && !['p', 'reel', 'explore', 'direct', 'stories'].includes(m[1])) return m[1] }
+        }
+        return ''
+      }).catch(() => '')
+      if (!username) { errors.push('строка заявки без профиля — приём остановлен (не кликаем вслепую)'); break }
+      let clicked = await humanClick(page, btn).catch(() => false)
+      if (!clicked) clicked = await btn.click({ timeout: 4000 }).then(() => true).catch(() => false)
+      if (!clicked) { errors.push(`confirm @${username}: клик не прошёл`); break }
+      await jitter(1600, 3000)   // строка обрабатывается/исчезает
+      // СВЕРКА: кнопок «Confirm» стало меньше → заявка реально подтверждена (не ложный успех).
+      const after = await page.getByRole('button', { name: CONFIRM_LABELS }).count().catch(() => before)
+      if (after >= before) { errors.push(`confirm @${username}: не подтвердилось (строка осталась)`); break }
+      approved.push({ pk: '', username })
+    }
+  } catch (e) {
+    errors.push(`accept: ${String(e?.message || e).slice(0, 90)}`)
+  }
+
+  // Диагностика: если панель открылась, но НИЧЕГО не подтвердили — что реально видно в панели?
+  // По этому дампу точечно правим селекторы БЕЗ риска для аккаунта (DOM-клики сессию не убивают).
+  let sample = ''
+  if (!approved.length) {
+    sample = await page.evaluate(() => {
+      const dlg = document.querySelector('div[role="dialog"]') || document.body
+      return (dlg.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 600)
+    }).catch(() => '')
+  }
+
+  return {
+    pendingCount, approved, errors,
+    panelOpened, sample,
+    fetchFailed: !panelOpened,   // панель не открылась = не смогли прочитать заявки (не «их нет»)
+    storageState: await safeStorageState(context),
+  }
 }
 
 // ── Стори-события из директа (ответы на мои сторис + упоминания) ─────────────────
