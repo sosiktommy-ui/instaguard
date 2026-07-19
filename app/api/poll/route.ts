@@ -309,7 +309,10 @@ export async function POST(req: NextRequest) {
   const accounts = await prisma.instagramAccount.findMany({
     where,
     include: {
-      triggersAsResponder: { where: { isActive: true } },
+      // §4.2 — ДЕТЕРМИНИРОВАННЫЙ порядок кампаний: при пересечении (человек подходит под несколько
+      // кампаний одного типа) «побеждает» ПЕРВАЯ СОЗДАННАЯ активная (директ/действие от неё; дедуп по
+      // типу режет остальные). Без явного orderBy порядок был DB-дефолтный → «какой из трёх?» неясно.
+      triggersAsResponder: { where: { isActive: true }, orderBy: { createdAt: 'asc' } },
       snapshots: { orderBy: { createdAt: 'desc' } },
     },
   })
@@ -465,13 +468,21 @@ export async function POST(req: NextRequest) {
     }
     const use = (k: ActionKind, n = 1) => consume(counters, k, n, caps)
 
-    // Меж-потоковый дедуп ДИРЕКТА: один человек может попасть в НЕСКОЛЬКО потоков за цикл
-    // (подписался + лайкнул + прокомментировал) → раньше получал ОТДЕЛЬНЫЙ директ из каждого
-    // потока/кампании = спам-сигнал бана. Теперь — не более ОДНОГО директа на человека за цикл
-    // (первый поток выигрывает). Лайк/подписка/сторис/ответ идемпотентны и не дедупятся.
+    // Меж-потоковый / меж-кампанийный дедуп ДЕЙСТВИЙ за цикл (§4.2 — «10 кампаний на аккаунте»).
+    // Один человек может подойти под НЕСКОЛЬКО кампаний/потоков за цикл (подписался + лайкнул +
+    // прокомментировал; ИЛИ 3 кампании «Новая подписка» с разными действиями). Раньше дедупился
+    // только ДИРЕКТ, а follow/like/story — НЕТ («идемпотентны»). Но это ВРЕДНО: 2 кампании с follow
+    // → `use('follow')` дважды на ОДНОГО человека (двойной расход дневного бюджета) + ДВА браузерных
+    // визита к одному профилю за цикл (спам-сигнал бана). Теперь КАЖДЫЙ тип действия — не более
+    // одного раза на человека за цикл (первая кампания-победитель по порядку выборки). Разные ТИПЫ
+    // по-прежнему суммируются (A=follow, B=like → человек получит и follow, и like — это желаемо).
     const dmedThisCycle = new Set<string>()
-    const alreadyDmed = (u?: string) => Boolean(u) && dmedThisCycle.has(u!.toLowerCase())
-    const markDmed = (u?: string) => { if (u) dmedThisCycle.add(u.toLowerCase()) }
+    const followedThisCycle = new Set<string>()
+    const likedThisCycle = new Set<string>()
+    const storiedThisCycle = new Set<string>()
+    const uKey = (u?: string) => (u ?? '').toLowerCase()
+    const alreadyDmed = (u?: string) => Boolean(u) && dmedThisCycle.has(uKey(u))
+    const markDmed = (u?: string) => { if (u) dmedThisCycle.add(uKey(u)) }
 
     // ── Проверка подписки БЕЗ обращения к основному ──────────────────────────
     // Подписчиков/подписки основного тянет скрейпер-API (публичные данные) → гейт = принадлежность
@@ -557,39 +568,52 @@ export async function POST(req: NextRequest) {
           // (проверяем ДО use('dm'), чтобы не списать бюджет на пропущенный директ).
           if (dmAllowed && alreadyDmed(target.username)) dmAllowed = false
 
-          // ВСЕ действия делает основной (лимиты counters); черновой только парсил цель
+          // ВСЕ действия делает основной (лимиты counters); черновой только парсил цель.
+          // §4.2 — дедуп по ТИПУ на цель за цикл: `wantX` = действие настроено И этому человеку
+          // такое действие в цикле ещё НЕ делали (иначе 2 кампании с follow → двойной follow+бюджет).
+          const uk = uKey(target.username)
           const willDM = dmAllowed && use('dm')
           if (willDM) markDmed(target.username)
-          const willFollow = doFollowT && use('follow')
-          const willLike = doLikeT && use('like')
-          const willStory = Boolean(storiesAct) && use('story')
+          const wantFollow = doFollowT && !followedThisCycle.has(uk)
+          const willFollow = wantFollow && use('follow')
+          if (willFollow) followedThisCycle.add(uk)
+          const wantLike = doLikeT && !likedThisCycle.has(uk)
+          const willLike = wantLike && use('like')
+          if (willLike) likedThisCycle.add(uk)
+          const wantStory = Boolean(storiesAct) && !storiedThisCycle.has(uk)
+          const willStory = wantStory && use('story')
+          if (willStory) storiedThisCycle.add(uk)
           // Флаги fallback (follow+like основным при закрытой личке). РЕЗЕРВИРУЕМ бюджет
           // заранее (use), иначе fallback выполняется в воркере/inline БЕЗ доступа к дневным
           // счётчикам → пробивает потолок follow/like (при холодном трафике закрытых личек
           // много). Приоритет «основной не банится» важнее лёгкого перерасхода бюджета при
-          // успешном DM (тогда зарезервированное действие просто не выполнится).
-          const fallbackFollow = willDM && !willFollow && use('follow')
-          const fallbackLike   = willDM && !willLike && use('like')
-          // Какие НАСТРОЕННЫЕ действия заблокированы ИМЕННО дневным лимитом (не гейтом/конфигом):
-          // use() вернул false при наличии бюджета=0. Это нужно и для лога, и для §4.3 (не терять цель).
+          // успешном DM (тогда зарезервированное действие просто не выполнится). Тоже дедупим
+          // по типу (не переподписываемся, если человека уже подписали в этом цикле).
+          const fallbackFollow = willDM && !willFollow && !followedThisCycle.has(uk) && use('follow')
+          if (fallbackFollow) followedThisCycle.add(uk)
+          const fallbackLike   = willDM && !willLike && !likedThisCycle.has(uk) && use('like')
+          if (fallbackLike) likedThisCycle.add(uk)
+          // Какие НАСТРОЕННЫЕ действия заблокированы ИМЕННО дневным лимитом (не гейтом/конфигом/дедупом):
+          // wantX уже исключил дедуп → capped ловит только реальный лимит (use() при бюджете=0).
+          // Нужно и для лога, и для §4.3 (не терять цель).
           const capped: string[] = []
-          if (doFollowT && !willFollow && !fallbackFollow) capped.push('подписка')
-          if (doLikeT && !willLike && !fallbackLike) capped.push('лайк')
-          if (Boolean(storiesAct) && !willStory) capped.push('сторис')
-          if (dmAllowed && !willDM) capped.push('директ')   // dmAllowed уже учёл гейт → это чистый лимит
+          if (wantFollow && !willFollow && !fallbackFollow) capped.push('подписка')
+          if (wantLike && !willLike && !fallbackLike) capped.push('лайк')
+          if (wantStory && !willStory) capped.push('сторис')
+          if (dmAllowed && !willDM) capped.push('директ')   // dmAllowed уже учёл гейт/дедуп → чистый лимит
           // Прозрачность на ручной проверке: почему настроенное действие НЕ выполнилось — почти
           // всегда это ДНЕВНОЙ ЛИМИТ (у молодого аккаунта прогрев ужимает подписки до 2–7/сутки), не баг.
           if (isManual && capped.length) {
             await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: `@${target.username}: не выполнено из-за дневного лимита (${capped.join(', ')}) — сбросится завтра; у молодого аккаунта лимиты ниже (прогрев).` } }).catch(() => null)
           }
           if (!willDM && !willFollow && !willLike && !willStory) {
-            s.limited = (s.limited ?? 0) + 1
             // §4.3 — цель НИЧЕГО не получила из-за исчерпанного ДНЕВНОГО ЛИМИТА → НЕ помечаем «известной»
             // (в failedPks → снапшот её не зафиксирует), чтобы добрать её в следующие дни, когда бюджет
             // обновится. Так «все действия в итоге выполняются» (в пределах безопасных лимитов), не теряя
-            // людей. Если же нечего было делать по КОНФИГУ/ГЕЙТУ (capped пуст) — это definitive, помечаем
-            // известной (ретрай бессмыслен). Дешёвый повтор: capped-цель просто пере-оценивает бюджет.
-            if (capped.length) failedPks.add(target.pk)
+            // людей. Если же нечего было делать по КОНФИГУ/ГЕЙТУ/ДЕДУПУ (capped пуст) — это definitive
+            // (или человека уже обслужила другая кампания в этом цикле), помечаем известной (ретрай
+            // бессмыслен). Дешёвый повтор: capped-цель просто пере-оценивает бюджет.
+            if (capped.length) { s.limited = (s.limited ?? 0) + 1; failedPks.add(target.pk) }
             continue
           }
 
@@ -950,6 +974,7 @@ export async function POST(req: NextRequest) {
           // делаем ТОЛЬКО ответ. alreadyGreeted фиксируем ДО обработки; greetAttempted — было ли
           // приветствие реально запущено (по нему добавим автора в greeted после обработки).
           const alreadyGreeted = greeted.has(String(c.user_pk))
+          const cuk = uKey(c.username)   // §4.2 — ключ дедупа действий за цикл (тот же, что в handleTargets)
           let greetAttempted = false
           try {
           for (const trigger of commentTriggers) {
@@ -1020,9 +1045,10 @@ export async function POST(req: NextRequest) {
             if (!gatedStop) {
               // 1) Подписка — первой (на случай закрытого аккаунта / SMS при взаимной подписке).
               //    ОДНОРАЗОВО на человека: повторному комментатору не переподписываемся.
-              if (doFollow && !alreadyGreeted) {
+              if (doFollow && !alreadyGreeted && !followedThisCycle.has(cuk)) {
                 greetAttempted = true
                 if (use('follow')) {
+                  followedThisCycle.add(cuk)   // §4.2 — не переподписываться этим же циклом (др. кампания/поток)
                   incFired.follow = (incFired.follow || 0) + 1
                   await randDelay(2, 5)
                   try {
@@ -1034,7 +1060,8 @@ export async function POST(req: NextRequest) {
               }
               // 2) Лайк постов автора — §13.10: ОДИН бюджет на цель (не по постам), лайкаем до N;
               //    0 постов у автора = НЕВОЗМОЖНО (не ошибка).
-              if (doLikePosts && !alreadyGreeted && use('like')) {
+              if (doLikePosts && !alreadyGreeted && !likedThisCycle.has(cuk) && use('like')) {
+                likedThisCycle.add(cuk)   // §4.2 — один лайк-визит на цель за цикл
                 greetAttempted = true
                 incFired.like = (incFired.like || 0) + 1
                 await randDelay(2, 5)
@@ -1074,7 +1101,8 @@ export async function POST(req: NextRequest) {
                 } else { errors.push('ответ в комментах: дневной лимит комментариев исчерпан') }
               }
               // 4) Сторис — §13.10: смотрим до N кадров; 0 активных сторис = НЕВОЗМОЖНО (не ошибка).
-              if (storiesAct && !alreadyGreeted && use('story')) {
+              if (storiesAct && !alreadyGreeted && !storiedThisCycle.has(cuk) && use('story')) {
+                storiedThisCycle.add(cuk)   // §4.2 — один просмотр сторис на цель за цикл
                 greetAttempted = true
                 incFired.story = (incFired.story || 0) + 1
                 await randDelay(3, 7)
@@ -1105,9 +1133,11 @@ export async function POST(req: NextRequest) {
                   if (r.browserState) cState = r.browserState
                   if (r.ok) { fired = true; incDone.dm = (incDone.dm || 0) + 1 }
                   else if (r.closed) {
+                    // Закрытая личка → мягкий контакт follow+like. Дедуп по циклу (§4.2): не дублируем,
+                    // если человека уже подписали/лайкнули в этом цикле (др. кампания/поток).
                     errors.push(`директ закрыт: ${r.error ?? 'closed'}`)
-                    if (use('follow')) { incFired.follow = (incFired.follow || 0) + 1; try { const fr = await browserFollow(bctx(), c.username); if (fr.browserState) cState = fr.browserState; if (fr.ok) { fired = true; incDone.follow = (incDone.follow || 0) + 1 } } catch {} }
-                    if (use('like'))   { incFired.like = (incFired.like || 0) + 1; await randDelay(2, 5); try { const lr = await browserLike(bctx(), c.username, 1); if (lr.browserState) cState = lr.browserState; if (lr.ok) { fired = true; incDone.like = (incDone.like || 0) + 1 } } catch {} }
+                    if (!followedThisCycle.has(cuk) && use('follow')) { followedThisCycle.add(cuk); incFired.follow = (incFired.follow || 0) + 1; try { const fr = await browserFollow(bctx(), c.username); if (fr.browserState) cState = fr.browserState; if (fr.ok) { fired = true; incDone.follow = (incDone.follow || 0) + 1 } } catch {} }
+                    if (!likedThisCycle.has(cuk) && use('like'))   { likedThisCycle.add(cuk); incFired.like = (incFired.like || 0) + 1; await randDelay(2, 5); try { const lr = await browserLike(bctx(), c.username, 1); if (lr.browserState) cState = lr.browserState; if (lr.ok) { fired = true; incDone.like = (incDone.like || 0) + 1 } } catch {} }
                   } else {
                     throw new Error(r.error ?? 'не отправлен')
                   }
