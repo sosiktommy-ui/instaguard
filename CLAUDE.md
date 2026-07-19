@@ -120,6 +120,17 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-19 (8) (PLAN-MASTER P1.2/C.1: self-heal пароля + клик галочки на боевой curveMoveTo)
+
+⚠️ **Редеплой воркера** (build → `2026-07-19-browser-96-checkbox-curvemove`). Два безопасных пункта плана:
+- **P1.2 (build-95):** после `humanType(passInput)` сверяем `inputValue()===password`, при расхождении
+  перезаполняем `fill` — закрывает ложный `bad_password` из-за редкого сбоя ВВОДА (опечатка+backspace).
+- **C.1 (build-96):** `captcha.js clickRecaptchaCheckbox` подводит курсор к галочке боевым `curveMoveTo`
+  (кривая Безье из `human.js`, как клики действий) вместо кастомных случайных движений — чище + человечнее.
+  Импорт `human.js` в `captcha.js` без циклов (проверено).
+
+`node --check` + воркер-тесты 35/35. ⚠️ Эффект — на живом входе с капчей (клик по галочке теперь боевым курсором).
+
 ### 2026-07-19 (7) (PLAN-MASTER п.D.7: гео-локаль из СТРОКИ прокси — фолбэк, когда страна прокси не проверена)
 
 ⚠️ **Только Next.js** (`lib/browser/geo.ts` + `app/api/accounts/auth/route.ts`). Воркер не трогал, миграций нет.

@@ -2,6 +2,7 @@
 // Instagram показывает капчу как доп. проверку при подозрительном входе (новый IP/прокси/устройство) —
 // отдельно от challenge-кода и 2FA. Ключ — переменная окружения TWOCAPTCHA_API_KEY на сервисе воркера.
 import { splitProxy } from './proxy.js'
+import { curveMoveTo } from './human.js'
 const API_KEY = process.env.TWOCAPTCHA_API_KEY || process.env.CAPTCHA_API_KEY || ''
 const IN_URL = 'https://2captcha.com/in.php'
 const RES_URL = 'https://2captcha.com/res.php'
@@ -436,15 +437,11 @@ function isEnterpriseRecaptcha(page, found) {
 // координатам (кросс-ориджин google-фрейм — coordinates от boundingBox корректны и для под-фрейма).
 async function clickRecaptchaCheckbox(page) {
   const rnd = (n) => Math.floor(Math.random() * n)
-  // Подводим курсор ПО-ЧЕЛОВЕЧЕСКИ: сначала пара случайных движений (энтропия — reCAPTCHA смотрит на
-  // траекторию мыши; «холодный» клик без движения подозрителен), затем кривой подвод к цели и клик.
+  // Подводим курсор ПО-ЧЕЛОВЕЧЕСКИ боевым `curveMoveTo` (человекоподобная кривая Безье из случайной
+  // точки с промежуточными точками и дрожанием — тем же, что используется для кликов действий, `human.js`).
+  // reCAPTCHA смотрит на траекторию мыши; «холодный» клик-телепорт без движения подозрителен.
   const humanClickAt = async (x, y) => {
-    try {
-      const vp = page.viewportSize() || { width: 1280, height: 800 }
-      await page.mouse.move(rnd(vp.width), rnd(vp.height), { steps: 5 + rnd(8) }); await sleep(80 + rnd(160))
-      await page.mouse.move(rnd(vp.width), rnd(vp.height), { steps: 5 + rnd(8) }); await sleep(60 + rnd(140))
-    } catch {}
-    await page.mouse.move(x + (Math.random() * 8 - 4), y + (Math.random() * 8 - 4), { steps: 8 + rnd(14) })
+    try { await curveMoveTo(page, x, y) } catch {}
     await sleep(140 + rnd(260))
     await page.mouse.click(x, y)
   }
