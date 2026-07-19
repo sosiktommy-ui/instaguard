@@ -2,7 +2,7 @@
 // Instagram показывает капчу как доп. проверку при подозрительном входе (новый IP/прокси/устройство) —
 // отдельно от challenge-кода и 2FA. Ключ — переменная окружения TWOCAPTCHA_API_KEY на сервисе воркера.
 import { splitProxy } from './proxy.js'
-import { curveMoveTo } from './human.js'
+import { curveMoveTo, humanClick } from './human.js'
 const API_KEY = process.env.TWOCAPTCHA_API_KEY || process.env.CAPTCHA_API_KEY || ''
 const IN_URL = 'https://2captcha.com/in.php'
 const RES_URL = 'https://2captcha.com/res.php'
@@ -82,6 +82,32 @@ async function solveEnterpriseOnce(task, { timeoutMs = 90000, intervalMs = 6000 
     await sleep(intervalMs)
   }
   throw new Error('2captcha_timeout: enterprise-решение не пришло за отведённое время')
+}
+
+// Координатное распознавание картинок (2captcha CoordinatesTask, api-docs/coordinates) — для
+// грид-челленджа reCAPTCHA («выберите все картинки с …»). Отдаём base64 СКРИНШОТА области челленджа
+// + инструкцию текстом (`comment`) → 2captcha возвращает МАССИВ точек {x,y}, координаты ВНУТРИ
+// присланного изображения (по одной точке на подходящую плитку) — их и кликаем мышью в НАШЕЙ
+// странице (см. solveGridInBrowser). НЕ токен — сырые пиксельные координаты, контракт другой, чем
+// у RecaptchaV2*Task (там gRecaptchaResponse), поэтому свой createTask/getTaskResult цикл (не трогаем
+// solveEnterpriseOnce — он рабочий и на другой контракт).
+async function solveCoordinates(base64Image, instruction, { timeoutMs = 90000, intervalMs = 6000 } = {}) {
+  if (!captchaConfigured()) throw new Error('2captcha_not_configured: TWOCAPTCHA_API_KEY не задан')
+  const task = { type: 'CoordinatesTask', body: base64Image, comment: (instruction || 'select matching images').slice(0, 255) }
+  const cr = await fetch(CT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clientKey: API_KEY, task }) })
+  const cd = await cr.json().catch(() => null)
+  if (!cd || cd.errorId) throw new Error('2captcha_create_failed: ' + (cd?.errorCode || cd?.errorDescription || 'нет ответа createTask'))
+  const taskId = cd.taskId
+  const deadline = Date.now() + timeoutMs
+  await sleep(intervalMs)
+  while (Date.now() < deadline) {
+    const rr = await fetch(RT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clientKey: API_KEY, taskId }) })
+    const rd = await rr.json().catch(() => null)
+    if (rd && rd.status === 'ready') return (rd.solution && rd.solution.coordinates) || []
+    if (rd && rd.errorId) throw new Error('2captcha_failed: ' + (rd.errorCode || rd.errorDescription))
+    await sleep(intervalMs)
+  }
+  throw new Error('2captcha_timeout: координатное решение не пришло за отведённое время')
 }
 
 // reCAPTCHA v2 ENTERPRISE (чекбокс «I'm not a robot» на auth_platform/recaptcha).
@@ -513,6 +539,97 @@ async function clickRecaptchaCheckbox(page) {
   return { method, checked, challenge }
 }
 
+// ── IN-BROWSER GRID-SOLVING (PLAN-MASTER.md §1.1 шаг 2 / Приложение A) ──────────────────────────
+// Когда клик по чекбоксу открывает bframe-челлендж (картинки «выберите все …») — решаем ЕГО в
+// НАШЕМ браузере, а не пересаживаем токен с фермы. 2captcha (CoordinatesTask) только РАСПОЗНАЁТ
+// картинки; кликаем плитки мышью МЫ, в нашей странице → reCAPTCHA сама вызывает successCallback с
+// РОДНЫМ токеном (наша сессия/IP/поведение) → Meta его принимает по скору (в отличие от пересаженного
+// токена — см. §1.0 PLAN-MASTER.md, «ГЛАВНАЯ СТЕНА»). ADR-002 не нарушен: bframe — свой google-origin
+// фрейм, не Instagram API; frame.evaluate/локаторы внутри него легальны.
+const MAX_GRID_ROUNDS = 4
+
+function findBframe(page) {
+  return page.frames().find((f) => { try { return /recaptcha.*bframe/i.test(f.url() || '') } catch { return false } }) || null
+}
+
+// Инструкция задания («Select all images with a bus») — reCAPTCHA рендерит её то одним блоком
+// (-no-canonical, динамические 3×3), то составным (обычная сетка) — пробуем оба варианта.
+async function readChallengeInstruction(bframe) {
+  for (const sel of ['.rc-imageselect-desc-no-canonical', '.rc-imageselect-desc', '.rc-imageselect-desc-wrapper']) {
+    try {
+      const t = (await bframe.locator(sel).first().innerText({ timeout: 2500 })).trim()
+      if (t) return t
+    } catch {}
+  }
+  return ''
+}
+
+// Кликнуть КАЖДУЮ точку, возвращённую 2captcha (координаты ВНУТРИ скриншота challenge-области) —
+// смещаем на боундинг-бокс области, кривая мышь (`curveMoveTo`), пауза между кликами (не пулемётом).
+async function clickCoordPoints(page, areaBox, points) {
+  for (const pt of points) {
+    if (!areaBox || typeof pt?.x !== 'number' || typeof pt?.y !== 'number') continue
+    const x = areaBox.x + pt.x
+    const y = areaBox.y + pt.y
+    try { await curveMoveTo(page, x, y); await sleep(120 + Math.floor(Math.random() * 240)); await page.mouse.click(x, y) } catch {}
+    await sleep(300 + Math.floor(Math.random() * 500))
+  }
+}
+
+// Решить грид-челлендж: до MAX_GRID_ROUNDS раундов (reCAPTCHA обычно даёт 2–4 раунда картинок
+// подряд, прежде чем принять решение). Каждый раунд: инструкция + сетка + скриншот → 2captcha
+// (координаты) → клик по точкам → один доп. проход на «динамическую» подмену плиток (частый паттерн
+// 3×3: клик по плитке подменяет её новой картинкой, которую тоже нужно проверить) → Verify → проверка,
+// ушла ли капча (`waitCaptchaCleared`, тот же критерий, что и для чекбокса). Возвращает { ok, reason,
+// rounds } — `rounds` идёт в трассу (диагностика ОБЯЗАТЕЛЬНА, вслепую эту логику не отладить — §0.1.8).
+async function solveGridInBrowser(page) {
+  const rounds = []
+  for (let round = 1; round <= MAX_GRID_ROUNDS; round++) {
+    const bframe = findBframe(page)
+    if (!bframe) { rounds.push({ round, error: 'no-bframe' }); return { ok: false, reason: 'no-challenge-frame', rounds } }
+
+    const instruction = await readChallengeInstruction(bframe)
+    const tileCount = await bframe.locator('.rc-imageselect-tile').count().catch(() => 0)
+    if (!tileCount) { rounds.push({ round, instruction, tileCount: 0, error: 'no-tiles' }); return { ok: false, reason: 'no-tiles-found', rounds } }
+
+    const area = bframe.locator('.rc-imageselect-challenge, #rc-imageselect').first()
+    const areaBox = await area.boundingBox().catch(() => null)
+    const shotBuf = await area.screenshot({ timeout: 6000 }).catch(() => null)
+    if (!shotBuf || !areaBox) { rounds.push({ round, instruction, tileCount, error: 'screenshot-failed' }); return { ok: false, reason: 'screenshot-failed', rounds } }
+
+    let points
+    try { points = await solveCoordinates(shotBuf.toString('base64'), instruction) }
+    catch (e) { rounds.push({ round, instruction, tileCount, error: '2captcha: ' + (e?.message || e) }); return { ok: false, reason: 'coordinates-solve-failed', rounds } }
+    if (!points || !points.length) { rounds.push({ round, instruction, tileCount, error: 'empty-coordinates' }); return { ok: false, reason: 'empty-coordinates', rounds } }
+
+    await clickCoordPoints(page, areaBox, points)
+
+    // Динамическая подмена (типично для 3×3 «one-time»): клик по плитке подгружает НОВУЮ картинку в
+    // ту же клетку. Один дополнительный проход — переснять ту же область и добить точки, если решение
+    // 2captcha всё ещё что-то находит (если новых совпадений нет — solveCoordinates вернёт пусто, тихо пропускаем).
+    await sleep(900 + Math.floor(Math.random() * 700))
+    const bframeAfter = findBframe(page) || bframe
+    const areaAfter = bframeAfter.locator('.rc-imageselect-challenge, #rc-imageselect').first()
+    const areaBoxAfter = await areaAfter.boundingBox().catch(() => null)
+    const shotAfter = await areaAfter.screenshot({ timeout: 5000 }).catch(() => null)
+    if (shotAfter && areaBoxAfter) {
+      try {
+        const points2 = await solveCoordinates(shotAfter.toString('base64'), instruction)
+        if (points2 && points2.length) await clickCoordPoints(page, areaBoxAfter, points2)
+      } catch {} // доп. проход best-effort — провал не критичен, идём на Verify с тем, что уже кликнули
+    }
+
+    const verifyBtn = bframeAfter.locator('#recaptcha-verify-button').first()
+    if (await verifyBtn.isVisible({ timeout: 2500 }).catch(() => false)) await humanClick(page, verifyBtn)
+    await sleep(1200 + Math.floor(Math.random() * 600))
+
+    rounds.push({ round, instruction, tileCount, clicked: points.length })
+    if (await waitCaptchaCleared(page, 6000)) return { ok: true, native: true, rounds }
+    // не ушла — следующий раунд перечитает bframe заново (новая картинка либо «попробуйте снова»)
+  }
+  return { ok: false, reason: 'grid-rounds-exhausted', rounds }
+}
+
 // Обнаружить и решить капчу. Возвращает { solved, detected, log } — log несёт человекочитаемую
 // трассу (что распознали, enterprise ли, что ответила 2captcha, вписан ли токен), которую login.js
 // прикладывает к ошибке входа в UI — чтобы НЕ гадать вслепую, почему капча не прошла.
@@ -555,7 +672,8 @@ export async function trySolveCaptcha(page, opts = {}) {
   console.error('[captcha]', t[t.length - 1])
 
   // ШАГ 0 — «человеческий» клик по чекбоксу ДО 2captcha. Даёт РОДНОЙ токен, если reCAPTCHA пропустит
-  // без картинок (Meta примет). Если появится картинка-челлендж/не пройдёт за 6с — падаем на 2captcha ниже.
+  // без картинок (Meta примет). Если появится картинка-челлендж — ШАГ 0.5 решает его В БРАУЗЕРЕ
+  // (грид-солвинг, тоже родной токен); полная пересадка токена (ниже) — только последний фолбэк.
   if (found.type === 'recaptcha') {
     try {
       const cr = await clickRecaptchaCheckbox(page)
@@ -566,7 +684,32 @@ export async function trySolveCaptcha(page, opts = {}) {
           return { solved: true, detected: true, advanced: true, log: t.join(' | ') }
         }
         // Диагноз ТОЧНО: клик зарегистрировался? выпала ли картинка? — по aria-checked + bframe.
-        t.push(`клик чекбокса (${cr.method}) СДЕЛАН: aria-checked=${cr.checked}, картинка-челлендж=${cr.challenge ? 'ДА' : 'нет'} → капча не ушла → 2captcha`)
+        t.push(`клик чекбокса (${cr.method}) СДЕЛАН: aria-checked=${cr.checked}, картинка-челлендж=${cr.challenge ? 'ДА' : 'нет'}`)
+        console.error('[captcha]', t[t.length - 1])
+
+        // ШАГ 0.5 — картинка выпала → решаем ЕЁ в браузере (грид, §1.1 шаг 2 PLAN-MASTER.md), а не
+        // пересаживаем токен. Только если есть чем решать (2captcha настроена) и bframe реально открылся.
+        if (cr.challenge && captchaConfigured()) {
+          try {
+            const grid = await solveGridInBrowser(page)
+            const roundsTxt = grid.rounds.map((r) => {
+              const instr = r.instruction ? `«${r.instruction.replace(/\s+/g, ' ').slice(0, 50)}»` : '—'
+              const outcome = r.error ? `ошибка=${r.error}` : `кликов=${r.clicked ?? 0}`
+              return `раунд ${r.round}: ${instr} сетка=${r.tileCount || '?'} ${outcome}`
+            }).join('; ')
+            if (grid.ok) {
+              t.push(`грид-солвинг: ${roundsTxt} → капча УШЛА ✓ (РОДНОЙ токен, без пересадки)`)
+              console.error('[captcha]', t[t.length - 1])
+              return { solved: true, detected: true, advanced: true, log: t.join(' | ') }
+            }
+            t.push(`грид-солвинг: ${roundsTxt} → не решено (${grid.reason}) → пересадка токена (фолбэк)`)
+          } catch (e) { t.push('грид-солвинг: ошибка ' + (e?.message || e) + ' → пересадка токена (фолбэк)') }
+        } else if (cr.challenge) {
+          t.push('грид-солвинг недоступен (2captcha не настроена) → пересадка токена (фолбэк)')
+        } else {
+          t.push('картинки нет, но капча не ушла → пересадка токена')
+        }
+        console.error('[captcha]', t[t.length - 1])
       } else {
         t.push('чекбокс НЕ найден для клика (anchor-фрейм не загрузился?) → 2captcha')
       }
