@@ -37,16 +37,32 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
         captchaImage: result.captchaImage ?? null,
       })
     }
+    // Ник реально прочитан = сессия ЖИВА (DOM-навигация дошла до конца). Если аккаунт был
+    // ложно помечен CHALLENGE («Требует входа») из-за устаревшего снапшота (см. запись
+    // 2026-07-19 (18) в CLAUDE.md), это перечитывание — прямое доказательство обратного:
+    // снимаем ложный статус, не заставляя пользователя рисково перелогинивать живой аккаунт.
+    const wasFalseChallenge = acc.status === 'CHALLENGE'
+    const statusFix = wasFalseChallenge ? { status: 'ACTIVE' as const } : {}
+
     const clean = result.username.replace(/^@/, '').trim().toLowerCase()
     if (clean === acc.username) {
-      return NextResponse.json({ ok: true, changed: false, username: clean, message: 'Ник совпадает с уже сохранённым' })
+      if (wasFalseChallenge) {
+        await prisma.instagramAccount.update({ where: { id: acc.id }, data: statusFix }).catch(() => null)
+      }
+      return NextResponse.json({
+        ok: true, changed: false, username: clean,
+        message: wasFalseChallenge
+          ? 'Ник совпадает с уже сохранённым. Сессия подтверждена живой — статус «Требует входа» снят.'
+          : 'Ник совпадает с уже сохранённым',
+        statusFixed: wasFalseChallenge,
+      })
     }
     try {
       await prisma.instagramAccount.update({
         where: { id: acc.id },
-        data: { username: clean, browserState: result.browserState ?? acc.browserState },
+        data: { username: clean, browserState: result.browserState ?? acc.browserState, ...statusFix },
       })
-      return NextResponse.json({ ok: true, changed: true, username: clean })
+      return NextResponse.json({ ok: true, changed: true, username: clean, statusFixed: wasFalseChallenge })
     } catch (e: any) {
       // Уникальный (userId, username) — если запись с таким ником уже есть у пользователя.
       return NextResponse.json({ ok: false, username: clean, error: `Прочитан ник @${clean}, но сохранить не удалось (возможно, уже есть аккаунт с таким ником): ${e?.message ?? e}` })

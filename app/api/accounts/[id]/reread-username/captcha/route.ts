@@ -20,14 +20,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   try {
     const result = await browserSubmitCaptcha(acc.username, String(code).trim())
+    // Успешное решение капчи + прочитанный ник = сессия ЖИВА — снимаем ложный CHALLENGE
+    // (та же логика, что в reread-username/route.ts, см. CLAUDE.md запись 2026-07-19 (18)).
+    const wasFalseChallenge = acc.status === 'CHALLENGE'
+    const statusFix = wasFalseChallenge ? { status: 'ACTIVE' as const } : {}
+
     const clean = result.username.replace(/^@/, '').trim().toLowerCase()
     if (clean === acc.username) {
-      await prisma.instagramAccount.update({ where: { id: acc.id }, data: { browserState: result.browserState } })
-      return NextResponse.json({ ok: true, changed: false, username: clean, message: 'Ник совпадает с уже сохранённым' })
+      await prisma.instagramAccount.update({ where: { id: acc.id }, data: { browserState: result.browserState, ...statusFix } })
+      return NextResponse.json({
+        ok: true, changed: false, username: clean,
+        message: wasFalseChallenge
+          ? 'Ник совпадает с уже сохранённым. Сессия подтверждена живой — статус «Требует входа» снят.'
+          : 'Ник совпадает с уже сохранённым',
+        statusFixed: wasFalseChallenge,
+      })
     }
     try {
-      await prisma.instagramAccount.update({ where: { id: acc.id }, data: { username: clean, browserState: result.browserState } })
-      return NextResponse.json({ ok: true, changed: true, username: clean })
+      await prisma.instagramAccount.update({ where: { id: acc.id }, data: { username: clean, browserState: result.browserState, ...statusFix } })
+      return NextResponse.json({ ok: true, changed: true, username: clean, statusFixed: wasFalseChallenge })
     } catch (e: any) {
       return NextResponse.json({ ok: false, username: clean, error: `Прочитан ник @${clean}, но сохранить не удалось (возможно, уже есть аккаунт с таким ником): ${e?.message ?? e}` })
     }

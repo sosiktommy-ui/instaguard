@@ -209,7 +209,7 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
       setRereadShot(screenshot ?? '')
       if (data.needsCaptcha && captchaImage) setCaptchaImg(captchaImage)
       setRereadOut(JSON.stringify(rest, null, 2))
-      if (data.ok && data.changed) onChanged?.()
+      if (data.ok && (data.changed || data.statusFixed)) onChanged?.()
     } catch (e: any) { setRereadOut('ошибка: ' + String(e?.message ?? e)) }
     finally { setRereading(false) }
   }
