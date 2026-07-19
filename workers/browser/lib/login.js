@@ -495,6 +495,34 @@ async function readUsernameSnapshot(page) {
   return null
 }
 
+// Экран-ВЫБОР аккаунта (one-tap login): Instagram ПОМНИТ аккаунт (показывает его ник + кнопки
+// «Continue» / «Use another profile» / «Create new account»), но полноценной сессии (sessionid)
+// на этом устройстве СЕЙЧАС нет. Полей логина/пароля на нём НЕТ (forms:0, inputs:0) — потому
+// extractUsername/findLoginForm на нём ЗАСТРЕВАЛИ (живой кейс 2026-07-19: аккаунт застрял на
+// /accounts/login/?next=…/edit/?__coig_login=1, «сессия НЕ активна», хотя IG показывал «Continue»).
+// Клик «Continue» пробует ОДНОКЛИКОВОЕ восстановление сессии: если устройство ещё доверенное, IG
+// вернёт свежий sessionid БЕЗ пароля и БЕЗ капчи (лучший исход — минует всю стену входа). Только
+// DOM-клик, никаких API (ADR-002). Требуем СИЛЬНЫЙ признак экрана-выбора (__coig_login в URL ИЛИ
+// кнопка «Use another profile»), чтобы не жать «Continue» на посторонних экранах.
+// Возвращает: 'restored' — сессия ожила (появился sessionid) · 'password' — one-tap вывел на форму
+// логина/пароля (нужен полный вход) · 'none' — это не экран-выбор (ничего не делали).
+async function tryOneTapContinue(page) {
+  let url = ''; try { url = page.url() } catch {}
+  const isChooser = /__coig_login/i.test(url)
+    || (await pageHasText(page, ['Use another profile', 'Use Another Profile', 'Использовать другой профиль', 'Войти в другой аккаунт', 'Log into another account', 'Log Into Another Account']))
+  if (!isChooser) return 'none'
+  if (await firstVisible(page, SEL.loginUsername, 600)) return 'none'   // уже обычная форма логина, не выбор
+  const clicked = await clickByText(page, ['Continue', 'Продолжить'], { timeout: 2500 })
+  if (!clicked) return 'none'
+  // Ждём исход: восстановилась сессия ЛИБО показалась форма пароля (значит one-tap не хватило).
+  for (let i = 0; i < 12; i++) {
+    await page.waitForTimeout(700)
+    if (await hasSessionCookie(page.context())) return 'restored'
+    if (await firstVisible(page, SEL.loginPassword, 300)) return 'password'
+  }
+  return 'password'
+}
+
 export async function extractUsername(page) {
   try {
     // Таймаут навигации 30→45с — тот же запас терпения, что и у прочих переходов в этом файле
@@ -509,6 +537,18 @@ export async function extractUsername(page) {
       const clicked = await clickByText(page, SEL.suspendedContinue, { timeout: 3000 })
       if (clicked) {
         await page.waitForTimeout(1800)
+        await dismissInterstitials(page).catch(() => {})
+      }
+    }
+    // Сессия мертва → IG перекинул на ЭКРАН-ВЫБОР аккаунта (one-tap «Continue»), а не на форму
+    // профиля (forms:0, ник не прочитать). Пробуем восстановить сессию ОДНИМ кликом (без пароля/
+    // капчи). Восстановилась → возвращаемся на страницу редактирования читать ник. Не вышло —
+    // ник не прочитается ниже, вызывающий код (rereadUsername) честно скажет «нужен повторный вход».
+    if (/\/accounts\/login\//.test(page.url())) {
+      const oneTap = await tryOneTapContinue(page).catch(() => 'none')
+      if (oneTap === 'restored') {
+        await page.goto('https://www.instagram.com/accounts/edit/', { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {})
+        await jitter(800, 1600)
         await dismissInterstitials(page).catch(() => {})
       }
     }
@@ -1052,8 +1092,12 @@ export async function loginByState(context) {
       // sessionid не извлёкся из ввода — проблема ФОРМАТА, не гео/срока.
       await fail(page, 'bad_cookies: во вставленных куки/сессии не найден sessionid. Нужна веб-сессия instagram.com (кука sessionid) ИЛИ мобильная строка целиком с «Authorization=Bearer IGT:2:…». Скопируйте строку полностью.')
     }
-    // sessionid БЫЛ, но сервер его сбросил при заходе → сессия отклонена.
-    await fail(page, 'session_rejected: Instagram отклонил сессию (скрин ниже). Частые причины: (1) ГЕО-НЕСОВПАДЕНИЕ — сессия аккаунта из одной страны, а прокси из другой (напр. аккаунт id_ID/Индонезия, прокси US) → нужен прокси В СТРАНЕ АККАУНТА; (2) сессия устарела/разлогинена; (3) это сессия другого аккаунта.')
+    // sessionid БЫЛ, но сервер сбросил его при заходе. IG может помнить аккаунт и показать экран-
+    // выбор (one-tap «Continue») — клик иногда восстанавливает сессию БЕЗ пароля. Пробуем, прежде
+    // чем признать сессию отклонённой (restored → проваливаемся ниже к чтению ника).
+    if ((await tryOneTapContinue(page).catch(() => 'none')) !== 'restored') {
+      await fail(page, 'session_rejected: Instagram отклонил сессию (скрин ниже). Частые причины: (1) ГЕО-НЕСОВПАДЕНИЕ — сессия аккаунта из одной страны, а прокси из другой (напр. аккаунт id_ID/Индонезия, прокси US) → нужен прокси В СТРАНЕ АККАУНТА; (2) сессия устарела/разлогинена; (3) это сессия другого аккаунта.')
+    }
   }
 
   await dismissInterstitials(page)
