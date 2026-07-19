@@ -250,7 +250,7 @@ export function browserSelfEvents(ctx: Ctx, opts: { amount?: number; raw?: boole
 
 // §13.11 — авто-приём заявок в подписчики (для приватных аккаунтов): подтвердить ожидающие
 // follow-requests. Возвращает сколько было ожидающих и кого подтвердили (+ обновлённый browserState).
-export interface AcceptRequestsResult { pendingCount: number; approved: { pk: string; username: string }[]; errors?: string[]; fetchFailed?: boolean; panelOpened?: boolean; sample?: string; browserState?: object }
+export interface AcceptRequestsResult { pendingCount: number; approved: { pk: string; username: string }[]; errors?: string[]; fetchFailed?: boolean; panelOpened?: boolean; sample?: string; screenshot?: string | null; browserState?: object }
 export function browserAcceptFollowRequests(ctx: Ctx, limit = 10) {
   // Может быть первым вызовом цикла (приватный аккаунт) → включает прогрев → больший бюджет.
   return browserFetch<AcceptRequestsResult>('/follow-requests/accept', { ...ctx, limit }, VISIT_TIMEOUT_MS)

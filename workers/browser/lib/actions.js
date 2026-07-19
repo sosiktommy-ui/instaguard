@@ -3,7 +3,7 @@
 import { SEL } from './selectors.js'
 import { firstVisible, clickByText, findByText, pageHasText, hasSessionCookie, gotoResilient, safeStorageState } from './browser.js'
 import { humanType, jitter, idleMouse, preActionBrowse, humanClick } from './human.js'
-import { dismissInterstitials } from './login.js'     // §13.11 — закрыть всплывашки, перекрывающие иконку
+import { dismissInterstitials, captureDiag } from './login.js'     // §13.11 — закрыть всплывашки, перекрывающие иконку
 
 // СВЕРКА ПРОФИЛЯ (§4.1): открытый URL должен вести ИМЕННО на @username. Совпадение — happy-path
 // (по прямой ссылке первый сегмент пути = ник, поведение не меняется). Несовпадение = редирект
@@ -548,29 +548,31 @@ export async function acceptFollowRequests(context, { limit = 10 } = {}) {
     errors.push(`accept: ${String(e?.message || e).slice(0, 90)}`)
   }
 
-  // Диагностика: 0 принято → дамп РЕАЛЬНОЙ структуры (какие есть nav-иконки по aria-label, висящие
+  // Диагностика: дамп РЕАЛЬНОЙ структуры (какие есть nav-иконки по aria-label, висящие
   // диалоги-всплывашки, тексты кнопок, url, текст панели). По нему точечно правим селекторы БЕЗ
   // риска для аккаунта (DOM-клики/чтение сессию не убивают). Отвечает на «он не находит нужное поле».
-  let sample = ''
-  if (!approved.length) {
-    const d = await page.evaluate(() => {
-      const clean = (s) => (s || '').replace(/\s+/g, ' ').trim()
-      const bodyText = clean(document.body.innerText)
-      const nav = [...new Set(Array.from(document.querySelectorAll('svg[aria-label], a[aria-label], [role="button"][aria-label]')).map((e) => e.getAttribute('aria-label')).filter(Boolean))].slice(0, 30)
-      const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).map((x) => clean(x.innerText).slice(0, 90))
-      // тексты И aria-label кнопок (иногда «Confirm» — это aria-label, а textContent пуст)
-      const buttons = [...new Set(Array.from(document.querySelectorAll('button, [role="button"]')).map((b) => clean(b.textContent || b.getAttribute('aria-label'))).filter(Boolean))].slice(0, 30)
-      // признаки заявки/уведомлений на странице (даже если наш селектор Confirm не сматчил)
-      const reqOnPage = /requested to follow|follow request|запит на стеж|хоче стежити|подписат/i.test(bodyText)
-      const scope = document.querySelector('div[role="dialog"]') || document.body
-      return { url: location.pathname, reqOnPage, nav, dialogs, buttons, text: clean(scope.innerText).slice(0, 300) }
-    }).catch(() => null)
-    sample = d ? `panelOpened=${panelOpened} reqOnPage=${d.reqOnPage} url=${d.url} | nav=[${d.nav.join(', ')}] | dialogs=${JSON.stringify(d.dialogs)} | buttons=[${d.buttons.join(', ')}] | text="${d.text}"` : ''
-  }
+  // Раньше считался ТОЛЬКО при 0 принято — теперь ВСЕГДА (дёшево, `page.evaluate`), чтобы отдельная
+  // диагностическая кнопка в UI (§ важный запрос: «бот не принимает подписки») могла показать
+  // полную картину даже при успехе (сколько было/осталось заявок) и сравнить прогоны между собой.
+  const d = await page.evaluate(() => {
+    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim()
+    const bodyText = clean(document.body.innerText)
+    const nav = [...new Set(Array.from(document.querySelectorAll('svg[aria-label], a[aria-label], [role="button"][aria-label]')).map((e) => e.getAttribute('aria-label')).filter(Boolean))].slice(0, 30)
+    const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).map((x) => clean(x.innerText).slice(0, 90))
+    // тексты И aria-label кнопок (иногда «Confirm» — это aria-label, а textContent пуст)
+    const buttons = [...new Set(Array.from(document.querySelectorAll('button, [role="button"]')).map((b) => clean(b.textContent || b.getAttribute('aria-label'))).filter(Boolean))].slice(0, 30)
+    // признаки заявки/уведомлений на странице (даже если наш селектор Confirm не сматчил)
+    const reqOnPage = /requested to follow|follow request|запит на стеж|хоче стежити|подписат/i.test(bodyText)
+    const scope = document.querySelector('div[role="dialog"]') || document.body
+    return { url: location.pathname, reqOnPage, nav, dialogs, buttons, text: clean(scope.innerText).slice(0, 300) }
+  }).catch(() => null)
+  const sample = d ? `panelOpened=${panelOpened} reqOnPage=${d.reqOnPage} url=${d.url} | nav=[${d.nav.join(', ')}] | dialogs=${JSON.stringify(d.dialogs)} | buttons=[${d.buttons.join(', ')}] | text="${d.text}"` : ''
+  const diag = await captureDiag(page).catch(() => null)   // скрин экрана В МОМЕНТ диагностики
 
   return {
     pendingCount, approved, errors,
     panelOpened, sample,
+    screenshot: diag?.screenshot ?? null,
     fetchFailed: !panelOpened,   // панель не открылась = не смогли прочитать заявки (не «их нет»)
     storageState: await safeStorageState(context),
   }

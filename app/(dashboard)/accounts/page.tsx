@@ -232,6 +232,27 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
     finally { setSubmittingCaptcha(false) }
   }
 
+  // Диагностика авто-приёма заявок в подписчики (по запросу пользователя: «бот не принимает
+  // подписки автоматически»). Реальный прогон acceptFollowRequests + полный дамп (панель/заявки/
+  // скрин/ошибки) — чтобы одним прогоном увидеть, где рвётся цепочка. НЕ dry-run: реальные
+  // ожидающие заявки будут подтверждены (это и есть проверяемое поведение).
+  const [inspecting, setInspecting] = useState(false)
+  const [inspectOut, setInspectOut] = useState('')
+  const [inspectShot, setInspectShot] = useState('')
+  const runInspectFollowRequests = async () => {
+    if (!ra?.id) { setInspectOut('нет id аккаунта'); return }
+    setInspecting(true); setInspectOut(''); setInspectShot('')
+    try {
+      const r = await fetch(`/api/accounts/${ra.id}/inspect-follow-requests`, { method: 'POST' })
+      const data = await r.json()
+      const { screenshot, ...rest } = data
+      setInspectShot(screenshot ?? '')
+      setInspectOut(JSON.stringify(rest, null, 2))
+      if (data.ok && data.approved?.length) onChanged?.()
+    } catch (e: any) { setInspectOut('ошибка: ' + String(e?.message ?? e)) }
+    finally { setInspecting(false) }
+  }
+
   // §13.11 — авто-приём заявок в подписчики (для закрытых/приватных аккаунтов).
   const [autoAccept, setAutoAccept] = useState(Boolean(ra?.autoAcceptFollowers))
   const [savingAuto, setSavingAuto] = useState(false)
@@ -304,6 +325,7 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
             )}
             <button onClick={runCanary} disabled={canarying} title="Канареечный тест: этот аккаунт РЕАЛЬНО подпишется/прокомментирует/лайкнет указанный аккаунт (для проверки триггеров у цели)" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">🧪</button>
             <button onClick={rereadUsername} disabled={rereading || !ra?.id} title="ВРЕМЕННО: перечитать ник уже вошедшей сессии без повторного входа (чинит username=unknown)" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">🔤</button>
+            <button onClick={runInspectFollowRequests} disabled={inspecting || !ra?.id} title="Диагностика авто-приёма заявок в подписчики: реально примет ожидающие + покажет панель/скрин/ошибки" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">📥</button>
             {onOpenLog && (
               <button onClick={onOpenLog} title="Открыть лог" className="p-1.5 text-subt hover:text-brand transition-colors"><ScrollText size={18} /></button>
             )}
@@ -381,6 +403,28 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
                     </Button>
                   </div>
                 </div>
+              )}
+            </div>
+          )}
+          {/* Диагностика авто-приёма заявок (📥) — реальный прогон + полный дамп */}
+          {inspecting && (
+            <div className="rounded-2xl bg-canvas px-4 py-3 text-[12px] text-subt flex items-center gap-2">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Открываю панель уведомлений, ищу заявки…
+            </div>
+          )}
+          {!inspecting && inspectOut && (
+            <div className="rounded-2xl bg-canvas px-4 py-3">
+              <div className="text-[12px] font-semibold text-subt mb-2 flex items-center justify-between">
+                <span>📥 Диагностика авто-приёма заявок — скопируй и пришли</span>
+                <button onClick={() => { setInspectOut(''); setInspectShot('') }} className="text-subt hover:text-ink">✕</button>
+              </div>
+              <textarea readOnly value={inspectOut} onFocus={(e) => e.currentTarget.select()}
+                className="w-full h-56 text-[11px] font-mono bg-black/[0.03] rounded-xl p-2 border border-line/60" />
+              {inspectShot && (
+                <a href={inspectShot} target="_blank" rel="noreferrer" className="block mt-2">
+                  <img src={inspectShot} alt="Экран в момент диагностики" className="w-full rounded-xl border border-black/10" />
+                  <span className="block text-subt text-[11px] mt-1">📷 Скрин экрана в момент проверки (клик — открыть крупно)</span>
+                </a>
               )}
             </div>
           )}
