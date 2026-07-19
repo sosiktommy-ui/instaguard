@@ -15,7 +15,7 @@ import { FleetSafety } from '@/components/stats/FleetSafety'
 import { Chart3D } from '@/components/stats/Chart3D'
 import { TONE } from '@/lib/colors'
 
-interface DbAccount { id: string; username: string; status: string; errorCount?: number; followerCount?: number; followers?: number | null; role?: string | null; limits?: unknown; proxy?: string | null; hasSession?: boolean | null; lastChecked?: string | null; createdAt?: string | null }
+interface DbAccount { id: string; username: string; status: string; errorCount?: number; followerCount?: number; followers?: number | null; role?: string | null; limits?: unknown; proxy?: string | null; hasSession?: boolean | null; lastChecked?: string | null; createdAt?: string | null; deliveryStats?: unknown }
 interface DbTrigger { id: string; name?: string; triggerType: string; isActive: boolean; fireCount?: number; stats?: any; actions?: any[]; responder?: { id: string; username: string } | null }
 interface DbLog { id: string; level: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS'; message: string; createdAt: string; account?: { username?: string } }
 

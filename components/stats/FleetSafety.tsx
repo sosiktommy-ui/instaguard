@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo } from 'react'
-import { ShieldCheck, ShieldAlert, ShieldX, Wifi, KeyRound, AlertTriangle, Ban, Clock, Gauge, Activity, type LucideIcon } from 'lucide-react'
+import { ShieldCheck, ShieldAlert, ShieldX, Wifi, KeyRound, AlertTriangle, Ban, Clock, Gauge, Activity, SendHorizonal, type LucideIcon } from 'lucide-react'
 import { securityIndex } from '@/lib/safety'
 import { IconTile } from '@/components/common/IconTile'
 import { TONE, hexA, darken } from '@/lib/colors'
@@ -22,6 +22,7 @@ export interface SafeAccount {
   lastChecked?: string | Date | null
   createdAt?: string | Date | null
   role?: string | null
+  deliveryStats?: unknown   // §4.6 — здоровье доставки директов (учитывается в индексе безопасности)
 }
 export interface SafeTrigger { fireCount?: number; responder?: { id: string } | null }
 
@@ -36,6 +37,7 @@ function riskCategory(label: string): { key: string; text: string; Icon: LucideI
   if (l.includes('ошибок')) return { key: 'errors', text: 'Ошибки подряд', Icon: AlertTriangle }
   if (l.includes('лимит')) return { key: 'limit', text: 'Дневной лимит близко к потолку', Icon: Gauge }
   if (l.includes('спам') || l.includes('срабатыван')) return { key: 'rate', text: 'Слишком частые срабатывания', Icon: Activity }
+  if (l.includes('директы не доходят')) return { key: 'delivery', text: 'Директы не доходят (личка/ограничение)', Icon: SendHorizonal }
   if (l.includes('проверял')) return { key: 'stale', text: 'Давно не проверялся', Icon: Clock }
   return { key: 'other:' + l.slice(0, 24), text: label, Icon: AlertTriangle }
 }

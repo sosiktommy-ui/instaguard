@@ -1,4 +1,5 @@
 import { loadCounters, DAILY_CAPS, scaleCaps, warmupFactor, warmupPct, type ActionKind } from '@/lib/limits'
+import { loadDelivery, deliveryUnhealthy, DELIVERY_MIN_SAMPLE } from '@/lib/delivery'
 
 /**
  * «Индекс безопасности» аккаунта (0–100) — насколько он защищён от бана прямо сейчас.
@@ -28,6 +29,7 @@ export function securityIndex(acc: {
   lastChecked?: string | Date | null
   createdAt?: string | Date | null
   role?: string | null
+  deliveryStats?: unknown   // §4.6 — здоровье доставки директов (директы систематически не доходят = риск)
 }, ctx?: {
   draftCount?: number      // сколько живых черновых (HELPER) у владельца — глобально
   allowNoDrafts?: boolean   // включено ли «работать без черновых» (основной парсит сам)
@@ -69,6 +71,20 @@ export function securityIndex(acc: {
     push(false, `Дневной лимит «${ACTION_LABEL[worstKey]}» использован на ${Math.round(worstPct)}%`, Math.round(worstPct * 0.3))
   } else {
     push(true, 'Дневные лимиты далеки от потолка', 0)
+  }
+
+  // 4b. Здоровье ДОСТАВКИ директов (§4.6): если сегодня набралось достаточно попыток И большинство
+  // директов НЕ доставлено (личка закрыта массово / мягкое ограничение Instagram) — это ранний
+  // сигнал, что аккаунт «под колпаком». Ниже MIN_SAMPLE попыток не судим (мало данных).
+  if (acc.deliveryStats != null) {
+    const del = loadDelivery(acc.deliveryStats)
+    if (del.tried >= DELIVERY_MIN_SAMPLE) {
+      if (deliveryUnhealthy(del)) {
+        push(false, `Директы не доходят: ${del.ok}/${del.tried} доставлено сегодня — личка закрыта/ограничение (ранний сигнал риска)`, 25)
+      } else {
+        push(true, `Директы доходят (${del.ok}/${del.tried} сегодня)`, 0)
+      }
+    }
   }
 
   // 5. Прокси — без него все действия идут с «домашнего» IP бота, риск бана заметно выше.
