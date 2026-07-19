@@ -32,8 +32,20 @@ function localHour(timezoneId: string, now: Date): number | null {
 
 export interface ActivityWindow {
   active: boolean
-  reason?: 'quiet-hours' | 'rest-day'
+  reason?: 'quiet-hours' | 'rest-day' | 'off-peak-lull'
   localHour?: number
+}
+
+// §6.1 «пики утро/вечер»: относительная ИНТЕНСИВНОСТЬ активности по локальному часу (0..1). Живой
+// человек кучкует активность на утро (8–11) и вечер (18–22), спадает в обед/поздно. НЕ обнуляем нигде
+// внутри окна (пол ≥0.5), чтобы не «замолкать» надолго — лишь СНИЖАЕМ шанс активности вне пиков.
+function hourIntensity(h: number): number {
+  if (h >= 8 && h <= 11) return 1.0    // утренний пик
+  if (h >= 18 && h <= 21) return 1.0   // вечерний пик
+  if (h >= 12 && h <= 14) return 0.75  // обед — умеренно
+  if (h === 7 || h === 17 || h === 22) return 0.7  // плечи окна
+  if (h >= 15 && h <= 16) return 0.6   // послеобеденный спад
+  return 0.5                           // ранние/поздние края окна
 }
 
 /**
@@ -41,6 +53,9 @@ export interface ActivityWindow {
  * - «Выходной»: ~1 день из 12 аккаунт почти не активен (человек тоже не каждый день онлайн).
  * - Окно активности: старт 7–9, конец 22–24 по локали (границы с суточным разбросом на аккаунт).
  * - Вне окна → тишина.
+ * - Внутри окна — ПИКИ утро/вечер (§6.1): в непиковый час с вероятностью (1−intensity) берём «лулл»
+ *   (человек отошёл). Решение стабильно в пределах ЧАСА (seed по часу) — не мигает между опросами;
+ *   пропущенное событие подхватится следующим опросом (не теряется). Ручной запуск это НЕ гейтит.
  */
 export function activityWindow(
   timezoneId: string | null | undefined,
@@ -56,6 +71,12 @@ export function activityWindow(
 
   const start = 7 + Math.floor(seed01(`${username}:${day}:start`) * 3) // 7,8,9
   const end = 22 + Math.floor(seed01(`${username}:${day}:end`) * 3) // 22,23,24
-  const active = h >= start && h < end
-  return active ? { active: true, localHour: h } : { active: false, reason: 'quiet-hours', localHour: h }
+  if (h < start || h >= end) return { active: false, reason: 'quiet-hours', localHour: h }
+
+  // Внутри окна: непиковые часы иногда «отдыхают» (кластеризация активности к пикам).
+  const intensity = hourIntensity(h)
+  if (intensity < 1 && seed01(`${username}:${day}:${h}:lull`) > intensity) {
+    return { active: false, reason: 'off-peak-lull', localHour: h }
+  }
+  return { active: true, localHour: h }
 }
