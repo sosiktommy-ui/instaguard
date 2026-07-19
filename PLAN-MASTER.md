@@ -857,7 +857,16 @@
   bitness(64)/model/wow64. Раньше протекала версия ядра Linux при platform=Windows. node --check + тесты 35/35.
   ⚠️ ЖИВОЙ ТЕСТ: `POST /selftest/fingerprint` через прокси → redCount=0 (без риска для аккаунта).
 - [ ] D.2 `sec-ch-ua` brand «Google Chrome» · по возможности · Критерий: не «Chromium».
-- [ ] D.3 UA-версия из `chromium.version()` · `fingerprint.js` · Критерий: UA не расходится с движком.
+- [x] 2026-07-19 (build browser-106) D.3 UA-версия из реального `browser.version()` · `fingerprint.js`
+  профили теперь несут `uaTemplate` с плейсхолдером `{V}` вместо захардкоженного «130.0.0.0»;
+  `browser.js newAccountContext` и `server.js /selftest/fingerprint` (ОБА места, что зовут
+  `fingerprint()`) резолвят мажор через `browser.version()` (уже запущенный браузер) и передают
+  как `chromeMajor` — нет данных → фолбэк `DEFAULT_CHROME_MAJOR='130'` (регресса нет). `sec-ch-ua`/
+  UA-CH full-version-list и так не оверрайдятся (берутся от реального движка) — теперь и
+  `navigator.userAgent`/`User-Agent`-заголовок не разъедутся с ними при будущем апдейте Playwright.
+  Проверено: `node --check` всех touched-файлов чист, `fingerprint('u',{chromeMajor:'133'})` даёт
+  `Chrome/133.0.0.0` в UA (проверено runtime), без override — дефолт 130 (регресс исключён), воркер-
+  тесты 35/35. Критерий: UA не расходится с движком — теперь ВСЕГДА, не только пока образ = 130.
 - [ ] D.4 tz по IP (не по стране) · `ipapi.is location.timezone` · Критерий: tz совпадает с geoIP.
 - [ ] D.5 Пул профилей 10–15, консистентных ОС/GPU · `fingerprint.js` · Тест: self-test каждого · Критерий: redCount=0.
 - [ ] D.6 Mac DPR=2 · Критерий: Retina-консистентность.

@@ -77,7 +77,12 @@ export async function getBrowser() {
 export async function newAccountContext(opts) {
   const { username, proxy, storageState, locale, timezoneId } = opts
   const browser = await getBrowser()
-  const fp = fingerprint(username, { locale, timezoneId })
+  // Мажор версии РЕАЛЬНОГО запущенного Chromium — держит UA-строку в синхроне с движком (PLAN-MASTER
+  // D.3): browser.version() отдаёт полную версию («130.0.6723.31»), берём мажор. Сбой чтения версии
+  // (маловероятно — браузер уже запущен) → fingerprint() сама фолбэкнет на дефолт, без падения входа.
+  let chromeMajor
+  try { chromeMajor = String(browser.version()).split('.')[0] || undefined } catch {}
+  const fp = fingerprint(username, { locale, timezoneId, chromeMajor })
 
   const ctxOpts = {
     userAgent: fp.userAgent,

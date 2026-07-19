@@ -15,7 +15,7 @@ import { fingerprintSelfTest } from './lib/selftest.js'
 import { captchaConfigured } from './lib/captcha.js'
 import { warmupFeed } from './lib/human.js'
 
-const BUILD = '2026-07-19-browser-105-username-poll'
+const BUILD = '2026-07-19-browser-106-ua-live-version'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -294,7 +294,12 @@ app.post('/selftest/fingerprint', async (req, res) => {
   if (!proxy) return res.json({ ok: false, error: 'нужен proxy' })
   const uname = username || 'selftest'
   try {
-    const fp = fingerprint(uname, { locale, timezoneId })
+    // Тот же chromeMajor, что newAccountContext реально впишет в браузер (ниже) — иначе fp здесь
+    // (эталон для сравнения) разъедется с реальным navigator.userAgent при апдейте Playwright,
+    // и self-test ложно закричит «UA не совпадает» (PLAN-MASTER D.3).
+    let chromeMajor
+    try { const b = await getBrowser(); chromeMajor = String(b.version()).split('.')[0] || undefined } catch {}
+    const fp = fingerprint(uname, { locale, timezoneId, chromeMajor })
     // Исходящий IP/страна прокси — чтобы отличить утечку WebRTC от самого прокси + гео-проверка.
     let exit = null
     try {
