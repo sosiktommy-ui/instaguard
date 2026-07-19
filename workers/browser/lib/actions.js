@@ -3,7 +3,6 @@
 import { SEL } from './selectors.js'
 import { firstVisible, clickByText, findByText, pageHasText, hasSessionCookie, gotoResilient, safeStorageState } from './browser.js'
 import { humanType, jitter, idleMouse, preActionBrowse, humanClick } from './human.js'
-import { openNotifications } from './selfevents.js'   // §13.11 — DOM-приём заявок (не приватный API)
 import { dismissInterstitials } from './login.js'     // §13.11 — закрыть всплывашки, перекрывающие иконку
 
 // СВЕРКА ПРОФИЛЯ (§4.1): открытый URL должен вести ИМЕННО на @username. Совпадение — happy-path
@@ -439,14 +438,56 @@ const CONFIRM_LABELS = /^(confirm|підтвердити|подтвердить|
 const REQ_GROUP = /follow requests|запити на стеження|запросы на подписку|solicitudes|permintaan mengikuti|takip istekleri/i
 const NOTIF_HEAD = /notifications|сповіщенн|уведомлен|activity|діяльн|актив|actividad|aktivit|bildirim|powiadomien/i
 
+const REQ_TEXT = /requested to follow you|подав запит на стеження|хоче стежити за вами|запрос на подписку|запросил.*подпис|wants to follow you|mengikuti anda|seguirte/i
+
 // Флайаут уведомлений реально ОТКРЫТ (а не «мы что-то кликнули»): виден заголовок панели ЛИБО
-// группа заявок ЛИБО кнопка «Confirm». Отличает «панель не открылась» (иконку не нашли — всплывашка
-// перекрыла) от «панель открыта, заявок 0».
+// группа заявок ЛИБО строка «X подав запит…» ЛИБО кнопка «Confirm». Отличает «панель не открылась»
+// (клик не сработал) от «панель открыта, заявок 0».
 async function notifPanelOpen(page) {
   try { if (await page.getByRole('heading', { name: NOTIF_HEAD }).first().isVisible().catch(() => false)) return true } catch { /* нет заголовка */ }
   try { if (await page.getByText(REQ_GROUP).first().isVisible().catch(() => false)) return true } catch { /* нет группы */ }
+  try { if (await page.getByText(REQ_TEXT).first().isVisible().catch(() => false)) return true } catch { /* нет строки заявки */ }
   try { if (await page.getByRole('button', { name: CONFIRM_LABELS }).first().isVisible().catch(() => false)) return true } catch { /* нет кнопок */ }
   return false
+}
+
+// 🔴 НАДЁЖНОЕ открытие флайаута уведомлений. Прежний путь верил «мы кликнули = открыто» — но живой
+// лог показал: клик проходил (panelOpened=true), а флайаут НЕ открывался (на экране оставалась лента
+// «Home Reels»). Теперь: находим иконку через `svg[aria-label]`→кликабельный предок (точнее, чем по
+// роли — не цепляет скрытые ссылки), кликаем ЖИВОЙ мышью (`humanClick`), и ЖДЁМ реального появления
+// панели (поллинг `notifPanelOpen` до ~7с), до 3 попыток. Возвращает ВЕРИФИЦИРОВАННОЕ состояние.
+async function openNotifPanel(page) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await dismissInterstitials(page).catch(() => {})
+    let target = null
+    // 1) иконка по svg[aria-label] → ближайший кликабельный предок (a/button/[role=button|link])
+    const svgs = page.locator('svg[aria-label]')
+    const n = await svgs.count().catch(() => 0)
+    for (let i = 0; i < n && i < 40; i++) {
+      const lbl = await svgs.nth(i).getAttribute('aria-label').catch(() => '')
+      if (lbl && NOTIF_HEAD.test(lbl)) {
+        const anc = svgs.nth(i).locator('xpath=ancestor-or-self::*[self::a or self::button or @role="button" or @role="link"][1]')
+        if (await anc.count().catch(() => 0)) { target = anc.first(); break }
+      }
+    }
+    // 2) фолбэк — по доступному имени роли
+    if (!target) {
+      for (const role of ['button', 'link']) {
+        const el = page.getByRole(role, { name: NOTIF_HEAD }).first()
+        if (await el.isVisible().catch(() => false)) { target = el; break }
+      }
+    }
+    if (!target) { await jitter(1000, 1600); continue }   // иконки нет (не догрузилось/всплывашка) — повтор
+    const ok = await humanClick(page, target).catch(() => false)
+    if (!ok) await target.click({ timeout: 4000 }).catch(() => {})
+    // ЖДЁМ реального появления панели (до ~7с) — флайаут открывается не мгновенно
+    for (let t = 0; t < 14; t++) {
+      await page.waitForTimeout(500)
+      if (await notifPanelOpen(page)) return true
+    }
+    await dismissInterstitials(page).catch(() => {})   // вдруг всплывашка перехватила — закрыть и повторить
+  }
+  return await notifPanelOpen(page)
 }
 
 export async function acceptFollowRequests(context, { limit = 10 } = {}) {
@@ -466,15 +507,8 @@ export async function acceptFollowRequests(context, { limit = 10 } = {}) {
   let pendingCount = 0
 
   try {
-    // Открываем флайаут уведомлений. Всплывашка может выскочить и ПОСЛЕ клика → закрываем снова.
-    // До 2 попыток: не открылось — ещё раз закрыть всплывашки и открыть.
-    for (let attempt = 0; attempt < 2 && !panelOpened; attempt++) {
-      const clicked = await openNotifications(page)
-      await dismissInterstitials(page).catch(() => {})   // всплывашка могла появиться после клика
-      await jitter(1200, 2000)
-      panelOpened = clicked || await notifPanelOpen(page)
-      if (!panelOpened) { await dismissInterstitials(page).catch(() => {}); await jitter(900, 1500) }
-    }
+    // ВЕРИФИЦИРОВАННОЕ открытие флайаута (клик живой мышью + ожидание появления панели, до 3 попыток).
+    panelOpened = await openNotifPanel(page)
 
     // Заявки иногда скрыты под группой «Запити на стеження» — раскрываем в список.
     try {
@@ -521,13 +555,17 @@ export async function acceptFollowRequests(context, { limit = 10 } = {}) {
   if (!approved.length) {
     const d = await page.evaluate(() => {
       const clean = (s) => (s || '').replace(/\s+/g, ' ').trim()
+      const bodyText = clean(document.body.innerText)
       const nav = [...new Set(Array.from(document.querySelectorAll('svg[aria-label], a[aria-label], [role="button"][aria-label]')).map((e) => e.getAttribute('aria-label')).filter(Boolean))].slice(0, 30)
       const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).map((x) => clean(x.innerText).slice(0, 90))
-      const buttons = [...new Set(Array.from(document.querySelectorAll('button')).map((b) => clean(b.textContent)).filter(Boolean))].slice(0, 25)
+      // тексты И aria-label кнопок (иногда «Confirm» — это aria-label, а textContent пуст)
+      const buttons = [...new Set(Array.from(document.querySelectorAll('button, [role="button"]')).map((b) => clean(b.textContent || b.getAttribute('aria-label'))).filter(Boolean))].slice(0, 30)
+      // признаки заявки/уведомлений на странице (даже если наш селектор Confirm не сматчил)
+      const reqOnPage = /requested to follow|follow request|запит на стеж|хоче стежити|подписат/i.test(bodyText)
       const scope = document.querySelector('div[role="dialog"]') || document.body
-      return { url: location.pathname, nav, dialogs, buttons, text: clean(scope.innerText).slice(0, 350) }
+      return { url: location.pathname, reqOnPage, nav, dialogs, buttons, text: clean(scope.innerText).slice(0, 300) }
     }).catch(() => null)
-    sample = d ? `url=${d.url} | nav=[${d.nav.join(', ')}] | dialogs=${JSON.stringify(d.dialogs)} | buttons=[${d.buttons.join(', ')}] | text="${d.text}"` : ''
+    sample = d ? `panelOpened=${panelOpened} reqOnPage=${d.reqOnPage} url=${d.url} | nav=[${d.nav.join(', ')}] | dialogs=${JSON.stringify(d.dialogs)} | buttons=[${d.buttons.join(', ')}] | text="${d.text}"` : ''
   }
 
   return {
