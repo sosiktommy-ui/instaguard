@@ -4,6 +4,7 @@ import { SEL } from './selectors.js'
 import { firstVisible, clickByText, findByText, pageHasText, hasSessionCookie, gotoResilient, safeStorageState } from './browser.js'
 import { humanType, jitter, idleMouse, preActionBrowse, humanClick } from './human.js'
 import { openNotifications } from './selfevents.js'   // §13.11 — DOM-приём заявок (не приватный API)
+import { dismissInterstitials } from './login.js'     // §13.11 — закрыть всплывашки, перекрывающие иконку
 
 // СВЕРКА ПРОФИЛЯ (§4.1): открытый URL должен вести ИМЕННО на @username. Совпадение — happy-path
 // (по прямой ссылке первый сегмент пути = ник, поведение не меняется). Несовпадение = редирект
@@ -436,12 +437,27 @@ export async function commentLatestPost(context, { targetUsername, text, dryRun 
 // СВЕРИТЬ, что строка исчезла (реально подтвердилось, а не «наебало»). Никаких API-вызовов.
 const CONFIRM_LABELS = /^(confirm|підтвердити|подтвердить|confirmar|confirmer|konfirmasi|onayla|potwierdź|bestätigen|conferma|承認|확인)$/i
 const REQ_GROUP = /follow requests|запити на стеження|запросы на подписку|solicitudes|permintaan mengikuti|takip istekleri/i
+const NOTIF_HEAD = /notifications|сповіщенн|уведомлен|activity|діяльн|актив|actividad|aktivit|bildirim|powiadomien/i
+
+// Флайаут уведомлений реально ОТКРЫТ (а не «мы что-то кликнули»): виден заголовок панели ЛИБО
+// группа заявок ЛИБО кнопка «Confirm». Отличает «панель не открылась» (иконку не нашли — всплывашка
+// перекрыла) от «панель открыта, заявок 0».
+async function notifPanelOpen(page) {
+  try { if (await page.getByRole('heading', { name: NOTIF_HEAD }).first().isVisible().catch(() => false)) return true } catch { /* нет заголовка */ }
+  try { if (await page.getByText(REQ_GROUP).first().isVisible().catch(() => false)) return true } catch { /* нет группы */ }
+  try { if (await page.getByRole('button', { name: CONFIRM_LABELS }).first().isVisible().catch(() => false)) return true } catch { /* нет кнопок */ }
+  return false
+}
 
 export async function acceptFollowRequests(context, { limit = 10 } = {}) {
   await requireSession(context)
   const page = await context.newPage()
   await gotoResilient(page, 'https://www.instagram.com/', { timeout: 30000, retries: 1, backoffMs: [2000] })
   await jitter(1500, 2600)
+  // 🔴 Свежий вход по кукам почти всегда даёт всплывашки («Зберегти дані входу?»/«Увімкнути
+  // сповіщення?»/cookie), которые ПЕРЕКРЫВАЮТ/ПРЯЧУТ иконку уведомлений → раньше приём падал
+  // «панель не открылась». Закрываем их ПЕРЕД поиском иконки (мультиязычно, вкл. укр. «Не зараз»).
+  await dismissInterstitials(page).catch(() => {})
   await preActionBrowse(page).catch(() => {})   // микро-браузинг перед действием (не «холодный» клик)
 
   const approved = []
@@ -450,8 +466,17 @@ export async function acceptFollowRequests(context, { limit = 10 } = {}) {
   let pendingCount = 0
 
   try {
-    panelOpened = await openNotifications(page)
-    // Заявки иногда скрыты под группой «Запросы на подписку» — раскрываем в список.
+    // Открываем флайаут уведомлений. Всплывашка может выскочить и ПОСЛЕ клика → закрываем снова.
+    // До 2 попыток: не открылось — ещё раз закрыть всплывашки и открыть.
+    for (let attempt = 0; attempt < 2 && !panelOpened; attempt++) {
+      const clicked = await openNotifications(page)
+      await dismissInterstitials(page).catch(() => {})   // всплывашка могла появиться после клика
+      await jitter(1200, 2000)
+      panelOpened = clicked || await notifPanelOpen(page)
+      if (!panelOpened) { await dismissInterstitials(page).catch(() => {}); await jitter(900, 1500) }
+    }
+
+    // Заявки иногда скрыты под группой «Запити на стеження» — раскрываем в список.
     try {
       const grp = page.getByText(REQ_GROUP).first()
       if (await grp.isVisible().catch(() => false)) { await grp.click({ timeout: 3000 }).catch(() => {}); await jitter(1500, 2600) }
@@ -489,14 +514,20 @@ export async function acceptFollowRequests(context, { limit = 10 } = {}) {
     errors.push(`accept: ${String(e?.message || e).slice(0, 90)}`)
   }
 
-  // Диагностика: если панель открылась, но НИЧЕГО не подтвердили — что реально видно в панели?
-  // По этому дампу точечно правим селекторы БЕЗ риска для аккаунта (DOM-клики сессию не убивают).
+  // Диагностика: 0 принято → дамп РЕАЛЬНОЙ структуры (какие есть nav-иконки по aria-label, висящие
+  // диалоги-всплывашки, тексты кнопок, url, текст панели). По нему точечно правим селекторы БЕЗ
+  // риска для аккаунта (DOM-клики/чтение сессию не убивают). Отвечает на «он не находит нужное поле».
   let sample = ''
   if (!approved.length) {
-    sample = await page.evaluate(() => {
-      const dlg = document.querySelector('div[role="dialog"]') || document.body
-      return (dlg.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 600)
-    }).catch(() => '')
+    const d = await page.evaluate(() => {
+      const clean = (s) => (s || '').replace(/\s+/g, ' ').trim()
+      const nav = [...new Set(Array.from(document.querySelectorAll('svg[aria-label], a[aria-label], [role="button"][aria-label]')).map((e) => e.getAttribute('aria-label')).filter(Boolean))].slice(0, 30)
+      const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).map((x) => clean(x.innerText).slice(0, 90))
+      const buttons = [...new Set(Array.from(document.querySelectorAll('button')).map((b) => clean(b.textContent)).filter(Boolean))].slice(0, 25)
+      const scope = document.querySelector('div[role="dialog"]') || document.body
+      return { url: location.pathname, nav, dialogs, buttons, text: clean(scope.innerText).slice(0, 350) }
+    }).catch(() => null)
+    sample = d ? `url=${d.url} | nav=[${d.nav.join(', ')}] | dialogs=${JSON.stringify(d.dialogs)} | buttons=[${d.buttons.join(', ')}] | text="${d.text}"` : ''
   }
 
   return {

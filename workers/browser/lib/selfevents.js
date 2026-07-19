@@ -16,7 +16,10 @@ const IG_APP_ID = '936619743392459'
 // Пробуем по роли (link/button), затем по svg[aria-label] иконки-колокольчика (иногда доступный
 // именно значок, а не подпись). Возвращаем true, если клик состоялся.
 export async function openNotifications(page) {
-  const NAME = /notification|сповіщенн|повідомленн|уведомлен|notificaci|notifikasi|bildirim|powiadomien|通知/i
+  // Иконка «Уведомления/Активность» в навигации. aria-label бывает и "Notifications", и "Activity"
+  // (+ локали). Раньше "activity"/укр. "діяльність"/"дії" не ловились → на части раскладок иконка не
+  // находилась. Держим оба смысла и основные локали (укр./рус./исп./индонез./тур./польск./португ.).
+  const NAME = /notification|activity|сповіщенн|повідомленн|діяльн|уведомлен|активнос|notificaci|actividad|aktivit|notifikasi|bildirim|etkinlik|powiadomien|aktywno|notifica|通知/i
   let clicked = false
   for (const role of ['link', 'button']) {
     try {

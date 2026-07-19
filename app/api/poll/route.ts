@@ -747,10 +747,12 @@ export async function POST(req: NextRequest) {
                 .map((u) => ({ pk: (u.pk && u.pk.trim()) ? u.pk : u.username.toLowerCase(), username: u.username }))
               acceptedFollows.forEach((a) => selfFollowedPks.add(String(a.pk)))   // приняты → точно followed_by (гейт)
               const acceptFail = (ar.errors ?? []).join(' ')
-              const sampleTail = (isManual && ar.sample) ? ` | панель: «${String(ar.sample).slice(0, 200)}»` : ''
+              // Диагностика (`sample`) на РУЧНОЙ проверке — чтобы по одному прогону понять, почему приём
+              // не сработал (какие nav-иконки, висит ли всплывашка, тексты кнопок), а не гадать.
+              const sampleTail = (isManual && ar.sample) ? ` | диагностика: ${String(ar.sample).slice(0, 500)}` : ''
               if (acceptedFollows.length) await prisma.log.create({ data: { accountId: account.id, level: 'SUCCESS', message: `Приняты заявки в подписчики: ${acceptedFollows.map((u) => '@' + u.username).join(', ')} — сработает триггер «Новая подписка».` } }).catch(() => null)
               else if (ar.fetchFailed && SESSION_DEAD(acceptFail)) sessionDead = true   // сессия отклонена — пометим «Требует входа» ниже
-              else if (ar.fetchFailed) await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Не удалось открыть панель уведомлений для приёма заявок${acceptFail ? ` (${acceptFail})` : ''} — повторим автоматически.` } }).catch(() => null)
+              else if (ar.fetchFailed) await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Не удалось открыть панель уведомлений для приёма заявок${acceptFail ? ` (${acceptFail})` : ''} — повторим автоматически.${sampleTail}` } }).catch(() => null)
               else if (ar.errors?.length) await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Заявки в подписчики не подтверждены: ${ar.errors.slice(0, 3).join('; ')}${sampleTail}` } }).catch(() => null)
               else if (isManual) await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: `Заявок в подписчики нет (панель открыта, кнопок «Подтвердить» не найдено)${sampleTail}` } }).catch(() => null)
             } catch (e: any) {
