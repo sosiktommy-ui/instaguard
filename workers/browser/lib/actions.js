@@ -538,30 +538,52 @@ export async function acceptFollowRequests(context, { limit = 10 } = {}) {
 
     pendingCount = await page.getByRole('button', { name: CONFIRM_LABELS }).count().catch(() => 0)
 
-    // Подтверждаем по одной: успешный клик убирает строку → следующая заявка становится первой.
+    // Ник заявителя из строки, содержащей эту кнопку Confirm.
+    const usernameOf = (btn) => btn.evaluate((el) => {
+      let row = el
+      for (let k = 0; k < 8 && row.parentElement; k++) {
+        row = row.parentElement
+        const a = row.querySelector('a[href^="/"]')
+        if (a) { const m = (a.getAttribute('href') || '').match(/^\/([A-Za-z0-9._]+)\/$/); if (m && !['p', 'reel', 'explore', 'direct', 'stories'].includes(m[1])) return m[1] }
+      }
+      return ''
+    }).catch(() => '')
+
+    // Живой провал (2026-07-19): одна заявка (@bichuxan), у которой сверка после клика ложно
+    // показала «не подтвердилось» (DOM/сеть не успели обновиться за одну паузу), СТОПОРИЛА весь
+    // батч через `break` — вторая ожидающая заявка в той же панели («+1 other» в превью группы)
+    // из-за этого вообще не обрабатывалась, хотя bichuxan к тому моменту мог реально подтвердиться.
+    // Теперь: (1) перед выводом «не подтвердилось» — ОДИН доп. грейс-цикл ожидания и пересчёта
+    // (даём странице время); (2) неудача на ОДНОЙ строке (клик/сверка/без профиля) БОЛЬШЕ НЕ рвёт
+    // цикл — помечаем её «viewed» и ищем среди ВИДИМЫХ Confirm-кнопок первую ещё не тронутую
+    // (по нику), чтобы не обработать ту же застрявшую строку повторно и не потерять остальные.
+    const seen = new Set()
     for (let i = 0; i < limit; i++) {
       const btns = page.getByRole('button', { name: CONFIRM_LABELS })
-      const before = await btns.count().catch(() => 0)
-      if (before === 0) break
-      const btn = btns.first()
-      // Ник заявителя — из ближайшей ссылки на профиль в той же строке (для триггера/лога).
-      const username = await btn.evaluate((el) => {
-        let row = el
-        for (let k = 0; k < 8 && row.parentElement; k++) {
-          row = row.parentElement
-          const a = row.querySelector('a[href^="/"]')
-          if (a) { const m = (a.getAttribute('href') || '').match(/^\/([A-Za-z0-9._]+)\/$/); if (m && !['p', 'reel', 'explore', 'direct', 'stories'].includes(m[1])) return m[1] }
-        }
-        return ''
-      }).catch(() => '')
-      if (!username) { errors.push('строка заявки без профиля — приём остановлен (не кликаем вслепую)'); break }
-      let clicked = await humanClick(page, btn).catch(() => false)
-      if (!clicked) clicked = await btn.click({ timeout: 4000 }).then(() => true).catch(() => false)
-      if (!clicked) { errors.push(`confirm @${username}: клик не прошёл`); break }
+      const total = await btns.count().catch(() => 0)
+      if (total === 0) break
+      let target = null
+      let username = ''
+      for (let k = 0; k < total; k++) {
+        const cand = btns.nth(k)
+        const u = await usernameOf(cand)
+        if (u && !seen.has(u)) { target = cand; username = u; break }
+      }
+      if (!target) break   // все видимые заявки этого прогона уже обработаны (успех/провал) — стоп
+      seen.add(username)
+      const before = total
+      let clicked = await humanClick(page, target).catch(() => false)
+      if (!clicked) clicked = await target.click({ timeout: 4000 }).then(() => true).catch(() => false)
+      if (!clicked) { errors.push(`confirm @${username}: клик не прошёл`); continue }
       await jitter(1600, 3000)   // строка обрабатывается/исчезает
       // СВЕРКА: кнопок «Confirm» стало меньше → заявка реально подтверждена (не ложный успех).
-      const after = await page.getByRole('button', { name: CONFIRM_LABELS }).count().catch(() => before)
-      if (after >= before) { errors.push(`confirm @${username}: не подтвердилось (строка осталась)`); break }
+      let after = await page.getByRole('button', { name: CONFIRM_LABELS }).count().catch(() => before)
+      if (after >= before) {
+        // Грейс-период: сеть/рендер могли не успеть за первую паузу — один доп. пересчёт перед выводом.
+        await jitter(1500, 2500)
+        after = await page.getByRole('button', { name: CONFIRM_LABELS }).count().catch(() => before)
+      }
+      if (after >= before) { errors.push(`confirm @${username}: не подтвердилось (строка осталась)`); continue }
       approved.push({ pk: '', username })
     }
   } catch (e) {
