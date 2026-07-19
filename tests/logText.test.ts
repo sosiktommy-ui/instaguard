@@ -34,6 +34,28 @@ describe('humanizeLog — жаргон → человеческий язык (§
     const out = humanizeLog('Уведомления (self-events) прочитаны')
     expect(out).not.toMatch(/\(\s*\)|\s{2,}/)
   })
+
+  it('реальный сводный лог действия: токены → человеческий текст', () => {
+    const raw = 'подписка: follow_button_not_found: кнопка «Подписаться» не найдена; dm: сессия аккаунта истекла — войдите заново; невозможно: лайк: у аккаунта нет постов'
+    const out = humanizeLog(raw)
+    expect(out).not.toMatch(/follow_button_not_found/i)
+    expect(out).toMatch(/директ: сессия аккаунта истекла/)   // dm: → директ:
+    expect(out).toMatch(/кнопка «Подписаться» не найдена/)
+    // без дубля «не найдена: кнопка ... не найдена»
+    expect((out.match(/не найдена/g) ?? []).length).toBe(1)
+  })
+
+  it('голые токены-исходы переводятся', () => {
+    expect(humanizeLog('session_rejected')).toMatch(/сессия отклонена/i)
+    expect(humanizeLog('wrong_profile')).toMatch(/профиль недоступен/i)
+    expect(humanizeLog('proxy_dead')).toMatch(/прокси не отвечает/i)
+    expect(humanizeLog('approval_pending')).toMatch(/подтверждени/i)
+    expect(humanizeLog('network: прокси моргнул — Instagram не ответил').trim()).toMatch(/^прокси моргнул/)
+  })
+
+  it('не трогает похожие слова (admin/dmesg не считаются меткой dm:)', () => {
+    expect(humanizeLog('admin: настройка')).toBe('admin: настройка')
+  })
 })
 
 describe('isDiagnostic — шум пустых циклов скрыт по умолчанию', () => {
