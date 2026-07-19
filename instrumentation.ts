@@ -61,10 +61,17 @@ export async function register() {
   }
 
   try {
-    const { Worker } = await import(/* webpackIgnore: true */ 'bullmq')
+    const { Worker, Queue } = await import(/* webpackIgnore: true */ 'bullmq')
     const { PrismaClient } = await import(/* webpackIgnore: true */ '@prisma/client')
     const prisma = new PrismaClient()
     const connection = { url: redisUrl }
+    // Очередь для БОГРАНИЧЕННОГО повтора директа при ТРАНЗИЕНТНОМ сбое сети/прокси (см. ниже).
+    // Отдельно от лок-повтора (тот убран в 2026-07-11): здесь повтор с задержкой и лимитом попыток,
+    // чтобы «прокси моргнул» не терял директ навсегда (подписчик уже помечен известным в снапшоте).
+    const dmSendQueue = new Queue('dm-send', { connection })
+    // Транзиентный сбой сети/прокси (блип резидентного прокси), а НЕ логический исход/бан.
+    const TRANSIENT_DM = /network|моргн|timeout|таймаут|econnreset|econnrefused|tunnel|socket hang up|не ответил|net::/i
+    const DM_MAX_RETRIES = 2
 
     // ── Воркер отправки DM (с задержкой из очереди) ──────────────────────────
     new Worker(
@@ -106,21 +113,34 @@ export async function register() {
               const success = Object.keys(r.incDone).length > 0
               const impossible = r.impossible ?? []
               const hardError = r.errors.length > 0
+              // ПОВТОР ДИРЕКТА при ТРАНЗИЕНТНОМ сбое сети/прокси: директ был нужен (d.text), но не
+              // доставлен (incDone.dm пуст), ошибка — сетевой блип (не бан/челлендж), и лимит попыток
+              // не исчерпан. Иначе блип «прокси моргнул» терял директ навсегда (подписчик уже помечен
+              // известным в снапшоте poll → не ретраится). Повтор — ТОЛЬКО директом (уже выполненные
+              // follow/like/story отключаем, чтобы не повторять их).
+              const dmIntended = Boolean(d.text)
+              const dmDone = Boolean((r.incDone as any).dm)
+              const willRetryDm = dmIntended && !dmDone && !r.brk
+                && (d.retryCount || 0) < DM_MAX_RETRIES
+                && TRANSIENT_DM.test(r.errors.join(' '))
               // §13.10 — «невозможно» (0 постов/0 сторис) НЕ ошибка; триггер сработал, если что-то
               // выполнено ИЛИ единственная помеха — невозможность действия (без реальных ошибок).
-              const fired = success || (impossible.length > 0 && !hardError)
+              // При willRetryDm НЕ инкрементим fireCount сейчас — досчитаем на итоговой попытке директа
+              // (иначе двойной счёт: follow сейчас + директ на повторе).
+              const fired = !willRetryDm && (success || (impossible.length > 0 && !hardError))
               if (attempted) {
                 const cur = await prisma.triggerRule.findUnique({ where: { id: d.triggerId }, select: { stats: true } }).catch(() => null)
                 const parts: string[] = []
                 if (r.errors.length) parts.push(r.errors.join('; '))
                 if (impossible.length) parts.push(`невозможно: ${impossible.join('; ')}`)
                 const tail = parts.length ? ` (${parts.join('; ')})` : ''
-                const level = success ? (hardError ? 'WARN' : 'SUCCESS') : (hardError ? 'ERROR' : 'WARN')
+                const retryTail = willRetryDm ? ` — директ не ушёл (сеть/прокси), повтор через ~1.5 мин (попытка ${(d.retryCount || 0) + 2}/${DM_MAX_RETRIES + 1})` : ''
+                const level = willRetryDm ? 'WARN' : (success ? (hardError ? 'WARN' : 'SUCCESS') : (hardError ? 'ERROR' : 'WARN'))
                 const meta = logMeta(d.triggerType, success ? Object.keys(r.incDone) : [])
                 const message = success
-                  ? `Сработал триггер «${d.triggerName}» → @${d.followerUsername}${meta}${tail}`
+                  ? `Сработал триггер «${d.triggerName}» → @${d.followerUsername}${meta}${tail}${retryTail}`
                   : (hardError
-                    ? `Триггер «${d.triggerName}» → @${d.followerUsername}: действия не выполнены${meta}${tail}`
+                    ? `Триггер «${d.triggerName}» → @${d.followerUsername}: ${willRetryDm ? 'директ будет повторён' : 'действия не выполнены'}${meta}${tail}${retryTail}`
                     : `Триггер «${d.triggerName}» → @${d.followerUsername}: действие невозможно${meta}${tail}`)
                 await Promise.all([
                   prisma.log.create({ data: { accountId: d.accountId, level, message } }),
@@ -128,6 +148,18 @@ export async function register() {
                   // реальный провал (директ не ушёл / таймаут) не считается.
                   prisma.triggerRule.update({ where: { id: d.triggerId }, data: { ...(fired ? { fireCount: { increment: 1 } } : {}), stats: mergeStatsMap(cur?.stats ?? {}, r.incFired, r.incDone) as any } }),
                 ])
+              }
+              // Ставим повтор ТОЛЬКО директа (выполненные действия отключены) с задержкой — прокси успеет
+              // восстановиться; бюджет попыток ограничен DM_MAX_RETRIES (не бесконечный цикл).
+              if (willRetryDm) {
+                await dmSendQueue.add('dm', {
+                  ...d,
+                  retryCount: (d.retryCount || 0) + 1,
+                  doFollow: d.doFollow && !(r.incDone as any).follow,
+                  doLike: d.doLike && !(r.incDone as any).like,
+                  viewStories: d.viewStories && !(r.incDone as any).story,
+                  fallbackFollow: false, fallbackLike: false,
+                }, { delay: 90_000, removeOnComplete: true, removeOnFail: true }).catch(() => null)
               }
               if (r.brk) await prisma.instagramAccount.update({ where: { id: d.accountId }, data: { status: r.brk as any } }).catch(() => null)
               console.log(`[dm-worker/browser] ${success ? '✓ выполнено' : '⚠ без выполнения'} → @${d.followerUsername}`)

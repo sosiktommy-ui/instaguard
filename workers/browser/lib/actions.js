@@ -63,7 +63,11 @@ async function openProfile(context, username) {
     try { if (await tryOpenViaSearch(page, uname)) via = 'search' } catch { /* → URL */ }
   }
   if (via !== 'search') {
-    await gotoResilient(page, `https://www.instagram.com/${uname}/`, { timeout: 30000, retries: 1, backoffMs: [2000] })
+    // Директ идёт в ОТДЕЛЬНОМ (холодном) dm-send контексте: первая навигация к профилю через
+    // резидентный прокси часто «моргает» (ERR_TUNNEL/timeout), а retries:1 (2 попытки, 2с) не давал
+    // прокси восстановиться → «прокси моргнул» → директ терялся (не ретраится, снапшот уже пометил
+    // подписчика известным). Больше попыток + длиннее пауза (сессия/прокси живые — блип транзиентный).
+    await gotoResilient(page, `https://www.instagram.com/${uname}/`, { timeout: 35000, retries: 3, backoffMs: [2500, 6000, 12000] })
     await jitter(1200, 2500)
     await idleMouse(page)
   }
