@@ -36,6 +36,35 @@ function parseSellerLine(text: string): { username: string; password: string; to
  * Единый переиспользуемый попап подключения Instagram-аккаунта.
  * Используется и на вкладке «Аккаунты», и на главном экране (кнопка «+ Аккаунт»).
  */
+
+// §1.5 ACCOUNT-SAFETY — предупреждение о ЧАСТЫХ попытках входа (они лочат аккаунт Instagram).
+// Только клиент (localStorage), МЯГКОЕ предупреждение — не блокирует, лишь советует подождать/куки.
+const LOGIN_ATTEMPTS_KEY = 'rg-login-attempts'
+function readLoginAttempts(): Record<string, { fails: number; ts: number }> {
+  try { return JSON.parse(localStorage.getItem(LOGIN_ATTEMPTS_KEY) || '{}') } catch { return {} }
+}
+function saveLoginAttempts(m: Record<string, { fails: number; ts: number }>) {
+  try { localStorage.setItem(LOGIN_ATTEMPTS_KEY, JSON.stringify(m)) } catch { /* приватный режим/квота */ }
+}
+function recordLoginFail(username: string) {
+  const k = username.replace(/^@/, '').trim().toLowerCase(); if (!k) return
+  const m = readLoginAttempts(); const e = m[k] || { fails: 0, ts: 0 }
+  m[k] = { fails: e.fails + 1, ts: Date.now() }; saveLoginAttempts(m)
+}
+function clearLoginFail(username: string) {
+  const k = username.replace(/^@/, '').trim().toLowerCase(); if (!k) return
+  const m = readLoginAttempts(); if (m[k]) { delete m[k]; saveLoginAttempts(m) }
+}
+function loginAttemptWarn(username: string): string {
+  const k = (username || '').replace(/^@/, '').trim().toLowerCase(); if (!k) return ''
+  const e = readLoginAttempts()[k]; if (!e) return ''
+  const mins = Math.round((Date.now() - e.ts) / 60000)
+  if (mins > 90) return ''   // давно — не тревожим
+  if (e.fails >= 3) return `⚠️ Этот аккаунт падал ${e.fails} раз подряд (последняя ${mins} мин назад). Частые попытки входа ЛОЧАТ аккаунт Instagram. Дай ему отдохнуть ~1–2 часа ИЛИ войди по «Куки» (надёжный обход капчи/лока).`
+  if (mins < 30) return `⚠️ Недавно (${mins} мин назад) вход этого аккаунта не удался. Частые повторы рискуют локом — лучше подожди ~30 мин или используй «Куки».`
+  return ''
+}
+
 export function AddAccountModal({
   onClose, onAdded, presetProxy,
   role = 'RESPONDER',
@@ -116,6 +145,7 @@ export function AddAccountModal({
   // Прокси: авто (из пула) или уникальный (вручную). Если задан presetProxy — сразу «уникальный».
   const [proxyMode, setProxyMode] = useState<'auto' | 'unique'>('unique')
   const [poolFree, setPoolFree]   = useState(0)   // сколько пуловых прокси со свободной ёмкостью
+  const [attemptWarn, setAttemptWarn] = useState('')   // §1.5 предупреждение о частых попытках входа
 
   useEffect(() => {
     fetch('/api/sections').then((r) => r.ok ? r.json() : []).then(setSections).catch(() => {})
@@ -125,6 +155,11 @@ export function AddAccountModal({
       setPoolFree((d.proxies ?? []).filter((p: any) => p.kind === 'pool' && (p.accountCount ?? 0) < cap).length)
     }).catch(() => {})
   }, [])
+
+  // §1.5 — пересчёт предупреждения о частых попытках входа (по имени/режиму/шагу)
+  useEffect(() => {
+    if (typeof window !== 'undefined') setAttemptWarn(loginAttemptWarn(username))
+  }, [username, mode, step])
 
   const roots = useMemo(() => sections.filter((s) => !s.parentId), [sections])
   const subs = useMemo(() => sections.filter((s) => s.parentId === secId), [sections, secId])
@@ -224,13 +259,19 @@ export function AddAccountModal({
         setResendNote('')
         setAuto2fa('idle')
         setShot(data.screenshot ?? '')   // скрин РЕАЛЬНОГО экрана подтверждения Instagram (видно, куда ушёл код)
+        clearLoginFail(username)   // §1.5 креды приняты, IG лишь запросил код — сбрасываем счётчик неудач
         setStep('challenge')
         return
       }
 
-      if (!res.ok) { setError(data.error ?? 'Ошибка авторизации'); setShot(data.screenshot ?? ''); setStep('form'); return }
+      if (!res.ok) {
+        recordLoginFail(username)   // §1.5 неудачная попытка входа — учитываем (частые повторы лочат аккаунт)
+        setAttemptWarn(loginAttemptWarn(username))
+        setError(data.error ?? 'Ошибка авторизации'); setShot(data.screenshot ?? ''); setStep('form'); return
+      }
 
       // Черновые (HELPER) не пишем в основной стор-список — они живут на своей вкладке.
+      clearLoginFail(username)   // §1.5 успешный вход — счётчик неудач сброшен
       if (role !== 'HELPER') addAccount({ id: data.account.id, username: data.account.username, followers: 0 })
       onAdded(data.account.username)
       onClose()
@@ -368,6 +409,13 @@ export function AddAccountModal({
         {mode === 'password' && (
           <div className="text-[11.5px] text-warn bg-warn/10 rounded-xl px-3 py-2 mb-5 leading-snug">
             ⚠️ Вход по паролю Instagram отклоняет чаще (challenge/blacklist), особенно с нового IP. Если войти не удаётся — надёжнее режим <b>«Куки»</b> (сессия уже создана с чистого IP аккаунта).
+          </div>
+        )}
+
+        {/* §1.5 ACCOUNT-SAFETY — предупреждение о частых неудачных попытках входа этого аккаунта */}
+        {attemptWarn && step === 'form' && (
+          <div className="text-[12px] text-bad bg-bad/10 rounded-xl px-3 py-2.5 mb-5 leading-snug">
+            {attemptWarn}
           </div>
         )}
 
