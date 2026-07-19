@@ -95,7 +95,7 @@ export const SEL = {
   // ошибочно вписана 'button[type="submit"]' — clickByText её как текст не матчит.
   codeSubmit: ['Confirm', 'Submit', 'Подтвердить', 'Далее', 'Next', 'Continue', 'Продолжить'],
   // CSS-кнопки подтверждения кода (для firstVisible).
-  codeSubmitCss: ['button[type="submit"]:not([disabled])', 'div[role="button"][tabindex]:has-text("Confirm")'],
+  codeSubmitCss: ['button[type="submit"]:not([disabled])', 'input[type="submit"]:not([disabled])', 'div[role="button"]:has-text("Continue")', 'div[role="button"]:has-text("Confirm")', 'div[role="button"][tabindex]'],
   resendLink: ['Resend', 'Resend Code', 'Send again', 'Отправить снова', 'Отправить ещё раз'],
 
   // Профиль / действия

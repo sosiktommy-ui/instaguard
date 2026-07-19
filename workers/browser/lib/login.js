@@ -352,13 +352,42 @@ async function buttonsSummary(page) {
 // fillImageCaptcha — фокус выставлен кликом, а не через локатор) — тогда Enter идёт клавиатурой
 // на весь page, а не через конкретный элемент.
 async function submitCodeForm(page, codeInput) {
-  const btn = await findButtonAnyFrame(page, SEL.codeSubmitCss, SEL.codeSubmit, 4000)
+  await page.waitForTimeout(500)   // дать React «включить» кнопку после ввода кода (иначе клик по «серой»)
+  const LABELS = [...SEL.codeSubmit, 'Verify', 'Проверить', 'Log in', 'Войти']
+  // ГЛАВНЫЙ путь — клик ПРЯМО В DOM по ТОЧНОМУ видимому тексту. Instagram рендерит «Continue»/«Confirm»
+  // как <div>/[role=button] (НЕ <button>), и локаторный getByRole по accessible-name её иногда не берёт
+  // (живой баг: код вписан, кнопка не нажата → bad_code). el.click() срабатывает на любом clickable-div.
+  for (const frame of page.frames()) {
+    try {
+      const hit = await frame.evaluate((labels) => {
+        const want = new Set(labels.map((l) => l.replace(/\s+/g, ' ').trim().toLowerCase()))
+        const isSkip = (t) => /trust this device|доверять|запомнить это устройство|try another way|другой способ/.test(t)
+        const scan = (sel) => {
+          for (const el of document.querySelectorAll(sel)) {
+            const t = (el.textContent || el.value || '').replace(/\s+/g, ' ').trim().toLowerCase()
+            if (!t || t.length > 18 || !want.has(t) || isSkip(t)) continue
+            const r = el.getBoundingClientRect()
+            if (r.width === 0 || r.height === 0) continue
+            try { if (getComputedStyle(el).pointerEvents === 'none') continue } catch {}
+            el.click()
+            return t
+          }
+          return null
+        }
+        // сначала явные кликабельные, затем любой div/span/a с таким текстом
+        return scan('div[role="button"], button, [role="button"], input[type="submit"], a[role="button"]') || scan('div, span, a')
+      }, LABELS)
+      if (hit) { await page.waitForTimeout(400); return }
+    } catch {}
+  }
+  // Фолбэк 1: локаторная кнопка (CSS/role/text) + человеческий/обычный клик.
+  const btn = await findButtonAnyFrame(page, SEL.codeSubmitCss, SEL.codeSubmit, 2500)
   if (btn) {
-    const clicked = await humanClick(page, btn)
-    if (clicked) return
-    await btn.click({ delay: 60 }).catch(() => {})
+    const clicked = await humanClick(page, btn).catch(() => false)
+    if (!clicked) await btn.click({ delay: 60, timeout: 3000 }).catch(() => {})
     return
   }
+  // Фолбэк 2: Enter.
   if (codeInput) await codeInput.press('Enter').catch(() => {})
   else await page.keyboard.press('Enter').catch(() => {})
 }
