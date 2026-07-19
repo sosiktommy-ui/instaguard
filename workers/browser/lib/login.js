@@ -588,16 +588,29 @@ export async function attemptLogin(context, { username, password, totpSecret, pr
     const pageTxt = dom?.text ? ` · ТЕКСТ ЭКРАНА: «${dom.text}»` : ''
     await fail(page, `unknown: страница входа открылась, но поля логина/пароля не найдены (промежуточный экран или бот-защита).${pageTxt}${domTxt}`)
   }
+  // ЛОГИН: очистить поле (автозаполнение/остаток) → ввести человечно → СВЕРИТЬ и при расхождении
+  // перезаполнить начисто. ЖИВОЙ БАГ 2026-07-19: логин «5mgda18JohnsonRichard» доходил до IG как
+  // «sonrichard» (отвалилось начало строки при посимвольном вводе) → IG показывал «неверный логин»
+  // (ложный bad_password) на ПОЛНОСТЬЮ верном аккаунте. fill() ставит значение целиком (не посимвольно),
+  // поэтому исказиться не может — это гарантирует ТОЧНЫЙ логин в поле.
+  await userInput.fill('').catch(() => {})
   await humanType(userInput, username)
+  try {
+    const tu = await userInput.inputValue().catch(() => null)
+    if (tu !== null && tu.replace(/^@/, '').trim().toLowerCase() !== String(username).toLowerCase()) {
+      console.error(`[login] логин искажён при вводе: в поле "${tu}", ожидалось "${username}" — перезаполняю через fill`)
+      await userInput.fill('').catch(() => {})
+      await userInput.fill(username).catch(() => {})
+    }
+  } catch { /* сверка не удалась — не критично */ }
   await jitter(400, 900)
+  // ПАРОЛЬ: та же схема — очистить → ввести → сверить/перезаполнить (см. коммент выше). Пароль критичен.
+  await passInput.fill('').catch(() => {})
   await humanType(passInput, password)
-  // Self-heal пароля: humanType с редкой опечаткой+backspace в ОЧЕНЬ редком случае может оставить
-  // лишний символ (если backspace не применился к нужному элементу). Пароль критичен — сверяем
-  // фактическое значение поля и при расхождении перезаполняем начисто через fill (без опечаток).
-  // No-op в норме (~99.9%); закрывает ложный bad_password из-за сбоя ВВОДА (не самого пароля).
   try {
     const typed = await passInput.inputValue().catch(() => null)
     if (typed !== null && typed !== password) {
+      console.error('[login] пароль искажён при вводе — перезаполняю через fill')
       await passInput.fill('').catch(() => {})
       await passInput.fill(password).catch(() => {})
     }
