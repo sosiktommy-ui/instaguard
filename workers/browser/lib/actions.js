@@ -510,11 +510,31 @@ export async function acceptFollowRequests(context, { limit = 10 } = {}) {
     // ВЕРИФИЦИРОВАННОЕ открытие флайаута (клик живой мышью + ожидание появления панели, до 3 попыток).
     panelOpened = await openNotifPanel(page)
 
-    // Заявки иногда скрыты под группой «Запити на стеження» — раскрываем в список.
-    try {
-      const grp = page.getByText(REQ_GROUP).first()
-      if (await grp.isVisible().catch(() => false)) { await grp.click({ timeout: 3000 }).catch(() => {}); await jitter(1500, 2600) }
-    } catch { /* группы нет — заявки прямо в панели */ }
+    // 🔴 ГОНКА РЕНДЕРА (живая диагностика 2026-07-19): заголовок панели/карусель «Кому подписаться»
+    // рендерятся СРАЗУ, а список заявок («Today» + кнопки «Confirm») — ПОЗЖЕ (отдельный сетевой
+    // запрос, особенно медленно на моргающем прокси). Раньше кнопки считались МГНОВЕННО после
+    // открытия → в DOM их ещё не было (panelOpened=true, pendingCount=0, buttons без Confirm) →
+    // цикл сразу break, приём 0; а captureDiag-скрин мгновением позже уже показывал 3 «Confirm».
+    // Ждём РЕАЛЬНОГО появления кнопок Confirm ИЛИ строки «requested to follow» до ~12с.
+    const waitForRequests = async () => {
+      for (let t = 0; t < 24; t++) {
+        if (await page.getByRole('button', { name: CONFIRM_LABELS }).count().catch(() => 0)) return true
+        if (await page.getByText(REQ_TEXT).first().isVisible().catch(() => false)) return true
+        await page.waitForTimeout(500)
+      }
+      return false
+    }
+    if (panelOpened) await waitForRequests()
+
+    // Confirm-кнопок всё ещё нет, но группа «Запити на стеження» видна — раскрываем её и ждём снова
+    // (в part вёрстках заявки скрыты под группой; в текущей — есть и inline-строки «Today», но группа
+    // безвредна: url при её клике остаётся `/`, панель не закрывается).
+    if (panelOpened && !(await page.getByRole('button', { name: CONFIRM_LABELS }).count().catch(() => 0))) {
+      try {
+        const grp = page.getByText(REQ_GROUP).first()
+        if (await grp.isVisible().catch(() => false)) { await grp.click({ timeout: 3000 }).catch(() => {}); await jitter(1500, 2600); await waitForRequests() }
+      } catch { /* группы нет — заявки прямо в панели */ }
+    }
 
     pendingCount = await page.getByRole('button', { name: CONFIRM_LABELS }).count().catch(() => 0)
 
