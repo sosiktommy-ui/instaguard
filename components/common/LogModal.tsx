@@ -104,6 +104,9 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
   const [details, setDetails] = useState(false)   // «Подробно» — показывать диагностические записи (шум пустых циклов)
   const [live, setLive] = useState(false)   // «● Live» — авто-обновление журнала каждые 4с
   const [beat, setBeat] = useState(0)        // «пульс» — увеличивается на каждом успешном опросе (видно, что Live жив)
+  const [lastPollAt, setLastPollAt] = useState<number | null>(null)  // когда журнал реально обновился (для «обновлено N с назад»)
+  const [pollErr, setPollErr] = useState(false)                       // последний опрос журнала не удался — показать, не молчать
+  const [, setNowTick] = useState(0)                                  // ре-рендер раз в секунду → «N с назад» идёт вживую при Live
   // Кампания → {тип триггера, настроенные действия}: чтобы даже у старых логов
   // (без «· тип:»/«· сделано:») слева показывать ТИП, а справа — реальные ДЕЙСТВИЯ.
   const [campMeta, setCampMeta] = useState<Record<string, { type?: string; actions: string[] }>>({})
@@ -112,9 +115,9 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
     setLogs(null)
     // cache:'no-store' + t=<ts> — иначе браузер может отдать закешированный GET (журнал «не обновлялся»)
     fetch(`/api/logs?accountId=${encodeURIComponent(accountId)}&limit=200&t=${Date.now()}`, { cache: 'no-store' })
-      .then((r) => r.ok ? r.json() : [])
-      .then(setLogs)
-      .catch(() => setLogs([]))
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('http'))))
+      .then((d) => { setLogs(Array.isArray(d) ? d : []); setLastPollAt(Date.now()); setPollErr(false) })
+      .catch(() => { setLogs([]); setPollErr(true) })   // сбой загрузки виден пользователю (§11.1) — не молчим
   }
 
   useEffect(() => { load() }, [accountId])
@@ -125,9 +128,9 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
     if (!live) return
     const tick = () => {
       fetch(`/api/logs?accountId=${encodeURIComponent(accountId)}&limit=200&t=${Date.now()}`, { cache: 'no-store' })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => { if (Array.isArray(d)) setLogs(d); setBeat((b) => b + 1) })  // пульс: видно, что опрос идёт
-        .catch(() => {})
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('http'))))
+        .then((d) => { if (Array.isArray(d)) setLogs(d); setBeat((b) => b + 1); setLastPollAt(Date.now()); setPollErr(false) })  // пульс + отметка свежести
+        .catch(() => setPollErr(true))   // тик не удался — покажем в строке статуса (Live сам повторит через 4с)
     }
     tick()                       // сразу при включении Live — мгновенный отклик, не ждать 4с
     const id = setInterval(tick, 4000)
@@ -138,6 +141,14 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
     document.addEventListener('visibilitychange', onFocus)
     return () => { clearInterval(id); window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onFocus) }
   }, [live, accountId])
+
+  // «обновлено N с назад» должно ИДТИ вживую (иначе между опросами раз в 4с Live выглядит замершим).
+  // Лёгкий ре-рендер раз в секунду — только пока Live включён (в покое лишних рендеров нет).
+  useEffect(() => {
+    if (!live) return
+    const id = setInterval(() => setNowTick((n) => n + 1), 1000)
+    return () => clearInterval(id)
+  }, [live])
 
   // Подтягиваем кампании владельца → карта «имя кампании» → {тип, настроенные действия}
   useEffect(() => {
@@ -196,6 +207,10 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
     { key: 'today', label: 'Сегодня' }, { key: '7d', label: '7 дней' }, { key: '30d', label: '30 дней' }, { key: 'all', label: 'Всё' },
   ]
 
+  // Свежесть журнала для строки статуса Live: сколько секунд назад журнал реально обновился.
+  const secsAgo = lastPollAt != null ? Math.max(0, Math.round((Date.now() - lastPollAt) / 1000)) : null
+  const freshLabel = secsAgo == null ? '' : secsAgo < 2 ? 'только что' : secsAgo < 60 ? `${secsAgo} с назад` : `${Math.floor(secsAgo / 60)} мин назад`
+
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/45 backdrop-blur-sm animate-fade-in" onClick={onClose}>
       <div className="card w-full max-w-3xl max-h-[86vh] flex flex-col animate-scale-in overflow-hidden" onClick={(e) => e.stopPropagation()}>
@@ -229,6 +244,27 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
           </div>
         </div>
 
+        {/* Строка статуса Live/ошибки — видно, что опрос ИДЁТ и когда журнал обновлялся (§11.1). aria-live для скринридера */}
+        {(live || pollErr) && (
+          <div aria-live="polite" className="flex items-center gap-1.5 px-5 pt-2.5 shrink-0 text-[11.5px]">
+            {pollErr ? (
+              <span className="flex items-center gap-1.5 text-red-500 font-medium min-w-0">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Журнал не обновился — проверьте связь.</span>
+                {live
+                  ? <span className="text-subt font-normal shrink-0">Повторяем автоматически…</span>
+                  : <button onClick={load} className="shrink-0 underline underline-offset-2 hover:no-underline">Повторить</button>}
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-subt min-w-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shrink-0" />
+                <span className="truncate"><span className="text-red-500/90 font-semibold">Live</span> · обновлено <span className="tabular-nums">{freshLabel}</span></span>
+                <span className="text-subt/45 tabular-nums shrink-0">· опрос&nbsp;#{beat}</span>
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Фильтры по уровню */}
         {logs !== null && (logs.length > 0) && (
           <div className="flex items-center gap-1.5 px-5 pt-3 shrink-0 overflow-x-auto no-scrollbar">
@@ -261,10 +297,27 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
         <div className="flex-1 overflow-y-auto px-5 pb-5 pt-1 bg-black/[0.008]">
           {logs === null ? (
             <div className="py-16 text-center text-subt text-[13px]">Загрузка…</div>
+          ) : logs.length === 0 && pollErr ? (
+            /* Ошибка загрузки — с путём восстановления (кнопка «Повторить»), а не пустая тишина */
+            <div className="py-16 flex flex-col items-center text-center gap-3 max-w-sm mx-auto">
+              <div className="w-14 h-14 rounded-2xl bg-red-500/10 flex items-center justify-center"><AlertCircle className="w-6 h-6 text-red-500" /></div>
+              <div className="text-[13.5px] font-semibold text-ink/85">Не удалось загрузить журнал</div>
+              <div className="text-[12.5px] text-subt leading-relaxed">Проверьте соединение и попробуйте снова.</div>
+              <button onClick={load} className="mt-1 inline-flex items-center gap-1.5 h-9 px-4 rounded-xl text-[12.5px] font-semibold bg-brand text-white hover:bg-brand/90 transition-colors"><RefreshCw className="w-3.5 h-3.5" /> Повторить</button>
+            </div>
           ) : filtered.length === 0 ? (
-            <div className="py-16 flex flex-col items-center text-center gap-2.5">
+            <div className="py-16 flex flex-col items-center text-center gap-2.5 max-w-sm mx-auto">
               <div className="w-14 h-14 rounded-2xl bg-canvas flex items-center justify-center"><ScrollText className="w-6 h-6 text-subt" /></div>
-              <div className="text-[13px] text-subt">{scoped.length > 0 ? 'В этой категории записей нет' : 'Пока тихо — записей нет'}</div>
+              {scoped.length > 0 ? (
+                <div className="text-[13px] text-subt">В этой категории записей нет — смените фильтр выше.</div>
+              ) : logs.length > 0 ? (
+                <div className="text-[13px] text-subt">Нет записей за выбранный период — расширьте диапазон или включите «Подробно».</div>
+              ) : (
+                <>
+                  <div className="text-[13.5px] font-semibold text-ink/85">Пока нет событий</div>
+                  <div className="text-[12.5px] text-subt leading-relaxed">Журнал наполнится, когда бот проверит аккаунт. Запустите «Проверить сейчас» в Настройках или дождитесь авто-проверки{live ? ' — Live обновит список сам.' : '.'}</div>
+                </>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
