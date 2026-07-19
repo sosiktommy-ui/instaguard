@@ -435,10 +435,25 @@ export async function acceptFollowRequests(context, { limit = 10 } = {}) {
   const result = await page.evaluate(async (limit) => {
     const csrf = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || ''
     const headers = { 'x-ig-app-id': '936619743392459' }
-    async function getJson(url) {
-      try { const r = await fetch(url, { headers, credentials: 'include' }); if (!r.ok) return null; return await r.json() } catch { return null }
+    const sleep = (ms) => new Promise((res) => setTimeout(res, ms))
+    // Чтение списка заявок с ретраем транзиентных сбоев (пустой/500/сеть) — как у news/inbox:
+    // один блип не должен выглядеть как «заявок нет» (иначе принятые не приняли, а пользователь
+    // видит «0 ожидающих» и думает, что авто-приём сломан). Осмысленный ответ (в т.ч. пустой users)
+    // возвращаем сразу; null (не прочитали) — до 3 попыток, затем сигналим fetchFailed.
+    async function getPending() {
+      for (let i = 0; i < 3; i++) {
+        try {
+          const r = await fetch('/api/v1/friendships/pending/', { headers, credentials: 'include' })
+          if (r.ok) return await r.json()
+          if (r.status === 401 || r.status === 403) return { __unauth: true }   // сессия/куки — не ретраим
+        } catch { /* сеть — ретрай */ }
+        await sleep(1000 + i * 1500)
+      }
+      return null
     }
-    const pend = await getJson('/api/v1/friendships/pending/')
+    const pend = await getPending()
+    if (pend === null) return { pendingCount: 0, approved: [], errors: ['не удалось прочитать список заявок (friendships/pending не ответил)'], fetchFailed: true }
+    if (pend.__unauth) return { pendingCount: 0, approved: [], errors: ['сессия отклонена при чтении заявок (login_required)'], fetchFailed: true }
     const users = Array.isArray(pend?.users) ? pend.users : []
     const pendingCount = users.length
     const approved = []
@@ -456,9 +471,9 @@ export async function acceptFollowRequests(context, { limit = 10 } = {}) {
         else errors.push(`approve ${u.username || pk}: http ${r.status}`)
       } catch (e) { errors.push(`approve ${u.username || pk}: ${String(e).slice(0, 60)}`) }
       // человекоподобная пауза между подтверждениями
-      await new Promise((res) => setTimeout(res, 900 + Math.random() * 1800))
+      await sleep(900 + Math.random() * 1800)
     }
-    return { pendingCount, approved, errors }
+    return { pendingCount, approved, errors, fetchFailed: false }
   }, limit)
 
   return { ...result, storageState: await safeStorageState(context) }

@@ -721,6 +721,7 @@ export async function POST(req: NextRequest) {
       let notifReadError: string | null = null   // реальная причина сбоя чтения уведомлений (для прозрачности ручной проверки)
       const SESSION_DEAD = (m: string) => /login_required|сессия недейств|нужен повторный вход|checkpoint|подтвердите вход/i.test(String(m || ''))
       let selfFollows: { pk: string; username: string }[] = []
+      let acceptedFollows: { pk: string; username: string }[] = []   // §13.11 — принятые заявки (для мгновенного NEW_FOLLOWER)
       let selfLikes: { pk: string; username: string }[] = []
       let selfComments: { pk: string; user_pk: string; username: string; text: string; media_id: string }[] = []
       if (account.browserState) {
@@ -735,7 +736,16 @@ export async function POST(req: NextRequest) {
             try {
               const ar = await browserAcceptFollowRequests({ storageState: liveState as object, proxy: account.proxy ?? undefined, username: account.username, locale: account.locale ?? undefined, timezoneId: account.timezoneId ?? undefined }, ACCEPT_REQUESTS_LIMIT)
               if (ar.browserState) liveState = ar.browserState
-              if (ar.approved?.length) await prisma.log.create({ data: { accountId: account.id, level: 'SUCCESS', message: `Приняты заявки в подписчики: ${ar.approved.map((u) => '@' + u.username).join(', ')} (из ${ar.pendingCount} ожидавших)` } }).catch(() => null)
+              // Принятые заявки с известным ником — кандидаты в NEW_FOLLOWER этого же цикла (см. merge ниже).
+              // Пустой username пропускаем: без ника действие (директ/подписка-в-ответ) не выполнить,
+              // такой подписчик подхватится позже из self-events, когда IG отдаст его ник.
+              acceptedFollows = (ar.approved ?? []).filter((u) => u.username && u.username.trim())
+              acceptedFollows.forEach((a) => selfFollowedPks.add(String(a.pk)))   // приняты → точно followed_by (гейт)
+              const acceptFail = (ar.errors ?? []).join(' ')
+              if (ar.approved?.length) await prisma.log.create({ data: { accountId: account.id, level: 'SUCCESS', message: `Приняты заявки в подписчики: ${ar.approved.map((u) => '@' + (u.username || u.pk)).join(', ')} (из ${ar.pendingCount} ожидавших) — сработает триггер «Новая подписка».` } }).catch(() => null)
+              else if (ar.fetchFailed && SESSION_DEAD(acceptFail)) sessionDead = true   // сессия отклонена — пометим «Требует входа» ниже
+              else if (ar.fetchFailed) await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Не удалось прочитать заявки в подписчики: ${acceptFail} — повторим автоматически.` } }).catch(() => null)
+              else if (ar.errors?.length) await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: `Заявки в подписчики не подтверждены (ожидавших ${ar.pendingCount}): ${ar.errors.slice(0, 3).join('; ')}` } }).catch(() => null)
               else if (isManual) await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: `Заявок в подписчики нет (ожидающих: ${ar.pendingCount})` } }).catch(() => null)
             } catch (e: any) {
               const m = String(e?.message ?? e)
@@ -776,6 +786,17 @@ export async function POST(req: NextRequest) {
               notifReadError = m
               await prisma.log.create({ data: { accountId: account.id, level: 'WARN', message: isManual ? `Уведомления не прочитаны: ${m}` : 'Уведомления не прочитаны — временный сбой, повторим автоматически.' } }).catch(() => null)
             }
+          }
+          // §13.11 — ПРИНЯТЫЕ заявки → в selfFollows напрямую. КЛЮЧЕВОЕ: когда приватный аккаунт
+          // одобряет заявку, Instagram НЕ шлёт себе уведомление «X подписался» (подписался не он —
+          // одобрил заявку ТЫ) → такой подписчик НИКОГДА не появится в news/inbox как follow-событие
+          // и триггер «Новая подписка» по нему не сработал бы. Поэтому добавляем принятых напрямую
+          // (дедуп по pk с событиями). Делаем ПОСЛЕ чтения уведомлений и ВНЕ его try/catch — чтобы
+          // принятые сработали даже если news/inbox не прочитался. На базлайне (первый проход) их,
+          // как и всех, только зафиксирует снапшот (без залпа) — это ок.
+          if (acceptedFollows.length) {
+            const seen = new Set(selfFollows.map((f) => String(f.pk)))
+            for (const a of acceptedFollows) if (!seen.has(String(a.pk))) { selfFollows.push(a); seen.add(String(a.pk)) }
           }
         } else {
           skipBrowserSection = true
