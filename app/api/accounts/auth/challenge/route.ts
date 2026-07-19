@@ -26,14 +26,16 @@ export async function POST(req: NextRequest) {
     let proxyUrl: string | null = null
     let validProxyId: string | null = null
     let proxyCountry: string | null = null
+    let proxyTimezone: string | null = null   // PLAN-MASTER §7.1 D.4 — таймзона КОНКРЕТНОГО IP
     if (typeof proxyId === 'string' && proxyId) {
-      const p = await prisma.proxy.findFirst({ where: { id: proxyId, userId: user.id }, select: { id: true, url: true, country: true } })
-      if (p) { proxyUrl = p.url; validProxyId = p.id; proxyCountry = p.country }
+      const p = await prisma.proxy.findFirst({ where: { id: proxyId, userId: user.id }, select: { id: true, url: true, country: true, timezone: true } })
+      if (p) { proxyUrl = p.url; validProxyId = p.id; proxyCountry = p.country; proxyTimezone = p.timezone }
     }
     // Контекст /login/checkpoint резюмирует УЖЕ созданную на шаге /login страницу (тот же
     // отпечаток) — geo здесь нужен только чтобы записать locale/timezoneId в БД для будущих
     // действий (актуально, если у step-1 запроса не было proxyId и geo не сохранился).
-    const geo = localeForCountry(proxyCountry)
+    const countryGeo = localeForCountry(proxyCountry)
+    const geo = countryGeo ? { locale: countryGeo.locale, timezoneId: proxyTimezone || countryGeo.timezoneId } : null
 
     let validSection: string | null = null
     if (typeof sectionId === 'string' && sectionId) {

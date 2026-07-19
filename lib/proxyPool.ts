@@ -15,12 +15,12 @@ import { browserPickProxy } from '@/lib/browser/client'
  *  4. Непроверенные (status=unknown) проверяются вживую; узнанное здоровье сохраняется в БД.
  */
 export type PoolPick =
-  | { ok: true; url: string; id: string; flagged: boolean; country: string | null }
+  | { ok: true; url: string; id: string; flagged: boolean; country: string | null; timezone: string | null }
   | { ok: false; reason: 'no-capacity' | 'all-dead' }
 
 const MAX_CANDIDATES = 30
 
-type Cand = { id: string; url: string; status: string | null; flagged: boolean | null; igBlocked: boolean | null; country: string | null; load: number }
+type Cand = { id: string; url: string; status: string | null; flagged: boolean | null; igBlocked: boolean | null; country: string | null; timezone: string | null; load: number }
 
 // «Instagram выжег этот IP»: ТОЛЬКО явный сигнал про IP («change your IP … blacklist»).
 // НЕ ловим UserInvalidCredentials — это общий exception_name Instagram и для «аккаунт не
@@ -52,12 +52,12 @@ function pickRotating(list: Cand[]): Cand {
 export async function pickPoolProxy(userId: string, cap: number, excludeIds: string[] = []): Promise<PoolPick> {
   const pool = await prisma.proxy.findMany({
     where: { userId, kind: 'pool', ...(excludeIds.length ? { id: { notIn: excludeIds } } : {}) },
-    select: { id: true, url: true, status: true, flagged: true, igBlocked: true, country: true, _count: { select: { accounts: true } } },
+    select: { id: true, url: true, status: true, flagged: true, igBlocked: true, country: true, timezone: true, _count: { select: { accounts: true } } },
     orderBy: { createdAt: 'asc' },
   })
   const free: Cand[] = pool
     .filter((p) => p._count.accounts < cap)
-    .map((p) => ({ id: p.id, url: p.url, status: p.status, flagged: p.flagged, igBlocked: p.igBlocked, country: p.country, load: p._count.accounts }))
+    .map((p) => ({ id: p.id, url: p.url, status: p.status, flagged: p.flagged, igBlocked: p.igBlocked, country: p.country, timezone: p.timezone, load: p._count.accounts }))
   if (!free.length) return { ok: false, reason: 'no-capacity' }
 
   const notBurned = free.filter((p) => !p.igBlocked)
@@ -70,7 +70,7 @@ export async function pickPoolProxy(userId: string, cap: number, excludeIds: str
   // 1) Годный (не датацентр, не IG-бан) — сразу, с ротацией, без обращения к воркеру.
   if (aliveClean.length) {
     const p = pickRotating(aliveClean)
-    return { ok: true, url: p.url, id: p.id, flagged: false, country: p.country }
+    return { ok: true, url: p.url, id: p.id, flagged: false, country: p.country, timezone: p.timezone }
   }
 
   // 2) Непроверенные — live-проверка (воркер пропустит мёртвые), с сохранением здоровья.
@@ -82,24 +82,24 @@ export async function pickPoolProxy(userId: string, cap: number, excludeIds: str
       if (res.chosen) {
         const p = unknown.find((f) => f.url === res.chosen) ?? unknown[0]
         const chk = res.checked.find((c) => c.url === res.chosen)
-        return { ok: true, url: p.url, id: p.id, flagged: Boolean(res.flagged), country: chk?.country ?? p.country }
+        return { ok: true, url: p.url, id: p.id, flagged: Boolean(res.flagged), country: chk?.country ?? p.country, timezone: chk?.timezone ?? p.timezone }
       }
     } catch {
       const p = pickRotating(unknown)
-      return { ok: true, url: p.url, id: p.id, flagged: false, country: p.country }
+      return { ok: true, url: p.url, id: p.id, flagged: false, country: p.country, timezone: p.timezone }
     }
   }
 
   // 3) Только датацентр/VPN (не IG-бан) — с ротацией, честно flagged.
   if (aliveFlag.length) {
     const p = pickRotating(aliveFlag)
-    return { ok: true, url: p.url, id: p.id, flagged: true, country: p.country }
+    return { ok: true, url: p.url, id: p.id, flagged: true, country: p.country, timezone: p.timezone }
   }
 
   // 4) Остались только выжженные Instagram — последний шанс (вдруг IG снял бан); честно flagged.
   if (burned.length) {
     const p = pickRotating(burned)
-    return { ok: true, url: p.url, id: p.id, flagged: true, country: p.country }
+    return { ok: true, url: p.url, id: p.id, flagged: true, country: p.country, timezone: p.timezone }
   }
 
   return { ok: false, reason: 'all-dead' }
@@ -107,7 +107,7 @@ export async function pickPoolProxy(userId: string, cap: number, excludeIds: str
 
 // Сохранить в БД здоровье, узнанное воркером при live-подборе. Обновляем только по известным id.
 async function persistChecked(
-  checked: Array<{ url: string; ok: boolean; ip?: string; country?: string; datacenter?: boolean | null; vpn?: boolean | null }>,
+  checked: Array<{ url: string; ok: boolean; ip?: string; country?: string; timezone?: string | null; datacenter?: boolean | null; vpn?: boolean | null }>,
   idByUrl: Map<string, string>,
 ): Promise<void> {
   try {
@@ -118,7 +118,7 @@ async function persistChecked(
       return prisma.proxy.update({
         where: { id },
         data: c.ok
-          ? { status: 'alive', lastCheckedAt: new Date(), ip: c.ip ?? null, country: c.country ?? null, datacenter: c.datacenter ?? null, vpn: c.vpn ?? null, flagged }
+          ? { status: 'alive', lastCheckedAt: new Date(), ip: c.ip ?? null, country: c.country ?? null, timezone: c.timezone ?? null, datacenter: c.datacenter ?? null, vpn: c.vpn ?? null, flagged }
           : { status: 'dead', lastCheckedAt: new Date(), flagged: null },
       }).catch(() => null)
     }))

@@ -52,13 +52,13 @@ function proxyHostLabel(url: string | null): string {
 
 // Резолвим прокси ДО входа — пропуская мёртвые, предпочитая рабочие (см. lib/proxyPool).
 // excludeIds — прокси, которые уже пробовали в ЭТОЙ строке (ретрай на другом IP).
-async function resolveProxy(userId: string, allowNoProxy: boolean, cap: number, excludeIds: string[] = []): Promise<{ url: string | null; id: string | null; country: string | null; error?: string }> {
+async function resolveProxy(userId: string, allowNoProxy: boolean, cap: number, excludeIds: string[] = []): Promise<{ url: string | null; id: string | null; country: string | null; timezone: string | null; error?: string }> {
   const pick = await pickPoolProxy(userId, cap, excludeIds)
-  if (pick.ok) return { url: pick.url, id: pick.id, country: pick.country }
+  if (pick.ok) return { url: pick.url, id: pick.id, country: pick.country, timezone: pick.timezone }
   if (!allowNoProxy) {
-    return { url: null, id: null, country: null, error: pick.reason === 'all-dead' ? 'все свободные прокси в пуле не отвечают' : 'нет свободных прокси в пуле' }
+    return { url: null, id: null, country: null, timezone: null, error: pick.reason === 'all-dead' ? 'все свободные прокси в пуле не отвечают' : 'нет свободных прокси в пуле' }
   }
-  return { url: null, id: null, country: null }   // работа без прокси разрешена
+  return { url: null, id: null, country: null, timezone: null }   // работа без прокси разрешена
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -125,7 +125,9 @@ export async function POST(req: NextRequest) {
         if (px.error) { results.push({ line: i + 1, ok: false, reason: px.error }); break }
         if (px.id) triedProxyIds.push(px.id)
         // Гео отпечатка по стране прокси (plan.md §349) — известной страны нет → воркер берёт дефолт.
-        const geo = localeForCountry(px.country)
+        // §7.1 D.4 — таймзона КОНКРЕТНОГО IP (px.timezone) уточняет tz из countryGeo, locale не трогаем.
+        const countryGeo = localeForCountry(px.country)
+        const geo = countryGeo ? { locale: countryGeo.locale, timezoneId: px.timezone || countryGeo.timezoneId } : null
 
         try {
           let browserState: object | null = null

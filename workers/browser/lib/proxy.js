@@ -228,6 +228,9 @@ export async function checkProxyBrowser(getBrowser, raw) {
       ok: true,
       ip: d.ip || null,
       country: d?.location?.country || d?.country || null,
+      // PLAN-MASTER §7.1 D.4: таймзона КОНКРЕТНОГО IP (точнее общей таблицы «страна→tz» для
+      // крупных многочасовых стран — США/Россия/Бразилия/Индонезия и т.п.).
+      timezone: d?.location?.timezone || null,
       isp: d?.company?.name || d?.asn?.org || d?.asn?.descr || null,
       scheme,
       datacenter: d?.is_datacenter ?? null,

@@ -15,7 +15,7 @@ import { fingerprintSelfTest } from './lib/selftest.js'
 import { captchaConfigured } from './lib/captcha.js'
 import { warmupFeed } from './lib/human.js'
 
-const BUILD = '2026-07-19-browser-109-onetap-chooser'
+const BUILD = '2026-07-19-browser-110-proxy-timezone'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -355,7 +355,7 @@ app.post('/pick-proxy', async (req, res) => {
   try {
     for (const url of candidates) {
       const r = await runLimited(() => checkProxyBrowser(getBrowser, url))
-      checked.push({ url, ok: r.ok, ip: r.ip, country: r.country, datacenter: r.datacenter, vpn: r.vpn })
+      checked.push({ url, ok: r.ok, ip: r.ip, country: r.country, timezone: r.timezone, datacenter: r.datacenter, vpn: r.vpn })
       if (r.ok) {
         if (!(r.datacenter || r.vpn)) { chosenClean = url; break }   // чистый — сразу выходим
         if (!chosenDirty) chosenDirty = url                          // грязный — запомним, ищем чистый дальше

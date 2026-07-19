@@ -58,11 +58,12 @@ export async function POST(req: NextRequest) {
     let proxyUrl: string | null = manualProxy
     let proxyId: string | null = null
     let proxyCountry: string | null = null
+    let proxyTimezone: string | null = null   // PLAN-MASTER §7.1 D.4 — таймзона КОНКРЕТНОГО IP
     const needPool = proxyMode === 'auto' || (!manualProxy && !allowNoProxy)
 
     if (needPool) {
       const pick = await pickPoolProxy(user.id, cap)
-      if (pick.ok) { proxyUrl = pick.url; proxyId = pick.id; proxyCountry = pick.country }
+      if (pick.ok) { proxyUrl = pick.url; proxyId = pick.id; proxyCountry = pick.country; proxyTimezone = pick.timezone }
       else if (proxyMode === 'auto' || !allowNoProxy) {
         return NextResponse.json({
           error: pick.reason === 'all-dead'
@@ -75,12 +76,18 @@ export async function POST(req: NextRequest) {
       const p = found ?? await prisma.proxy.create({ data: { userId: user.id, url: manualProxy, kind: 'individual' } })
       proxyId = p.id
       proxyCountry = p.country
+      proxyTimezone = p.timezone
     }
     // Гео отпечатка (locale/timezoneId) по стране прокси — plan.md §349. Приоритет: (1) проверенная
     // страна прокси (`Proxy.country` из «Проверить IP»); (2) ФОЛБЭК — гео-хинт из САМОЙ строки прокси
     // (`…country-PL…`), когда прокси добавлен вручную и не проверен, иначе отпечаток дефолтит на en-US
     // поверх не-US IP (лишний сигнал). Оба пусты → geo=null → воркер берёт дефолт, как раньше (без регресса).
-    const geo = localeForCountry(proxyCountry) || localeFromProxyString(proxyUrl)
+    const countryGeo = localeForCountry(proxyCountry) || localeFromProxyString(proxyUrl)
+    // §7.1 D.4 — таймзона КОНКРЕТНОГО IP (ipapi.is `location.timezone`) точнее общей таблицы
+    // «страна→tz» для крупных многочасовых стран (США/Россия/Бразилия/Индонезия). Уточняем ТОЛЬКО
+    // timezoneId, locale берём из countryGeo как раньше (иначе без известной страны получим
+    // рассинхрон locale/tz — тот же антибан-сигнал, от которого весь §349 и делался).
+    const geo = countryGeo ? { locale: countryGeo.locale, timezoneId: proxyTimezone || countryGeo.timezoneId } : null
     // ──────────────────────────────────────────────────────────────────────────
 
     let browserState: object | null = null

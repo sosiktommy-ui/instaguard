@@ -120,6 +120,38 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-19 (26) (PLAN-MASTER §7.1 D.4: таймзона отпечатка из КОНКРЕТНОГО IP прокси, не из усреднённой таблицы «страна→tz»)
+
+⚠️ **Редеплой воркера** (build → `2026-07-19-browser-110-proxy-timezone`) + передеплой Next.js (миграция
+`20260719220000_proxy_timezone`, аддитивна). Продолжение `PLAN-MASTER.md` (следующий пункт §7.1 после D.3).
+Работал НЕ в `login.js`/`captcha.js`/`server.js` (там параллельная сессия — one-tap чекер выше), только
+`proxy.js`+`server.js /pick-proxy`+Next.js-слой — риска пересечения не было (BUILD-тег после их правки
+перечитан заново перед своим инкрементом, см. §0.5 протокол).
+
+- **Было:** `COUNTRY_LOCALE`/`localeForCountry` (`lib/browser/geo.ts`) даёт ОДНУ таймзону на всю страну —
+  для больших многочасовых стран (США, Россия, Бразилия, Индонезия) это грубое приближение: IP из
+  восточного региона получал ту же tz, что и IP с другого конца страны. `ipapi.is` (уже используется для
+  `country`/`datacenter`/`vpn` при проверке прокси) отдаёт и `location.timezone` — КОНКРЕТНУЮ таймзону
+  ЭТОГО IP, но поле нигде не читалось и не сохранялось.
+- **Фикс:** `workers/browser/lib/proxy.js checkProxyBrowser` — снимает `timezone: d?.location?.timezone`;
+  `server.js /pick-proxy` пробрасывает в `checked[]`. Новая колонка `Proxy.timezone` (миграция аддитивна).
+  `lib/proxyPool.ts` — `PoolPick`/`Cand`/все 4 ветки подбора (`aliveClean`/`unknown`-live-check/`aliveFlag`/
+  `burned`) + `persistChecked` несут `timezone` симметрично уже существующему `country`. Три call site,
+  где считается гео отпечатка (`accounts/auth/route.ts`, `.../auth/challenge/route.ts`,
+  `accounts/import/route.ts`) — теперь `const countryGeo = localeForCountry(...); const geo = countryGeo
+  ? { locale: countryGeo.locale, timezoneId: proxyTimezone || countryGeo.timezoneId } : null` — уточняем
+  ТОЛЬКО `timezoneId` точным значением IP, `locale` по-прежнему из страны (иначе при неизвестной стране
+  получили бы рассинхрон locale/tz — ровно тот антибан-сигнал, от которого весь §349/D.4 и делается).
+  Оба пусты (страна не распозналась) → `geo=null` → воркер берёт дефолт, как раньше (регресса нет).
+- **`lib/browser/client.ts`:** `BrowserProxyCheck`/`BrowserPickedProxy.checked[]` получили `timezone?`.
+
+Проверено: `node --check` (`proxy.js`/`server.js`) чист, воркер-тесты **35/35**, `npx prisma generate` ок,
+`tsc --noEmit` чист (кроме ожидаемо падающих паузных auth-файлов), **`next build` полностью чист** (все
+роуты собираются, включая новый `inspect-follow-requests` из предыдущей записи). ⚠️ **Живьём не проверено**
+— поле `timezone` заполнится на СЛЕДУЮЩЕЙ проверке прокси («Проверить IP»/«Проверить все» на вкладке
+«Прокси» или auto-подбор при следующем логине); у уже сохранённых прокси `timezone=null` до этого момента
+(не проблема — код трактует `null` как «уточнения нет», падает на `countryGeo.timezoneId`, как раньше).
+
 ### 2026-07-19 (25) (🔴 ВХОД: экран-ВЫБОР аккаунта (one-tap «Continue» / `__coig_login`) больше не тупик — попытка восстановить сессию БЕЗ пароля/капчи)
 
 ⚠️ **Редеплой воркера** (build → `2026-07-19-browser-109-onetap-chooser`). Только воркер (`login.js`),

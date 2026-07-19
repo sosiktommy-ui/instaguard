@@ -64,6 +64,9 @@ model Proxy {
   lastCheckedAt DateTime?
   ip            String?
   country       String?
+  timezone      String?                          // IANA-таймзона КОНКРЕТНОГО IP (ipapi.is location.timezone,
+                                                  // PLAN-MASTER §7.1 D.4) — точнее общей таблицы «страна→tz»
+                                                  // для крупных многочасовых стран (США/Россия/Бразилия/Индонезия)
   isp           String?
   scheme        String?                          // http | socks5 | socks4
   datacenter    Boolean?                         // флаги репутации от ipapi.is (как видит Instagram)

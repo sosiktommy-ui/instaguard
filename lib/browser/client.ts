@@ -166,6 +166,7 @@ export interface BrowserProxyCheck {
   ok: boolean
   ip?: string | null
   country?: string | null
+  timezone?: string | null   // PLAN-MASTER §7.1 D.4 — таймзона конкретного IP (ipapi.is location.timezone)
   isp?: string | null
   scheme?: string | null
   datacenter?: boolean | null
@@ -184,7 +185,7 @@ export function browserCheckProxy(proxy?: string) {
 export interface BrowserPickedProxy {
   chosen: string | null
   flagged: boolean
-  checked: Array<{ url: string; ok: boolean; ip?: string; country?: string; datacenter?: boolean | null; vpn?: boolean | null }>
+  checked: Array<{ url: string; ok: boolean; ip?: string; country?: string; timezone?: string | null; datacenter?: boolean | null; vpn?: boolean | null }>
 }
 
 /** Подобрать рабочий прокси из списка (первый чистый, иначе первый рабочий). */

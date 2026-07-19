@@ -974,7 +974,18 @@
   Проверено: `node --check` всех touched-файлов чист, `fingerprint('u',{chromeMajor:'133'})` даёт
   `Chrome/133.0.0.0` в UA (проверено runtime), без override — дефолт 130 (регресс исключён), воркер-
   тесты 35/35. Критерий: UA не расходится с движком — теперь ВСЕГДА, не только пока образ = 130.
-- [ ] D.4 tz по IP (не по стране) · `ipapi.is location.timezone` · Критерий: tz совпадает с geoIP.
+- [x] 2026-07-19 (build browser-110) D.4 tz по IP реализован · воркер `proxy.js checkProxyBrowser`
+  снимает `location.timezone` от ipapi.is (раньше отбрасывался — бралась только `country`);
+  `/pick-proxy` пробрасывает в `checked[]`. Миграция `Proxy.timezone` (аддитивно). `proxyPool.ts`
+  `PoolPick`/`Cand`/все 4 ветки подбора + `persistChecked` несут `timezone` симметрично `country`.
+  Все 3 call site (`accounts/auth`, `.../auth/challenge`, `accounts/import`) уточняют `timezoneId`
+  реальным tz IP, ЕСЛИ страна распознана (`countryGeo` не null) — locale по-прежнему из страны,
+  чтобы не получить рассинхрон locale/tz при неизвестной стране (ноль данных → geo=null, как раньше).
+  Критерий: для крупных многочасовых стран (США/Россия/Бразилия/Индонезия) tz теперь берётся с
+  КОНКРЕТНОГО IP, а не усреднённо по стране. Проверено: `node --check`+тесты 35/35 (воркер),
+  `tsc --noEmit` чист, `next build` чист (все роуты, включая новый `inspect-follow-requests`).
+  ⚠️ Живьём не проверено (нужна перепроверка прокси через «Проверить IP»/«Проверить все» — новое
+  поле заполнится на следующей проверке, старые записи `timezone=null` до этого момента).
 - [ ] D.5 Пул профилей 10–15, консистентных ОС/GPU · `fingerprint.js` · Тест: self-test каждого · Критерий: redCount=0.
 - [ ] D.6 Mac DPR=2 · Критерий: Retina-консистентность.
 - [x] 2026-07-19 D.7 Гео из строки прокси когда country пуст · `geo.ts localeFromProxyString` (хинты
