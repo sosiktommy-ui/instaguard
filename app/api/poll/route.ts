@@ -317,6 +317,20 @@ export async function POST(req: NextRequest) {
     },
   })
 
+  // Ручная проверка ОДНОГО аккаунта, а он НЕ ACTIVE (напр. «Требует входа»/на паузе) → findMany пуст,
+  // поллинг молча ничего не делал («нет логов вообще» — путало пользователя). Пишем ПОНЯТНУЮ причину
+  // в журнал аккаунта и возвращаем её в ответе, чтобы «Проверить сейчас» не выглядело «ничего не произошло».
+  if (accountId && accounts.length === 0) {
+    const acc = await prisma.instagramAccount.findFirst({ where: { id: accountId, ...scope }, select: { id: true, status: true } }).catch(() => null)
+    if (acc) {
+      const why = acc.status === 'CHALLENGE' ? 'аккаунт «Требует входа» — войдите заново (кнопка на карточке), проверка пропущена'
+        : acc.status === 'PAUSED' ? 'аккаунт на паузе (Instagram ограничил) — проверка пропущена'
+        : `аккаунт неактивен (${acc.status}) — проверка пропущена`
+      await prisma.log.create({ data: { accountId: acc.id, level: 'WARN', message: `Проверка не выполнена: ${why}.` } }).catch(() => null)
+      return NextResponse.json({ ok: true, summary: [], message: `Проверка не выполнена: ${why}.` })
+    }
+  }
+
   // Настройки владельцев: работа без прокси (защита от бана) + источник парсинга (plan.md §5).
   // «Черновые» (HELPER) вернулись как ОПЦИЯ (parsingSource='drafts'|'drafts_then_api') — по
   // умолчанию всё ещё 'api' (скрейпер-API), likeByDraft/storyByDraft/allowNoDrafts (действия
@@ -534,6 +548,7 @@ export async function POST(req: NextRequest) {
       targets: { pk: string; username: string }[],
       triggersForStream: typeof triggers,
       withGate: boolean,
+      actionState?: object,   // §4.8 — свежий liveState (сессия подтверждена детектом); фолбэк — account.browserState
     ): Promise<{ failed: Set<string>; blocked: 'CHALLENGE' | 'PAUSED' | null }> => {
       const failedPks = new Set<string>()
       const dispatched = new Set<string>()   // цели, по которым действие уже отправлено (не ретраим)
@@ -625,7 +640,12 @@ export async function POST(req: NextRequest) {
           }
 
           const job = {
-            browserState: account.browserState,
+            // §4.8 — берём СВЕЖИЙ actionState (liveState: перечитан из БД в начале цикла + дозрел на
+            // accept/self-events, сессия им подтверждена), а НЕ устаревший bulk-read `account.browserState`:
+            // если сессию перелогинили после bulk-чтения, действие иначе шло бы на старом (уже без sessionid)
+            // снапшоте → ложное «сессия истекла» → ложный статус «Требует входа». В dm-очереди воркер всё
+            // равно перечитывает свежий стейт под локом; для inline (ручная проверка) это и есть фикс.
+            browserState: actionState ?? account.browserState,
             engine: 'browser' as const, ownerUsername: account.username, accountId: account.id,
             locale: account.locale ?? undefined, timezoneId: account.timezoneId ?? undefined,
             triggerId: trigger.id, triggerName: trigger.name, triggerType: trigger.triggerType,
@@ -862,7 +882,7 @@ export async function POST(req: NextRequest) {
           // Подписчик уже подписан на нас — гейт не нужен
           const { failed, blocked } = await handleTargets(
             toProcess.map((f) => ({ pk: String(f.pk), username: f.username })),
-            followerTriggers, false,
+            followerTriggers, false, liveState,
           )
           // §2.3 — транзиентно-провалившиеся цели НЕ фиксируем «известными»: добьются в след. цикле.
           failed.forEach((pk) => knownPks.delete(pk))
@@ -904,7 +924,7 @@ export async function POST(req: NextRequest) {
           // Гейт: лайкнувший может быть не подписан → DM пропускается (лайк/подписка/сторис остаются)
           const { failed, blocked } = await handleTargets(
             process.map((l) => ({ pk: String(l.pk), username: l.username })),
-            likeTriggers, true,
+            likeTriggers, true, liveState,
           )
           failed.forEach((pk) => knownL.delete(pk))   // §2.3 — провалившиеся добьются в след. цикле
           if (blocked) sessionDead = true
@@ -944,7 +964,7 @@ export async function POST(req: NextRequest) {
         s.newStoryEvents = fresh.length
         const { failed, blocked } = await handleTargets(
           process.map((e) => ({ pk: String(e.user_pk), username: e.username })),
-          storyTriggers, true,
+          storyTriggers, true, liveState,
         )
         if (blocked) sessionDead = true
         // §2.3 — снапшот стори ключуется по pk СОБЫТИЯ, а цели — по user_pk; провалившиеся события
