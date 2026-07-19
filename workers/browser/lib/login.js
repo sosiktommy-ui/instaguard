@@ -591,6 +591,17 @@ export async function attemptLogin(context, { username, password, totpSecret, pr
   await humanType(userInput, username)
   await jitter(400, 900)
   await humanType(passInput, password)
+  // Self-heal пароля: humanType с редкой опечаткой+backspace в ОЧЕНЬ редком случае может оставить
+  // лишний символ (если backspace не применился к нужному элементу). Пароль критичен — сверяем
+  // фактическое значение поля и при расхождении перезаполняем начисто через fill (без опечаток).
+  // No-op в норме (~99.9%); закрывает ложный bad_password из-за сбоя ВВОДА (не самого пароля).
+  try {
+    const typed = await passInput.inputValue().catch(() => null)
+    if (typed !== null && typed !== password) {
+      await passInput.fill('').catch(() => {})
+      await passInput.fill(password).catch(() => {})
+    }
+  } catch { /* сверка не удалась — не критично, ниже обычный разбор исхода */ }
   await jitter(500, 1100)
 
   const submit = await firstVisible(page, SEL.loginSubmit, 5000)
