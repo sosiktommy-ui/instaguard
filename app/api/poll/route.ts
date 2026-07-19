@@ -829,12 +829,28 @@ export async function POST(req: NextRequest) {
           // подписчиков (иначе на новом аккаунте будет массовая рассылка → бан).
           const { fresh, process } = selectTargets(followers, knownPks, hadBaseline, (f) => String(f.pk), newCap)
 
+          // §13.11 — ПРИНЯТЫЕ ЗАЯВКИ обрабатываем СРАЗУ, даже на первом проходе (базлайне). Это НЕ
+          // существующие подписчики (для них базлайн = антиспам от массовой рассылки), а НОВОЕ входящее
+          // действие: мы сами нажали «Подтвердить» ЭТОТ цикл → человек только что стал подписчиком, и
+          // триггер «Новая подписка» по нему должен сработать немедленно. Иначе на ПЕРВОЙ проверке приём
+          // был бы «принято, но действий 0» (ровно жалоба пользователя: в логе «принят», а по факту ничего).
+          // Залп ограничен: приём ≤10/цикл (ACCEPT_REQUESTS_LIMIT) + дневные лимиты в handleTargets.
+          // Существующие подписчики из news/inbox по-прежнему уважают базлайн. Для не-приватных/без
+          // авто-приёма acceptedFollows пуст → toProcess === process (нулевое изменение поведения).
+          const acceptedPkSet = new Set(acceptedFollows.map((a) => String(a.pk)))
+          const inProcess = new Set(process.map((p) => String(p.pk)))
+          const forceAccepted = followers.filter((f) => acceptedPkSet.has(String(f.pk)) && !inProcess.has(String(f.pk)))
+          const toProcess = [...process, ...forceAccepted]
+
           if (isManual) {
+            const acc = forceAccepted.length ? ` + ${forceAccepted.length} принятых заявок (сработают сразу)` : ''
             const msg = !hadBaseline
-              ? `Первый проход (базлайн): записано ${followers.length} подписок, действий 0 — новые ловятся со следующей проверки. Чтобы сработать на текущих — нажмите «Сбросить».`
+              ? (forceAccepted.length
+                  ? `Первый проход (базлайн): записано ${followers.length}, обрабатываю ${forceAccepted.length} принятых заявок — по ним триггер сработает сразу; остальные новые — со следующей проверки.`
+                  : `Первый проход (базлайн): записано ${followers.length} подписок, действий 0 — новые ловятся со следующей проверки. Чтобы сработать на текущих — нажмите «Сбросить».`)
               : fresh.length === 0
                 ? `Новых подписок нет (в уведомлениях ${followers.length}, все уже обработаны).`
-                : `Новых подписок: ${fresh.length}, обрабатываю ${process.length}.`
+                : `Новых подписок: ${fresh.length}, обрабатываю ${process.length}${acc}.`
             await prisma.log.create({ data: { accountId: account.id, level: 'INFO', message: msg } }).catch(() => null)
           }
 
@@ -843,7 +859,7 @@ export async function POST(req: NextRequest) {
 
           // Подписчик уже подписан на нас — гейт не нужен
           const { failed, blocked } = await handleTargets(
-            process.map((f) => ({ pk: String(f.pk), username: f.username })),
+            toProcess.map((f) => ({ pk: String(f.pk), username: f.username })),
             followerTriggers, false,
           )
           // §2.3 — транзиентно-провалившиеся цели НЕ фиксируем «известными»: добьются в след. цикле.
@@ -858,6 +874,10 @@ export async function POST(req: NextRequest) {
             let gained = 0
             knownPks.forEach((pk) => { if (!prevKnownForCount.has(pk)) gained++ })
             if (gained > 0) followersGained += gained
+          } else if (forceAccepted.length) {
+            // На базлайне обычных подписчиков не считаем (там лишь фиксируется база), но ПРИНЯТЫЕ
+            // заявки — реальные новые подписчики этого цикла → учитываем их в приросте.
+            followersGained += forceAccepted.length
           }
 
           // Снапшот сохраняем ПОСЛЕ действий (без провалившихся) — иначе таймаут визита терял цель.
