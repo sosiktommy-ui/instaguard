@@ -4,7 +4,7 @@ import { browserLogin, browserLoginByCookies } from '@/lib/browser/client'
 import { getCurrentUser } from '@/lib/auth'
 import { pickPoolProxy, isInstagramBlacklist, isAccountNotFound, markProxyBlocked } from '@/lib/proxyPool'
 import { persistInstagramAccount } from '@/lib/accountPersist'
-import { localeForCountry } from '@/lib/browser/geo'
+import { localeForCountry, localeFromProxyString } from '@/lib/browser/geo'
 
 // Достать логин/пароль/2FA/почту из мобильной Android-сессии («логин:пароль[:2fa]|UA|…||почта:пароль»).
 // Нужно для ФОЛБЭКА куки→пароль: если вставленная сессия отклонена Instagram, пробуем войти
@@ -76,10 +76,11 @@ export async function POST(req: NextRequest) {
       proxyId = p.id
       proxyCountry = p.country
     }
-    // Гео отпечатка (locale/timezoneId) по стране прокси — plan.md §349. Страна прокси не
-    // известна (ручной прокси без проверки/пул без сохранённой страны) → geo=null → воркер
-    // сам возьмёт дефолт (en-US/America/New_York), как и раньше — регрессии нет.
-    const geo = localeForCountry(proxyCountry)
+    // Гео отпечатка (locale/timezoneId) по стране прокси — plan.md §349. Приоритет: (1) проверенная
+    // страна прокси (`Proxy.country` из «Проверить IP»); (2) ФОЛБЭК — гео-хинт из САМОЙ строки прокси
+    // (`…country-PL…`), когда прокси добавлен вручную и не проверен, иначе отпечаток дефолтит на en-US
+    // поверх не-US IP (лишний сигнал). Оба пусты → geo=null → воркер берёт дефолт, как раньше (без регресса).
+    const geo = localeForCountry(proxyCountry) || localeFromProxyString(proxyUrl)
     // ──────────────────────────────────────────────────────────────────────────
 
     let browserState: object | null = null

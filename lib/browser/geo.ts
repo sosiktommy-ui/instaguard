@@ -51,3 +51,29 @@ export function localeForCountry(country: string | null | undefined): { locale: 
   if (!country) return null
   return COUNTRY_LOCALE[country.trim().toLowerCase()] ?? null
 }
+
+// ISO 3166-1 alpha-2 → ключ COUNTRY_LOCALE (полное имя). Только страны, которые есть в COUNTRY_LOCALE.
+const ISO_TO_COUNTRY: Record<string, string> = {
+  us: 'united states', gb: 'united kingdom', uk: 'united kingdom', ca: 'canada', pl: 'poland',
+  de: 'germany', fr: 'france', nl: 'netherlands', es: 'spain', it: 'italy', pt: 'portugal',
+  ua: 'ukraine', ru: 'russia', ro: 'romania', cz: 'czechia', se: 'sweden', tr: 'turkey',
+  id: 'indonesia', br: 'brazil', ph: 'philippines', in: 'india', vn: 'vietnam', th: 'thailand',
+  my: 'malaysia', mx: 'mexico', ar: 'argentina', co: 'colombia', jp: 'japan', kr: 'south korea',
+  au: 'australia', ae: 'united arab emirates', sa: 'saudi arabia', eg: 'egypt', ng: 'nigeria', za: 'south africa',
+}
+
+/**
+ * Гео-локаль/таймзона из САМОЙ СТРОКИ прокси, если провайдер зашил в неё гео-хинт
+ * (напр. rp.proxxxymiron.cc: `…_country-PL_city-warsaw`). Нужно как ФОЛБЭК, когда `Proxy.country`
+ * ещё не заполнен (прокси добавлен вручную и не проверен «Проверить IP») — иначе отпечаток дефолтит
+ * на en-US поверх не-US IP (лишний антибан-сигнал: браузер «американский», а exit-IP — нет).
+ * Распознаём ТОЛЬКО явные гео-хинты `country-XX`/`cc-XX`/`region-XX`/`geo-XX` (XX — ISO-код), чтобы
+ * не ловить ложные совпадения из случайных подстрок хоста/пароля. Не нашли → null (дефолт как раньше).
+ */
+export function localeFromProxyString(proxy: string | null | undefined): { locale: string; timezoneId: string } | null {
+  if (!proxy || typeof proxy !== 'string') return null
+  const m = proxy.toLowerCase().match(/(?:country|region|geo|cc)[-_=]([a-z]{2})(?![a-z])/)
+  if (!m) return null
+  const name = ISO_TO_COUNTRY[m[1]]
+  return name ? (COUNTRY_LOCALE[name] ?? null) : null
+}
