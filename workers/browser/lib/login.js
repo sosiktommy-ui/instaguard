@@ -455,30 +455,11 @@ export async function dismissInterstitials(page) {
 // Извлечь username залогиненного аккаунта (для сохранения записи). ТОЛЬКО чтение DOM/навигация
 // живым браузером — ни одного сетевого запроса от нас (проектное правило: только эмуль, никаких
 // прямых API-вызовов, даже изнутри залогиненного контекста — легаси-API уже банил аккаунты).
-export async function extractUsername(page) {
+// Один снимок трёх способов чтения ника (без ожидания) — вызывается ПОВТОРНО из extractUsername,
+// пока SPA не дорисуется (см. комментарий там). Возвращает username либо null.
+async function readUsernameSnapshot(page) {
   // 1) страница редактирования профиля стабильно содержит поле username
   try {
-    await page.goto('https://www.instagram.com/accounts/edit/', { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await jitter(800, 1600)
-    // На этой странице может выскочить СВОЙ интерстишл (не только на главной) — дожимаем перед чтением.
-    await dismissInterstitials(page).catch(() => {})
-    // Иногда вместо редактирования подсовывается /accounts/suspended/?next=... — см. комментарий
-    // у SEL.suspendedContinue: жмём «Continue»/«Это я» и ждём редиректа обратно на next=.
-    if (/\/accounts\/suspended/.test(page.url())) {
-      const clicked = await clickByText(page, SEL.suspendedContinue, { timeout: 3000 })
-      if (clicked) {
-        await page.waitForTimeout(1800)
-        await dismissInterstitials(page).catch(() => {})
-      }
-    }
-    // «Continue» иногда ведёт не сразу на next=, а на простую image-капчу (цифры на картинке).
-    // НЕ пытаемся решить её ЗДЕСЬ (см. живой провал 2026-07-16): auto-solve через 2captcha
-    // может занять до ~90с (ожидание ответа API) — на КРИТИЧНОМ пути обычного логина
-    // (attemptLogin/loginByState вызывают extractUsername сразу после успешного входа) это
-    // риск раздуть общий запрос за клиентский таймаут («Ошибка сети» вместо честного успеха).
-    // extractUsername здесь просто НЕ найдёт username и вернёт null — вызывающий код (attemptLogin)
-    // и так фолбэчит на переданный логин; полноценный auto-solve + ручной ввод человеком — только
-    // в rereadUsername ниже (там уже есть UI-спиннер, рассчитанный именно на такое ожидание).
     const inp = page.locator('input[name="username"], input#pepUsername, input[maxlength="30"]').first()
     if (await inp.isVisible().catch(() => false)) {
       const v = (await inp.inputValue().catch(() => '')).trim()
@@ -510,6 +491,46 @@ export async function extractUsername(page) {
       return null
     })
     if (u) return u.replace(/^@/, '').toLowerCase()
+  } catch {}
+  return null
+}
+
+export async function extractUsername(page) {
+  try {
+    await page.goto('https://www.instagram.com/accounts/edit/', { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await jitter(800, 1600)
+    // На этой странице может выскочить СВОЙ интерстишл (не только на главной) — дожимаем перед чтением.
+    await dismissInterstitials(page).catch(() => {})
+    // Иногда вместо редактирования подсовывается /accounts/suspended/?next=... — см. комментарий
+    // у SEL.suspendedContinue: жмём «Continue»/«Это я» и ждём редиректа обратно на next=.
+    if (/\/accounts\/suspended/.test(page.url())) {
+      const clicked = await clickByText(page, SEL.suspendedContinue, { timeout: 3000 })
+      if (clicked) {
+        await page.waitForTimeout(1800)
+        await dismissInterstitials(page).catch(() => {})
+      }
+    }
+    // «Continue» иногда ведёт не сразу на next=, а на простую image-капчу (цифры на картинке).
+    // НЕ пытаемся решить её ЗДЕСЬ (см. живой провал 2026-07-16): auto-solve через 2captcha
+    // может занять до ~90с (ожидание ответа API) — на КРИТИЧНОМ пути обычного логина
+    // (attemptLogin/loginByState вызывают extractUsername сразу после успешного входа) это
+    // риск раздуть общий запрос за клиентский таймаут («Ошибка сети» вместо честного успеха).
+    // extractUsername здесь просто НЕ найдёт username и вернёт null — вызывающий код (attemptLogin)
+    // и так фолбэчит на переданный логин; полноценный auto-solve + ручной ввод человеком — только
+    // в rereadUsername ниже (там уже есть UI-спиннер, рассчитанный именно на такое ожидание).
+    //
+    // Живой провал (2026-07-19): `document.readyState==='complete'`, 0 форм/инпутов, видимый текст
+    // страницы — ОДНО слово «Messages» (только скелет навигации отрисован, SPA-дерево профиля ещё
+    // пустое). Раньше здесь был ОДИН снимок сразу после фиксированной паузы 0.8–1.6с — на холодном
+    // воркере/медленном прокси React не успевает дорисовать форму/навигацию за это время, и ник
+    // ложно считался нечитаемым. Теперь опрашиваем ВСЕ три способа (readUsernameSnapshot) до ~9с
+    // (как поиск формы входа, §P1.1 PLAN-MASTER.md) — не гадаем с одним снимком.
+    const deadline = Date.now() + 9000
+    while (Date.now() < deadline) {
+      const u = await readUsernameSnapshot(page)
+      if (u) return u
+      await page.waitForTimeout(500)
+    }
   } catch {}
   return null
 }
