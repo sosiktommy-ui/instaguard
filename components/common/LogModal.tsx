@@ -107,6 +107,7 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
   const [lastPollAt, setLastPollAt] = useState<number | null>(null)  // когда журнал реально обновился (для «обновлено N с назад»)
   const [pollErr, setPollErr] = useState(false)                       // последний опрос журнала не удался — показать, не молчать
   const [, setNowTick] = useState(0)                                  // ре-рендер раз в секунду → «N с назад» идёт вживую при Live
+  const [checking, setChecking] = useState(false)                     // «Проверить» — ручной запуск проверки этого аккаунта прямо из журнала
   // Кампания → {тип триггера, настроенные действия}: чтобы даже у старых логов
   // (без «· тип:»/«· сделано:») слева показывать ТИП, а справа — реальные ДЕЙСТВИЯ.
   const [campMeta, setCampMeta] = useState<Record<string, { type?: string; actions: string[] }>>({})
@@ -121,6 +122,19 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
   }
 
   useEffect(() => { load() }, [accountId])
+
+  // «Проверить» ПРЯМО ИЗ ЖУРНАЛА: запускает ручную проверку ЭТОГО аккаунта (isManual — игнорирует
+  // интервал/тихие часы, действия сразу) и включает Live, чтобы результат (принятые заявки,
+  // сработавшие триггеры, директы) появился в этом же окне ВЖИВУЮ — не нужно уходить в Настройки.
+  // Раньше Live лишь обновлял журнал, но запустить активность из него было нельзя → «Live не работает».
+  const runCheck = () => {
+    if (checking) return
+    setChecking(true)
+    setLive(true)   // авто-Live: промежуточные записи и итог появятся сами (poll может идти десятки секунд)
+    fetch('/api/poll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accountId, manual: true }) })
+      .catch(() => {})
+      .finally(() => { setChecking(false); load() })
+  }
 
   // «● Live» — тихо (без спиннера) перечитываем журнал каждые 4с, чтобы наблюдать за
   // действиями бота в реальном времени. Выключается тумблером или закрытием окна.
@@ -226,6 +240,12 @@ export function LogModal({ title, subtitle, accountId, matchText, onClose }: {
             </div>
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            <button onClick={runCheck} disabled={checking} title="Проверить этот аккаунт сейчас: принять заявки, поймать новых подписчиков/комменты, выполнить кампании. Результат появится здесь вживую (Live включится сам)."
+              className={cn('flex items-center gap-1.5 h-9 px-2.5 rounded-xl text-[12px] font-semibold transition-colors',
+                checking ? 'bg-brand/10 text-brand cursor-wait' : 'bg-brand text-white hover:bg-brand/90')}>
+              <RefreshCw className={cn('w-3.5 h-3.5', checking && 'animate-spin')} />
+              {checking ? 'Проверяю…' : 'Проверить'}
+            </button>
             <button onClick={() => setDetails((v) => !v)} title="Подробно — показывать технические/диагностические записи (по умолчанию скрыты)"
               className={cn('h-9 px-2.5 rounded-xl text-[12px] font-semibold transition-colors',
                 details ? 'bg-brand/12 text-brand' : 'text-subt hover:text-ink hover:bg-black/[0.04]')}>
