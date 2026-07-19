@@ -120,6 +120,20 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-19 (9) (PLAN-MASTER D.1: UA-CH platformVersion под ОС — убран рассинхрон Linux-версии ядра при platform=Windows)
+
+⚠️ **Редеплой воркера** (build → `2026-07-19-browser-97-uach-platformversion`). Анти-детект: `getHighEntropyValues`
+раньше оверрайдил ТОЛЬКО `platform` → `platformVersion` возвращал реальную версию ядра Linux-хоста при
+platform="Windows"/"macOS" = железобетонный бот-сигнал (вклад в недоверие IG → капча).
+
+- **`fingerprint.js`:** новое поле `uaPlatformVersion` (Win «10.0.0» консистентно с UA «Windows NT 10.0»;
+  Mac «14.5.0» — как реальный Chrome-флот при frozen-UA «10_15_7»).
+- **`browser.js`:** `getHighEntropyValues` теперь пинит `platformVersion` + `architecture:'x86'`/`bitness:'64'`/
+  `model:''`/`wow64:false` под ОС. `uaFullVersion`/`fullVersionList` не трогаем (реальный Chromium ~130 = UA Chrome/130).
+
+`node --check` + воркер-тесты 35/35. ⚠️ **ЖИВОЙ ТЕСТ:** `POST /selftest/fingerprint` через прокси → `redCount` должен
+остаться 0 (проверка БЕЗ риска для аккаунта — бьёт по нейтральному сайту, не по IG).
+
 ### 2026-07-19 (8) (PLAN-MASTER P1.2/C.1: self-heal пароля + клик галочки на боевой curveMoveTo)
 
 ⚠️ **Редеплой воркера** (build → `2026-07-19-browser-96-checkbox-curvemove`). Два безопасных пункта плана:

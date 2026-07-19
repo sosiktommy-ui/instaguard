@@ -70,6 +70,11 @@ export function fingerprint(username, override = {}) {
     // Консистентный с ОС набор для маскировки (browser.js применяет через initScript + заголовки).
     platform: p.platform,
     uaPlatform: p.uaPlatform,
+    // UA-CH high-entropy platformVersion под ОС (иначе протекает версия ядра Linux-хоста при
+    // platform="Windows"/"macOS" — рассинхрон = бот-сигнал, PLAN-IDEAL [D2]/PLAN-MASTER D.1).
+    // Windows: "10.0.0" (Win10, консистентно с UA "Windows NT 10.0"); macOS: реальные Chrome шлют
+    // современную версию при frozen-UA "10_15_7" — берём "14.5.0" (как реальный флот).
+    uaPlatformVersion: p.uaPlatform === 'Windows' ? '10.0.0' : '14.5.0',
     glVendor: p.glVendor,
     glRenderer: p.glRenderer,
     hardwareConcurrency: hw.cores,

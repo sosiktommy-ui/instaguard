@@ -110,7 +110,18 @@ export async function newAccountContext(opts) {
       if (uad) {
         def(uad, 'platform', fp.uaPlatform)
         const orig = uad.getHighEntropyValues && uad.getHighEntropyValues.bind(uad)
-        if (orig) uad.getHighEntropyValues = (hints) => orig(hints).then((v) => Object.assign({}, v, { platform: fp.uaPlatform }))
+        // Раньше оверрайдили ТОЛЬКО platform → platformVersion возвращался реальный (версия ядра Linux
+        // хоста) при platform="Windows" = железобетонный бот-сигнал. Теперь пиним и platformVersion, и
+        // architecture/bitness/model под заявленную ОС. uaFullVersion/fullVersionList не трогаем —
+        // реальный Chromium в образе ~130 совпадает с UA (Chrome/130). PLAN-MASTER D.1.
+        if (orig) uad.getHighEntropyValues = (hints) => orig(hints).then((v) => Object.assign({}, v, {
+          platform: fp.uaPlatform,
+          platformVersion: fp.uaPlatformVersion,
+          architecture: 'x86',
+          bitness: '64',
+          model: '',
+          wow64: false,
+        }))
       }
     } catch {}
     // WebGL UNMASKED vendor/renderer → правдоподобный GPU вместо SwiftShader (§2.1 [D1]).

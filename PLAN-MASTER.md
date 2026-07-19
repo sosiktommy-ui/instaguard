@@ -344,8 +344,8 @@
   (Windows, не Linux), WebRTC не течёт (JS-редакция ICE), canvas/audio-шум per-account, стабильный отпечаток
   на аккаунт, гео-локаль под страну прокси.
 ### 7.1 Остаточные сигналы (из глубокого аудита — доделать, проверять self-test через прокси)
-- [ ] **UA-CH `platformVersion` протекает как Linux-версия** при `platform="Windows"` (`browser.js:112-113`
-  оверрайдит только `platform`) — закрепить `platformVersion` (Win «15.0.0») + `architecture`/`bitness`.
+- [x] 2026-07-19 (build-97) **UA-CH `platformVersion` под ОС** — закреплён (Win «10.0.0»/Mac «14.5.0») +
+  architecture/bitness/model/wow64 в `getHighEntropyValues`. ⚠️ подтвердить `/selftest/fingerprint` redCount=0.
 - [ ] **`sec-ch-ua` brand `"Chromium"` вместо `"Google Chrome"`** — по возможности подделать (LOW).
 - [ ] **[D3] UA прибит к Chrome/130** — вычислять мажор из реального `chromium.version()`, не хардкодить.
 - [ ] **[D5] tz по стране, а не по IP** — брать tz из `ipapi.is location.timezone` конкретного IP.
@@ -783,7 +783,10 @@
 ### Связки (§4) — тест каждой (детально в §13.2/VIII.9)
 
 ## VIII.4 АНТИ-ДЕТЕКТ — под-задачи (§7)
-- [ ] D.1 `platformVersion` под ОС (не Linux) · `browser.js:112-113` в `getHighEntropyValues` · Тест: self-test · Критерий: UA-CH консистентен ОС.
+- [~] 2026-07-19 (build browser-97) D.1 `platformVersion` под ОС · `fingerprint.js uaPlatformVersion`
+  (Win «10.0.0» / Mac «14.5.0») + `browser.js getHighEntropyValues` пинит platformVersion/architecture(x86)/
+  bitness(64)/model/wow64. Раньше протекала версия ядра Linux при platform=Windows. node --check + тесты 35/35.
+  ⚠️ ЖИВОЙ ТЕСТ: `POST /selftest/fingerprint` через прокси → redCount=0 (без риска для аккаунта).
 - [ ] D.2 `sec-ch-ua` brand «Google Chrome» · по возможности · Критерий: не «Chromium».
 - [ ] D.3 UA-версия из `chromium.version()` · `fingerprint.js` · Критерий: UA не расходится с движком.
 - [ ] D.4 tz по IP (не по стране) · `ipapi.is location.timezone` · Критерий: tz совпадает с geoIP.
