@@ -261,11 +261,12 @@ export function browserAcceptFollowRequests(ctx: Ctx, limit = 10) {
 export interface DiagnoseActionsResult {
   followers: string[]
   opened: boolean
+  followerCount?: number | null
   results: { username: string; follow?: string; like?: string; story?: string; dm?: string }[]
   browserState?: object
 }
-export function browserDiagnoseActions(ctx: Ctx, limit = 3) {
-  return browserFetch<DiagnoseActionsResult>('/diagnose-actions', { ...ctx, limit }, VISIT_TIMEOUT_MS)
+export function browserDiagnoseActions(ctx: Ctx, limit = 3, usernames?: string[]) {
+  return browserFetch<DiagnoseActionsResult>('/diagnose-actions', { ...ctx, limit, usernames }, VISIT_TIMEOUT_MS)
 }
 
 // ── Парсинг черновыми (Фаза 3, plan.md §4.4/§5). Формы = lib/scraper/hiker.ts, чтобы

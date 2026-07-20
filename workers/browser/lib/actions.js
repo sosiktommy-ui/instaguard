@@ -633,60 +633,79 @@ export async function acceptFollowRequests(context, { limit = 10 } = {}) {
 // директ (композер открывается / личка закрыта / блип). НИКАКИХ API-вызовов — только DOM (ADR-002).
 const dshort = (e) => String((e && e.message) || e || '').slice(0, 70)
 
-// Открыть СВОЙ профиль → модалку «Читачі»/Followers → собрать ники подписчиков (до limit).
-export async function getOwnFollowers(context, { ownUsername, limit = 10 } = {}) {
+// Открыть СВОЙ профиль → прочитать РЕАЛЬНОЕ число подписчиков (шапка) + (резерв) собрать ники из
+// модалки «Читачі». followerCount возвращаем ВСЕГДА (чинит «врущий» кумулятивный счётчик), список —
+// только если needList (когда ники из БД не переданы).
+export async function getOwnFollowers(context, { ownUsername, limit = 10, needList = true } = {}) {
   await requireSession(context)
   const uname = String(ownUsername || '').replace(/^@/, '').trim().toLowerCase()
   const page = await context.newPage()
   const collected = new Set()
   let opened = false
+  let followerCount = null
   try {
     await gotoResilient(page, `https://www.instagram.com/${uname}/`, { timeout: 35000, retries: 2, backoffMs: [2500, 6000] })
     await jitter(1800, 3000)
-    // Ссылка «Читачі»/Followers — сперва по href (язык-независимо), затем по тексту (мультиязычно).
-    try {
-      const link = page.locator(`a[href="/${uname}/followers/"], a[href$="/followers/"]`).first()
-      if (await link.isVisible().catch(() => false)) { await link.click({ timeout: 5000 }).catch(() => {}); opened = true }
-    } catch { /* href-ссылки нет — пробуем текст */ }
-    if (!opened) {
-      opened = await clickByText(page, ['Followers', 'followers', 'Читачі', 'читачів', 'Подписчики', 'подписчиков', 'Seguidores', 'Pengikut', 'Takipçi'], { timeout: 4000 }).catch(() => false)
-    }
-    await jitter(2200, 3600)   // ждём подгрузку модалки
-    // Скрейп ников из модалки; список виртуализован → немного скроллим, добираем.
-    for (let s = 0; s < 8 && collected.size < limit; s++) {
-      const names = await page.evaluate(() => {
-        const dlg = document.querySelector('div[role="dialog"]')
-        if (!dlg) return []
-        const RESERVED = new Set(['p', 'reel', 'reels', 'explore', 'accounts', 'direct', 'stories', 'about', ''])
-        const out = []
-        for (const a of dlg.querySelectorAll('a[href^="/"]')) {
-          const m = (a.getAttribute('href') || '').match(/^\/([A-Za-z0-9._]+)\/$/)
-          if (m && !RESERVED.has(m[1])) out.push(m[1])
-        }
-        return out
-      }).catch(() => [])
-      for (const n of names) { if (n && n.toLowerCase() !== uname) collected.add(n) }
-      if (collected.size >= limit) break
-      await page.evaluate(() => {
-        const dlg = document.querySelector('div[role="dialog"]')
-        if (!dlg) return
-        const sc = dlg.querySelector('div[style*="overflow"]') || dlg.querySelector('ul')?.parentElement || dlg
-        if (sc) sc.scrollTop = sc.scrollHeight
-      }).catch(() => {})
-      await jitter(1200, 2200)
+    // Реальное число подписчиков — из ссылки «Читачі N» в шапке (exact в title у span, иначе текст).
+    followerCount = await page.evaluate((u) => {
+      const link = document.querySelector(`a[href="/${u}/followers/"]`) || document.querySelector('a[href$="/followers/"]')
+      if (!link) return null
+      const titled = link.querySelector('span[title]')
+      const raw = (titled && titled.getAttribute('title')) || link.textContent || ''
+      const digits = raw.replace(/[^\d]/g, '')
+      return digits ? Number(digits) : null
+    }, uname).catch(() => null)
+
+    if (needList) {
+      try {
+        const link = page.locator(`a[href="/${uname}/followers/"], a[href$="/followers/"]`).first()
+        if (await link.isVisible().catch(() => false)) { await link.click({ timeout: 5000 }).catch(() => {}); opened = true }
+      } catch { /* href-ссылки нет — пробуем текст */ }
+      if (!opened) {
+        opened = await clickByText(page, ['Followers', 'followers', 'Читачі', 'читачів', 'Подписчики', 'подписчиков', 'Seguidores', 'Pengikut', 'Takipçi'], { timeout: 4000 }).catch(() => false)
+      }
+      await jitter(2200, 3600)   // ждём подгрузку модалки
+      for (let s = 0; s < 8 && collected.size < limit; s++) {
+        const names = await page.evaluate(() => {
+          const dlg = document.querySelector('div[role="dialog"]')
+          if (!dlg) return []
+          const RESERVED = new Set(['p', 'reel', 'reels', 'explore', 'accounts', 'direct', 'stories', 'about', ''])
+          const out = []
+          for (const a of dlg.querySelectorAll('a[href^="/"]')) {
+            const m = (a.getAttribute('href') || '').match(/^\/([A-Za-z0-9._]+)\/$/)
+            if (m && !RESERVED.has(m[1])) out.push(m[1])
+          }
+          return out
+        }).catch(() => [])
+        for (const n of names) { if (n && n.toLowerCase() !== uname) collected.add(n) }
+        if (collected.size >= limit) break
+        await page.evaluate(() => {
+          const dlg = document.querySelector('div[role="dialog"]')
+          if (!dlg) return
+          const sc = dlg.querySelector('div[style*="overflow"]') || (dlg.querySelector('ul') && dlg.querySelector('ul').parentElement) || dlg
+          if (sc) sc.scrollTop = sc.scrollHeight
+        }).catch(() => {})
+        await jitter(1200, 2200)
+      }
     }
   } catch (e) {
-    // навигация/модалка не удалась — вернём, что успели (+ opened=false → в UI «список не открылся»)
+    // навигация/модалка не удалась — вернём, что успели
   } finally {
     await page.close().catch(() => {})
   }
-  return { followers: Array.from(collected).slice(0, limit), opened }
+  return { followers: Array.from(collected).slice(0, limit), opened, followerCount }
 }
 
-// Прогнать пробу всех действий по каждому подписчику. Возвращает человекочитаемый вердикт на действие.
-export async function diagnoseActions(context, { ownUsername, limit = 3 } = {}) {
+// Прогнать пробу всех действий по каждому подписчику. `usernames` (из БД/логов — на кого бот реально
+// триггерился) — приоритетный источник; DOM-модалка «Читачі» лишь резерв. Возвращает вердикт на действие.
+export async function diagnoseActions(context, { ownUsername, usernames, limit = 3 } = {}) {
   await requireSession(context)
-  const { followers, opened } = await getOwnFollowers(context, { ownUsername, limit })
+  const fromDb = Array.isArray(usernames) ? usernames.map((u) => String(u).replace(/^@/, '').trim().toLowerCase()).filter(Boolean) : []
+  // Всегда читаем РЕАЛЬНЫЙ счётчик подписчиков с профиля; список из модалки — только если ников из БД нет.
+  const own = await getOwnFollowers(context, { ownUsername, limit, needList: fromDb.length === 0 })
+  const followers = (fromDb.length ? fromDb : own.followers).slice(0, limit)
+  const opened = fromDb.length > 0 || own.opened
+  const followerCount = own.followerCount
   const results = []
   for (const username of followers) {
     const r = { username }
@@ -708,7 +727,7 @@ export async function diagnoseActions(context, { ownUsername, limit = 3 } = {}) 
     results.push(r)
     await jitter(2500, 5000)
   }
-  return { followers, opened, results, storageState: await safeStorageState(context) }
+  return { followers, opened, followerCount, results, storageState: await safeStorageState(context) }
 }
 
 // ── Стори-события из директа (ответы на мои сторис + упоминания) ─────────────────

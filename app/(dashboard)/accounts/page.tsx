@@ -257,13 +257,15 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
   // подписчиков аккаунта и прогоняет пробу follow/like/story/dm по каждому → показывает точную
   // причину на действие (нет постов / личка закрыта / композер открывается / уже подписан).
   const [diagRun, setDiagRun] = useState(false)
-  const [diagData, setDiagData] = useState<{ ok?: boolean; followers?: string[]; opened?: boolean; results?: { username: string; follow?: string; like?: string; story?: string; dm?: string }[]; error?: string } | null>(null)
+  const [diagData, setDiagData] = useState<{ ok?: boolean; followers?: string[]; opened?: boolean; followerCount?: number | null; source?: string; results?: { username: string; follow?: string; like?: string; story?: string; dm?: string }[]; error?: string } | null>(null)
   const runDiagnoseActions = async () => {
     if (!ra?.id) return
     setDiagRun(true); setDiagData(null)
     try {
       const r = await fetch(`/api/accounts/${ra.id}/diagnose-actions`, { method: 'POST' })
-      setDiagData(await r.json())
+      const data = await r.json()
+      setDiagData(data)
+      if (data?.ok && typeof data.followerCount === 'number') onChanged?.()   // счётчик подписчиков поправлен на реальный
     } catch (e: any) { setDiagData({ ok: false, error: String(e?.message ?? e) }) }
     finally { setDiagRun(false) }
   }
@@ -456,10 +458,13 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
                 <span>🔬 Диагностика действий по подписчикам</span>
                 <button onClick={() => setDiagData(null)} className="text-subt hover:text-ink">✕</button>
               </div>
+              {typeof diagData.followerCount === 'number' && (
+                <div className="text-[11.5px] text-subt mb-2">Реальных подписчиков на профиле: <b className="text-ink">{diagData.followerCount}</b> (счётчик поправлен). Источник ников: {diagData.source === 'db' ? 'журнал (на кого триггерился)' : 'список «Читачі»'}.</div>
+              )}
               {diagData.error ? (
                 <div className="text-[12px] text-bad">Ошибка: {diagData.error}</div>
-              ) : !diagData.opened && (!diagData.results || diagData.results.length === 0) ? (
-                <div className="text-[12px] text-subt">Не удалось открыть список подписчиков (или их нет). У приватного аккаунта список видит только владелец — сессия должна быть живой.</div>
+              ) : (!diagData.results || diagData.results.length === 0) ? (
+                <div className="text-[12px] text-subt">Пока некого проверить: в журнале нет подписчиков, на которых бот триггерился, и список «Читачі» пуст/не открылся. Как только сработает «Новая подписка» — здесь появятся имена.</div>
               ) : (diagData.results && diagData.results.length > 0) ? (
                 <div className="space-y-2">
                   {diagData.results.map((r) => (

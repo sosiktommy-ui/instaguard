@@ -18,18 +18,41 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   if (!acc) return NextResponse.json({ error: 'Не найдено' }, { status: 404 })
   if (!acc.browserState) return NextResponse.json({ error: 'У аккаунта нет сохранённой сессии (browserState) — сначала войдите' }, { status: 400 })
 
+  // Источник подписчиков — ПОДПИСЧИКИ, НА КОТОРЫХ БОТ УЖЕ ТРИГГЕРИЛСЯ (из журнала): сообщения
+  // «… → @username» (сработавший триггер) и «Приняты заявки в подписчики: @a, @b». Это ровно те,
+  // кого бот занёс в БД, — надёжнее хрупкого DOM-скрейпа модалки «Читачі» (тот лишь резерв в воркере).
+  const logs = await prisma.log.findMany({
+    where: { accountId: acc.id, message: { contains: '@' } },
+    orderBy: { createdAt: 'desc' }, take: 300, select: { message: true },
+  }).catch(() => [] as { message: string }[])
+  const names = new Set<string>()
+  for (const l of logs) {
+    for (const m of l.message.matchAll(/@([A-Za-z0-9._]+)/g)) {
+      const u = m[1].toLowerCase()
+      if (u && u !== acc.username.toLowerCase()) names.add(u)
+    }
+    if (names.size >= 12) break
+  }
+  const usernames = Array.from(names).slice(0, 5)
+
   try {
     const result = await browserDiagnoseActions(
       { storageState: acc.browserState as object, proxy: acc.proxy ?? undefined, username: acc.username, locale: acc.locale ?? undefined, timezoneId: acc.timezoneId ?? undefined },
-      3,
+      Math.max(3, usernames.length), usernames,
     )
-    if (result.browserState) {
-      await prisma.instagramAccount.update({ where: { id: acc.id }, data: { browserState: result.browserState as any } }).catch(() => null)
-    }
+    // Чиним «врущий» счётчик: если прочитали РЕАЛЬНОЕ число подписчиков с профиля — пишем ЕГО
+    // (кумулятивный followersGained в poll дрейфует; реальное значение с профиля — источник истины).
+    const patch: any = {}
+    if (result.browserState) patch.browserState = result.browserState
+    if (typeof result.followerCount === 'number' && result.followerCount >= 0) patch.followers = result.followerCount
+    if (Object.keys(patch).length) await prisma.instagramAccount.update({ where: { id: acc.id }, data: patch }).catch(() => null)
+
     return NextResponse.json({
       ok: true,
       followers: result.followers ?? [],
       opened: result.opened ?? false,
+      followerCount: result.followerCount ?? null,
+      source: usernames.length ? 'db' : 'dom',
       results: result.results ?? [],
     })
   } catch (e: any) {
