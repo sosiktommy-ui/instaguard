@@ -87,10 +87,29 @@ async function openProfile(context, username) {
   return page
 }
 
-function requireSession(context) {
-  return hasSessionCookie(context).then((ok) => {
-    if (!ok) throw new Error('login_required: сессия недействительна — нужен повторный вход')
-  })
+// Сколько раз за ЖИЗНЬ контекста можно восстановить куку из эталона, прежде чем признать сессию
+// реально мёртвой. Не долбим Instagram бесконечно разлогиненной сессией (attempts-guard, как у
+// instagrapi relogin — см. ресёрч login_required).
+const MAX_SESSION_HEALS = 2
+
+// САМОЛЕЧЕНИЕ сессии. Живое окно может потерять куку sessionid ПОСРЕДИ цикла (софт-чек Instagram на
+// скакнувшем IP ротирующегося прокси / блип), хотя в БД сессия ещё валидна на СЕРВЕРЕ IG (доказано
+// кнопкой 🔤: свежее окно с той же кукой работает). Тогда вливаем эталонные куки обратно в ЭТО ЖЕ окно
+// — тот же отпечаток, БЕЗ полного ре-логина (полный логин = «новое устройство» = challenge). Раньше
+// requireSession просто падал login_required → каскад: все следующие действия цикла валились разом,
+// хотя старая схема «свежее окно на каждое действие» это самолечила автоматически. Ограничено
+// MAX_SESSION_HEALS: если кука падает снова и снова — сессия/прокси реально нестабильны → login_required
+// (аккаунт метится CHALLENGE «Войти заново»), без бесконечного цикла.
+async function requireSession(context) {
+  if (await hasSessionCookie(context)) return
+  const seed = context._igSeedCookies
+  const used = context._igHeals || 0
+  if (Array.isArray(seed) && seed.length && used < MAX_SESSION_HEALS) {
+    context._igHeals = used + 1
+    try { await context.addCookies(seed) } catch {}
+    if (await hasSessionCookie(context)) return   // восстановили локально — продолжаем цикл
+  }
+  throw new Error('login_required: сессия недействительна — нужен повторный вход')
 }
 
 // Клик по «сердечку» лайка (посты И сторис). Прежний селектор `div[role="button"]:has(svg[aria-label="Like"])`
@@ -707,27 +726,41 @@ export async function diagnoseActions(context, { ownUsername, usernames, limit =
   const opened = fromDb.length > 0 || own.opened
   const followerCount = own.followerCount
   const results = []
+  const DEADRE = /login_required|сессия недейств/i
+  let sessionDead = false
   for (const username of followers) {
     const r = { username }
     try { const f = await followUser(context, { targetUsername: username, dryRun: true }); r.follow = f.already ? 'уже подписан ✓' : (f.ok ? 'кнопка «Подписаться» есть ✓' : 'кнопка не найдена ✗') }
-    catch (e) { r.follow = `сбой: ${dshort(e)}` }
-    await jitter(1500, 3000)
-    try {
-      const l = await likeUser(context, { targetUsername: username, dryRun: true })
-      r.like = l.impossible ? 'нет постов — лайк невозможен' : (l.reached && l.reached.likeButton ? `постов ${l.reached.posts}, лайк доступен ✓` : (l.reached && l.reached.posts ? `постов ${l.reached.posts}, кнопка лайка не найдена ✗` : 'нет постов'))
-    } catch (e) { r.like = `сбой: ${dshort(e)}` }
-    await jitter(1500, 3000)
-    try { const s = await viewStories(context, { targetUsername: username, dryRun: true }); r.story = s.impossible ? 'нет активных сторис' : (s.reached && s.reached.storyViewer ? 'есть активные сторис ✓' : 'нет') }
-    catch (e) { r.story = `сбой: ${dshort(e)}` }
-    await jitter(1500, 3000)
-    try {
-      const dm = await sendDM(context, { toUsername: username, text: '', dryRun: true })
-      r.dm = dm.closed ? 'личка закрыта / кнопка «Написать» недоступна ✗' : (dm.reached && dm.reached.composer ? 'композер открывается — директ дойдёт ✓' : (dm.reached && dm.reached.messageButton ? 'кнопка есть, композер не открылся ✗' : 'кнопка «Написать» недоступна ✗'))
-    } catch (e) { r.dm = `сбой: ${dshort(e)}` }
+    catch (e) { r.follow = `сбой: ${dshort(e)}`; if (DEADRE.test(r.follow)) sessionDead = true }
+    if (!sessionDead) {
+      await jitter(1500, 3000)
+      try {
+        const l = await likeUser(context, { targetUsername: username, dryRun: true })
+        r.like = l.impossible ? 'нет постов — лайк невозможен' : (l.reached && l.reached.likeButton ? `постов ${l.reached.posts}, лайк доступен ✓` : (l.reached && l.reached.posts ? `постов ${l.reached.posts}, кнопка лайка не найдена ✗` : 'нет постов'))
+      } catch (e) { r.like = `сбой: ${dshort(e)}`; if (DEADRE.test(r.like)) sessionDead = true }
+    }
+    if (!sessionDead) {
+      await jitter(1500, 3000)
+      try { const s = await viewStories(context, { targetUsername: username, dryRun: true }); r.story = s.impossible ? 'нет активных сторис' : (s.reached && s.reached.storyViewer ? 'есть активные сторис ✓' : 'нет') }
+      catch (e) { r.story = `сбой: ${dshort(e)}`; if (DEADRE.test(r.story)) sessionDead = true }
+    }
+    if (!sessionDead) {
+      await jitter(1500, 3000)
+      try {
+        const dm = await sendDM(context, { toUsername: username, text: '', dryRun: true })
+        r.dm = dm.closed ? 'личка закрыта / кнопка «Написать» недоступна ✗' : (dm.reached && dm.reached.composer ? 'композер открывается — директ дойдёт ✓' : (dm.reached && dm.reached.messageButton ? 'кнопка есть, композер не открылся ✗' : 'кнопка «Написать» недоступна ✗'))
+      } catch (e) { r.dm = `сбой: ${dshort(e)}`; if (DEADRE.test(r.dm)) sessionDead = true }
+    }
     results.push(r)
+    // Сессия умерла (IG разлогинил) → нет смысла долбить остальных подписчиков этим же мёртвым
+    // контекстом (все дадут login_required) — останавливаем диагностику, сообщаем «нужен вход».
+    if (sessionDead) break
     await jitter(2500, 5000)
   }
-  return { followers, opened, followerCount, results, storageState: await safeStorageState(context) }
+  // ВАЖНО: не отдаём storageState, если сессия мертва — иначе вызывающий сохранит РАЗЛОГИНЕННЫЙ стейт
+  // поверх хорошего browserState (отравление сессии). При живой сессии — отдаём дозревший стейт.
+  const alive = await hasSessionCookie(context).catch(() => false)
+  return { followers, opened, followerCount, results, sessionDead, storageState: alive ? await safeStorageState(context) : undefined }
 }
 
 // ── Стори-события из директа (ответы на мои сторис + упоминания) ─────────────────

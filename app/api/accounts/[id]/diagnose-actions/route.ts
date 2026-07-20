@@ -40,11 +40,16 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       { storageState: acc.browserState as object, proxy: acc.proxy ?? undefined, username: acc.username, locale: acc.locale ?? undefined, timezoneId: acc.timezoneId ?? undefined },
       Math.max(3, usernames.length), usernames,
     )
-    // Чиним «врущий» счётчик: если прочитали РЕАЛЬНОЕ число подписчиков с профиля — пишем ЕГО
-    // (кумулятивный followersGained в poll дрейфует; реальное значение с профиля — источник истины).
     const patch: any = {}
+    // browserState сохраняем ТОЛЬКО если воркер вернул живой стейт (worker не отдаёт его при мёртвой
+    // сессии) — иначе затёрли бы хороший browserState разлогиненным (отравление сессии).
     if (result.browserState) patch.browserState = result.browserState
-    if (typeof result.followerCount === 'number' && result.followerCount >= 0) patch.followers = result.followerCount
+    // Чиним «врущий» счётчик: реальное число подписчиков с профиля — источник истины (кумулятивный
+    // followersGained в poll дрейфует). Только если сессия жива (иначе число могло не прочитаться).
+    if (!result.sessionDead && typeof result.followerCount === 'number' && result.followerCount >= 0) patch.followers = result.followerCount
+    // Сессия мертва → честно помечаем «Требует входа» (на карточке появится кнопка «Войти заново»).
+    // Статус был ACTIVE, хотя сессия в браузере разлогинена — вот источник «дм не отправляется».
+    if (result.sessionDead) patch.status = 'CHALLENGE'
     if (Object.keys(patch).length) await prisma.instagramAccount.update({ where: { id: acc.id }, data: patch }).catch(() => null)
 
     return NextResponse.json({
@@ -52,6 +57,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       followers: result.followers ?? [],
       opened: result.opened ?? false,
       followerCount: result.followerCount ?? null,
+      sessionDead: result.sessionDead ?? false,
       source: usernames.length ? 'db' : 'dom',
       results: result.results ?? [],
     })

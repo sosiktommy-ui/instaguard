@@ -262,6 +262,7 @@ export interface DiagnoseActionsResult {
   followers: string[]
   opened: boolean
   followerCount?: number | null
+  sessionDead?: boolean
   results: { username: string; follow?: string; like?: string; story?: string; dm?: string }[]
   browserState?: object
 }

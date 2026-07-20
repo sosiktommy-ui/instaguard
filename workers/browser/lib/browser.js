@@ -101,6 +101,11 @@ export async function newAccountContext(opts) {
   if (storageState) ctxOpts.storageState = storageState
 
   const context = await browser.newContext(ctxOpts)
+  // Эталон куки для САМОЛЕЧЕНИЯ сессии (см. requireSession в actions.js): если живое окно потеряет
+  // sessionid посреди цикла (софт-чек IG на скакнувшем IP / блип прокси), эти куки вольются обратно
+  // в ТО ЖЕ окно — тот же отпечаток, без полного ре-логина. storageState тут — валидная сессия из БД.
+  context._igSeedCookies = storageState?.cookies || null
+  context._igHeals = 0
   // Доп. маскировка (stealth покрывает часть; это подстраховка + консистентность с ОС отпечатка).
   // Все значения — из fingerprint() (стабильны на аккаунт). PLAN-IDEAL §2.1/2.2/2.7.
   await context.addInitScript((fp) => {
@@ -269,8 +274,22 @@ export async function getOrCreateContext(opts) {
   const key = ctxKey(opts)
   const hit = _ctxCache.get(key)
   if (hit) {
-    try { hit.context.pages(); hit.lastUsed = Date.now(); return { context: hit.context, reused: true, key } } // живой
-    catch { _ctxCache.delete(key); await closeContextSafe(hit.context) }                                        // мёртвый — выселяем
+    try {
+      hit.context.pages()   // живой контекст (иначе бросит — уйдём в catch и пересоздадим)
+      // 🔴 ФИКС: раньше кэш-хит ИГНОРИРОВАЛ переданный storageState и отдавал старое окно как есть.
+      // Если IG разлогинил это окно ранее — все действия падали login_required, ХОТЯ вызывающий
+      // (dm-воркер) передал СВЕЖУЮ валидную сессию из БД. Теперь: обновляем эталон куки для самолечения
+      // и, если живое окно потеряло sessionid, вливаем свежую куку из БД обратно в него (самолечение
+      // на входе в цикл). Новый цикл со свежей сессией → сбрасываем счётчик восстановлений.
+      const fresh = opts.storageState?.cookies
+      if (Array.isArray(fresh) && fresh.length) {
+        hit.context._igSeedCookies = fresh
+        hit.context._igHeals = 0
+        if (!(await hasSessionCookie(hit.context))) { try { await hit.context.addCookies(fresh) } catch {} }
+      }
+      hit.lastUsed = Date.now()
+      return { context: hit.context, reused: true, key }
+    } catch { _ctxCache.delete(key); await closeContextSafe(hit.context) }   // мёртвый — выселяем
   }
   if (_ctxCache.size >= CTX_MAX) {                     // переполнение — закрыть самый старый
     let ok = null, ot = Infinity
