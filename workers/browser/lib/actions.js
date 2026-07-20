@@ -624,6 +624,93 @@ export async function acceptFollowRequests(context, { limit = 10 } = {}) {
   }
 }
 
+// ── ДИАГНОСТИКА ДЕЙСТВИЙ (запрос пользователя: «почему дм/лайк не срабатывают») ──────
+// Берём РЕАЛЬНЫХ подписчиков аккаунта (DOM-список «Читачі» на своём профиле — залогинены как
+// владелец, видим всех, даже у приватного) и по КАЖДОМУ прогоняем ПРОБУ каждого действия через
+// уже существующий dryRun (реальная навигация к профилю + проверка «дойдёт ли до кнопки», БЕЗ
+// финального клика — безопасно, повторяемо, не спамит). Показывает ТОЧНУЮ причину: подписка
+// (уже подписан/кнопка), лайк (сколько постов / «нет постов» = невозможно), сторис (есть активные?),
+// директ (композер открывается / личка закрыта / блип). НИКАКИХ API-вызовов — только DOM (ADR-002).
+const dshort = (e) => String((e && e.message) || e || '').slice(0, 70)
+
+// Открыть СВОЙ профиль → модалку «Читачі»/Followers → собрать ники подписчиков (до limit).
+export async function getOwnFollowers(context, { ownUsername, limit = 10 } = {}) {
+  await requireSession(context)
+  const uname = String(ownUsername || '').replace(/^@/, '').trim().toLowerCase()
+  const page = await context.newPage()
+  const collected = new Set()
+  let opened = false
+  try {
+    await gotoResilient(page, `https://www.instagram.com/${uname}/`, { timeout: 35000, retries: 2, backoffMs: [2500, 6000] })
+    await jitter(1800, 3000)
+    // Ссылка «Читачі»/Followers — сперва по href (язык-независимо), затем по тексту (мультиязычно).
+    try {
+      const link = page.locator(`a[href="/${uname}/followers/"], a[href$="/followers/"]`).first()
+      if (await link.isVisible().catch(() => false)) { await link.click({ timeout: 5000 }).catch(() => {}); opened = true }
+    } catch { /* href-ссылки нет — пробуем текст */ }
+    if (!opened) {
+      opened = await clickByText(page, ['Followers', 'followers', 'Читачі', 'читачів', 'Подписчики', 'подписчиков', 'Seguidores', 'Pengikut', 'Takipçi'], { timeout: 4000 }).catch(() => false)
+    }
+    await jitter(2200, 3600)   // ждём подгрузку модалки
+    // Скрейп ников из модалки; список виртуализован → немного скроллим, добираем.
+    for (let s = 0; s < 8 && collected.size < limit; s++) {
+      const names = await page.evaluate(() => {
+        const dlg = document.querySelector('div[role="dialog"]')
+        if (!dlg) return []
+        const RESERVED = new Set(['p', 'reel', 'reels', 'explore', 'accounts', 'direct', 'stories', 'about', ''])
+        const out = []
+        for (const a of dlg.querySelectorAll('a[href^="/"]')) {
+          const m = (a.getAttribute('href') || '').match(/^\/([A-Za-z0-9._]+)\/$/)
+          if (m && !RESERVED.has(m[1])) out.push(m[1])
+        }
+        return out
+      }).catch(() => [])
+      for (const n of names) { if (n && n.toLowerCase() !== uname) collected.add(n) }
+      if (collected.size >= limit) break
+      await page.evaluate(() => {
+        const dlg = document.querySelector('div[role="dialog"]')
+        if (!dlg) return
+        const sc = dlg.querySelector('div[style*="overflow"]') || dlg.querySelector('ul')?.parentElement || dlg
+        if (sc) sc.scrollTop = sc.scrollHeight
+      }).catch(() => {})
+      await jitter(1200, 2200)
+    }
+  } catch (e) {
+    // навигация/модалка не удалась — вернём, что успели (+ opened=false → в UI «список не открылся»)
+  } finally {
+    await page.close().catch(() => {})
+  }
+  return { followers: Array.from(collected).slice(0, limit), opened }
+}
+
+// Прогнать пробу всех действий по каждому подписчику. Возвращает человекочитаемый вердикт на действие.
+export async function diagnoseActions(context, { ownUsername, limit = 3 } = {}) {
+  await requireSession(context)
+  const { followers, opened } = await getOwnFollowers(context, { ownUsername, limit })
+  const results = []
+  for (const username of followers) {
+    const r = { username }
+    try { const f = await followUser(context, { targetUsername: username, dryRun: true }); r.follow = f.already ? 'уже подписан ✓' : (f.ok ? 'кнопка «Подписаться» есть ✓' : 'кнопка не найдена ✗') }
+    catch (e) { r.follow = `сбой: ${dshort(e)}` }
+    await jitter(1500, 3000)
+    try {
+      const l = await likeUser(context, { targetUsername: username, dryRun: true })
+      r.like = l.impossible ? 'нет постов — лайк невозможен' : (l.reached && l.reached.likeButton ? `постов ${l.reached.posts}, лайк доступен ✓` : (l.reached && l.reached.posts ? `постов ${l.reached.posts}, кнопка лайка не найдена ✗` : 'нет постов'))
+    } catch (e) { r.like = `сбой: ${dshort(e)}` }
+    await jitter(1500, 3000)
+    try { const s = await viewStories(context, { targetUsername: username, dryRun: true }); r.story = s.impossible ? 'нет активных сторис' : (s.reached && s.reached.storyViewer ? 'есть активные сторис ✓' : 'нет') }
+    catch (e) { r.story = `сбой: ${dshort(e)}` }
+    await jitter(1500, 3000)
+    try {
+      const dm = await sendDM(context, { toUsername: username, text: '', dryRun: true })
+      r.dm = dm.closed ? 'личка закрыта / кнопка «Написать» недоступна ✗' : (dm.reached && dm.reached.composer ? 'композер открывается — директ дойдёт ✓' : (dm.reached && dm.reached.messageButton ? 'кнопка есть, композер не открылся ✗' : 'кнопка «Написать» недоступна ✗'))
+    } catch (e) { r.dm = `сбой: ${dshort(e)}` }
+    results.push(r)
+    await jitter(2500, 5000)
+  }
+  return { followers, opened, results, storageState: await safeStorageState(context) }
+}
+
 // ── Стори-события из директа (ответы на мои сторис + упоминания) ─────────────────
 // Читаем ВЕБ-приватный API изнутри залогиненной страницы (fetch с cookies + x-ig-app-id) —
 // это надёжнее DOM-скрейпа инбокса (React-вёрстка часто меняется). Форма события совпадает

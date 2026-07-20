@@ -253,6 +253,21 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
     finally { setInspecting(false) }
   }
 
+  // 🔬 Диагностика действий (запрос: «дм/лайк не срабатывают, непонятно почему»). Берёт реальных
+  // подписчиков аккаунта и прогоняет пробу follow/like/story/dm по каждому → показывает точную
+  // причину на действие (нет постов / личка закрыта / композер открывается / уже подписан).
+  const [diagRun, setDiagRun] = useState(false)
+  const [diagData, setDiagData] = useState<{ ok?: boolean; followers?: string[]; opened?: boolean; results?: { username: string; follow?: string; like?: string; story?: string; dm?: string }[]; error?: string } | null>(null)
+  const runDiagnoseActions = async () => {
+    if (!ra?.id) return
+    setDiagRun(true); setDiagData(null)
+    try {
+      const r = await fetch(`/api/accounts/${ra.id}/diagnose-actions`, { method: 'POST' })
+      setDiagData(await r.json())
+    } catch (e: any) { setDiagData({ ok: false, error: String(e?.message ?? e) }) }
+    finally { setDiagRun(false) }
+  }
+
   // §13.11 — авто-приём заявок в подписчики (для закрытых/приватных аккаунтов).
   const [autoAccept, setAutoAccept] = useState(Boolean(ra?.autoAcceptFollowers))
   const [savingAuto, setSavingAuto] = useState(false)
@@ -326,6 +341,7 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
             <button onClick={runCanary} disabled={canarying} title="Канареечный тест: этот аккаунт РЕАЛЬНО подпишется/прокомментирует/лайкнет указанный аккаунт (для проверки триггеров у цели)" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">🧪</button>
             <button onClick={rereadUsername} disabled={rereading || !ra?.id} title="ВРЕМЕННО: перечитать ник уже вошедшей сессии без повторного входа (чинит username=unknown)" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">🔤</button>
             <button onClick={runInspectFollowRequests} disabled={inspecting || !ra?.id} title="Диагностика авто-приёма заявок в подписчики: реально примет ожидающие + покажет панель/скрин/ошибки" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">📥</button>
+            <button onClick={runDiagnoseActions} disabled={diagRun || !ra?.id} title="🔬 Диагностика действий: по реальным подписчикам аккаунта проверяет, сработает ли директ/лайк/подписка/сторис и ПОЧЕМУ (нет постов / личка закрыта / уже подписан). Без спама (проба, не шлёт)." className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">{diagRun ? '⏳' : '🔬'}</button>
             {onOpenLog && (
               <button onClick={onOpenLog} title="Открыть лог" className="p-1.5 text-subt hover:text-brand transition-colors"><ScrollText size={18} /></button>
             )}
@@ -425,6 +441,42 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
                   <img src={inspectShot} alt="Экран в момент диагностики" className="w-full rounded-xl border border-black/10" />
                   <span className="block text-subt text-[11px] mt-1">📷 Скрин экрана в момент проверки (клик — открыть крупно)</span>
                 </a>
+              )}
+            </div>
+          )}
+          {/* 🔬 Диагностика действий — по реальным подписчикам: что сработает и ПОЧЕМУ */}
+          {diagRun && (
+            <div className="rounded-2xl bg-canvas px-4 py-3 text-[12px] text-subt flex items-center gap-2">
+              <span className="animate-pulse">🔬</span> Проверяю действия по подписчикам… (навигация к каждому + проба директа/лайка/подписки/сторис — до минуты)
+            </div>
+          )}
+          {!diagRun && diagData && (
+            <div className="rounded-2xl bg-canvas px-4 py-3">
+              <div className="text-[12px] font-semibold text-subt mb-2 flex items-center justify-between">
+                <span>🔬 Диагностика действий по подписчикам</span>
+                <button onClick={() => setDiagData(null)} className="text-subt hover:text-ink">✕</button>
+              </div>
+              {diagData.error ? (
+                <div className="text-[12px] text-bad">Ошибка: {diagData.error}</div>
+              ) : !diagData.opened && (!diagData.results || diagData.results.length === 0) ? (
+                <div className="text-[12px] text-subt">Не удалось открыть список подписчиков (или их нет). У приватного аккаунта список видит только владелец — сессия должна быть живой.</div>
+              ) : (diagData.results && diagData.results.length > 0) ? (
+                <div className="space-y-2">
+                  {diagData.results.map((r) => (
+                    <div key={r.username} className="rounded-xl bg-black/[0.03] border border-line/60 p-2.5">
+                      <div className="font-semibold text-[12.5px] text-ink mb-1.5">@{r.username}</div>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11.5px]">
+                        <div><span className="text-subt">Подписка:</span> {r.follow ?? '—'}</div>
+                        <div><span className="text-subt">Лайк:</span> {r.like ?? '—'}</div>
+                        <div><span className="text-subt">Сторис:</span> {r.story ?? '—'}</div>
+                        <div><span className="text-subt">Директ:</span> {r.dm ?? '—'}</div>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="text-[11px] text-subt pt-1">Проверено {diagData.results.length} подписчик(ов). «Невозможно» (нет постов / нет сторис / личка закрыта) — это не баг, а состояние цели. «Композер открывается ✓» = директ дойдёт.</div>
+                </div>
+              ) : (
+                <div className="text-[12px] text-subt">Подписчиков для проверки не найдено ({(diagData.followers ?? []).length}).</div>
               )}
             </div>
           )}

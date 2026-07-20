@@ -4,7 +4,7 @@ import express from 'express'
 import { getBrowser, newAccountContext, closeContextSafe, getOrCreateContext, touchContext, evictContext, isCtxWarmed, markCtxWarmed } from './lib/browser.js'
 import { attemptLogin, resumeCode, resumeWithTotp, resendCode, loginByState, testSession, warmupSession, rereadUsername, extractUsername, fillImageCaptcha, domSummary, captureDiag } from './lib/login.js'
 import { safeStorageState } from './lib/browser.js'
-import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment, commentLatestPost, readStoryEvents, acceptFollowRequests } from './lib/actions.js'
+import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment, commentLatestPost, readStoryEvents, acceptFollowRequests, diagnoseActions } from './lib/actions.js'
 import { parseFollowers, parseFollowing, parseComments, parseLikers } from './lib/parse.js'
 import { runVisit } from './lib/session.js'
 import { readSelfEvents } from './lib/selfevents.js'
@@ -15,7 +15,7 @@ import { fingerprintSelfTest } from './lib/selftest.js'
 import { captchaConfigured } from './lib/captcha.js'
 import { warmupFeed } from './lib/human.js'
 
-const BUILD = '2026-07-20-browser-113-dm-nav-resilient'
+const BUILD = '2026-07-20-browser-114-diagnose-actions'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -444,6 +444,8 @@ app.post('/story-inbox', cycleRoute((ctx, b) => readStoryEvents(ctx, { amount: b
 app.post('/self-events', cycleRoute((ctx, b) => readSelfEvents(ctx, { amount: b.amount, raw: b.raw })))
 // §13.11 — авто-приём заявок в подписчики (приватный аккаунт): подтвердить ожидающие follow-requests.
 app.post('/follow-requests/accept', cycleRoute((ctx, b) => acceptFollowRequests(ctx, { limit: b.limit })))
+// Диагностика действий: проба follow/like/story/dm по реальным подписчикам аккаунта (dryRun, без спама).
+app.post('/diagnose-actions', cycleRoute((ctx, b) => diagnoseActions(ctx, { ownUsername: b.username, limit: b.limit })))
 
 // ── Парсинг черновыми (Фаза 3, plan.md §4.4/§5) — DOM, без сохранения browserState (чтение) ──
 app.post('/parse/followers', actionRoute((ctx, b) => parseFollowers(ctx, { targetUsername: b.targetUsername, limit: b.limit })))

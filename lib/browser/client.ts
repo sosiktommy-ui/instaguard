@@ -257,6 +257,17 @@ export function browserAcceptFollowRequests(ctx: Ctx, limit = 10) {
   return browserFetch<AcceptRequestsResult>('/follow-requests/accept', { ...ctx, limit }, VISIT_TIMEOUT_MS)
 }
 
+// Диагностика действий: проба follow/like/story/dm по реальным подписчикам аккаунта (dryRun).
+export interface DiagnoseActionsResult {
+  followers: string[]
+  opened: boolean
+  results: { username: string; follow?: string; like?: string; story?: string; dm?: string }[]
+  browserState?: object
+}
+export function browserDiagnoseActions(ctx: Ctx, limit = 3) {
+  return browserFetch<DiagnoseActionsResult>('/diagnose-actions', { ...ctx, limit }, VISIT_TIMEOUT_MS)
+}
+
 // ── Парсинг черновыми (Фаза 3, plan.md §4.4/§5). Формы = lib/scraper/hiker.ts, чтобы
 // poll/route.ts мог переключаться между API/черновыми без переписывания потребителей.
 // ⚠️ ЭКСПЕРИМЕНТАЛЬНО — DOM-парсинг воркера не проверялся на живом Instagram, см.
