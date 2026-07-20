@@ -193,7 +193,11 @@ async function mergeStats(triggerId: string, incFired: Record<string, number>, i
 
 // Выполняет действия триггера-подписки для одной цели синхронно.
 // Считаем отдельно «сработало» (попытались) и «выполнено» (получилось).
-async function runFollowerActionsInline(job: any): Promise<'CHALLENGE' | 'PAUSED' | null> {
+// Возвращает {brk, retryable}: brk — сигнал «стоп батча» (бан/челлендж); retryable — ТРАНЗИЕНТНЫЙ
+// сбой (сеть/прокси/неподтверждённое действие), при котором цель НЕ надо помечать известной, а
+// повторить в следующем цикле (аудит #1: иначе inline-сбой действия терял цель навсегда).
+const INLINE_TRANSIENT = /network|моргн|timeout|таймаут|econnreset|econnrefused|tunnel|socket hang up|не ответил|net::|unconfirmed|wrong_profile/i
+async function runFollowerActionsInline(job: any): Promise<{ brk: 'CHALLENGE' | 'PAUSED' | null; retryable: boolean }> {
   // ── Браузерный движок (эмуль): действия по username через реальный Chromium (plan §4.6). ──
   // Строго изолировано от legacy: включается только когда job.engine==='browser' и есть browserState.
   if (job.engine === 'browser' && job.browserState) {
@@ -237,11 +241,16 @@ async function runFollowerActionsInline(job: any): Promise<'CHALLENGE' | 'PAUSED
       ])
     }
     if (r.brk) await prisma.instagramAccount.update({ where: { id: job.accountId }, data: { status: r.brk } }).catch(() => null)
-    return (r.brk as 'CHALLENGE' | 'PAUSED' | undefined) ?? null   // Instagram ограничил → сигнал «стоп» для батча
+    // Транзиентный сбой (не бан): директ задуман, но не доставлен — ИЛИ ничего не выполнилось —
+    // и ошибка сетевая/неподтверждённая → цель на ретрай (не фиксируем известной). Закрытая личка
+    // (dm_closed) / «невозможно» под regex НЕ попадают → definitive, ретрай не нужен.
+    const retryable = !r.brk && hardError && INLINE_TRANSIENT.test(r.errors.join(' '))
+      && (job.text ? !(r.incDone as any).dm : !success)
+    return { brk: (r.brk as 'CHALLENGE' | 'PAUSED' | undefined) ?? null, retryable }
   }
   // Нет browserState — действовать браузером нечем. poll отсеивает такие аккаунты гардом [A1]
   // (метит CHALLENGE «нужен повторный вход»), сюда доходить не должно; на всякий случай — no-op.
-  return null
+  return { brk: null, retryable: false }
 }
 
 interface PollSummary {
@@ -672,8 +681,11 @@ export async function POST(req: NextRequest) {
               cursor += nextGap()
               dispatched.add(target.pk)
             } else {
-              const brk = await runFollowerActionsInline(job)
+              const { brk, retryable } = await runFollowerActionsInline(job)
               dispatched.add(target.pk)
+              // Аудит #1: транзиентный сбой действия (сеть/прокси/неподтверждено) → на ретрай, чтобы
+              // снапшот НЕ пометил цель известной (иначе действие терялось навсегда, как терялся директ).
+              if (retryable) failedPks.add(target.pk)
               // STOP-ON-BLOCK: Instagram ограничил аккаунт (challenge/action-block/429) → НЕ долбим
               // остальных (это углубляет бан). Прерываем батч; необработанные цели уйдут в ретрай ниже.
               if (brk) { blocked = brk; break }

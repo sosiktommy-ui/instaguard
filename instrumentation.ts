@@ -97,7 +97,15 @@ export async function register() {
               // §4.8 — берём САМЫЙ свежий browserState из БД: d.browserState снят при постановке
               // в очередь и мог устареть за время ожидания (иначе действие пойдёт по старой сессии
               // и затрёт актуальную, накопленную прогревом/другими джобами).
-              const fresh = await prisma.instagramAccount.findUnique({ where: { id: d.accountId }, select: { browserState: true } }).catch(() => null)
+              const fresh = await prisma.instagramAccount.findUnique({ where: { id: d.accountId }, select: { browserState: true, status: true } }).catch(() => null)
+              // 🛡️ БАН-SAFETY (аудит #3): если аккаунт УЖЕ остановлен (предыдущий джоб этой же очереди
+              // поймал challenge/action-block/бан и выставил status), НЕ выполняем остальные очередные
+              // директы — иначе продолжаем долбить Instagram уже ограниченным аккаунтом и углубляем бан.
+              // В inline-пути стоп-на-блоке уже есть (poll STOP-ON-BLOCK), а очередь его не имела.
+              if (fresh?.status === 'CHALLENGE' || fresh?.status === 'PAUSED') {
+                console.log(`[dm-worker/browser] аккаунт остановлен (${fresh.status}) — пропуск @${d.followerUsername} (не долбим IG)`)
+                return
+              }
               const r = await runFollowerActionsBrowser({
                 browserState: (fresh?.browserState ?? d.browserState) as any, ownerUsername: d.ownerUsername, proxy: d.proxy,
                 locale: d.locale, timezoneId: d.timezoneId,
