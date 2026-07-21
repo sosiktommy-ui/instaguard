@@ -312,7 +312,15 @@ export async function followUser(context, { targetUsername, dryRun }) {
   // §10.3 dry-run: проверяем присутствие кнопки «Подписаться», НЕ кликаем.
   if (dryRun) {
     const btn = await findByText(page, SEL.followButton, { timeout: 8000 })
-    return { ok: btn, dryRun: true, reached: { followButton: btn }, storageState: await safeStorageState(context) }
+    // Кнопки не нашли → дампим РЕАЛЬНЫЕ подписи кнопок профиля: если язык/строка кнопки не в списке
+    // (напр. IG на укр.), сразу видно точный текст и добавляем его точечно (без гадания).
+    let buttons
+    if (!btn) buttons = await page.evaluate(() =>
+      [...new Set(Array.from(document.querySelectorAll('button, [role="button"]'))
+        .map((b) => (b.textContent || b.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim())
+        .filter((t) => t && t.length <= 24))].slice(0, 20)
+    ).catch(() => null)
+    return { ok: btn, dryRun: true, reached: { followButton: btn, buttons }, storageState: await safeStorageState(context) }
   }
   const clicked = await clickByText(page, SEL.followButton, { timeout: 8000 })
   if (!clicked) return { ok: false, error: 'follow_button_not_found: кнопка «Подписаться» не найдена', storageState: await safeStorageState(context) }
@@ -730,7 +738,7 @@ export async function diagnoseActions(context, { ownUsername, usernames, limit =
   let sessionDead = false
   for (const username of followers) {
     const r = { username }
-    try { const f = await followUser(context, { targetUsername: username, dryRun: true }); r.follow = f.already ? 'уже подписан ✓' : (f.ok ? 'кнопка «Подписаться» есть ✓' : 'кнопка не найдена ✗') }
+    try { const f = await followUser(context, { targetUsername: username, dryRun: true }); r.follow = f.already ? 'уже подписан ✓' : (f.ok ? 'кнопка «Подписаться» есть ✓' : `кнопка не найдена ✗${f.reached?.buttons?.length ? ` | кнопки профиля: [${f.reached.buttons.join(', ')}]` : ''}`) }
     catch (e) { r.follow = `сбой: ${dshort(e)}`; if (DEADRE.test(r.follow)) sessionDead = true }
     if (!sessionDead) {
       await jitter(1500, 3000)

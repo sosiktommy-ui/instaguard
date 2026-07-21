@@ -107,9 +107,37 @@ export const SEL = {
   resendLink: ['Resend', 'Resend Code', 'Send again', 'Отправить снова', 'Отправить ещё раз'],
 
   // Профиль / действия
-  messageButton: ['Message', 'Написать', 'Send message', 'Send Message'],
-  followButton: ['Follow', 'Подписаться', 'Follow Back', 'Подписаться в ответ'],
-  followingState: ['Following', 'Requested', 'Вы подписаны', 'Запрос отправлен'],
+  // 🔴 МУЛЬТИЯЗЫЧНО (живой баг 2026-07-20): у пользователя IG-интерфейс УКРАИНСКИЙ («Читачі»/«Стежить»/
+  // «Запит надіслано»), а тут были только EN/RU → follow «кнопка не найдена», директ не открывал композер
+  // на ЖИВОЙ сессии. Матчинг ТОЧНЫЙ (getByRole name exact, регистронезависимо) → лишние варианты безвредны
+  // (не совпадут), но покрывают язык аккаунта. Порядок: следит hasFollowStateButton (followingState) ПЕРВЫМ,
+  // поэтому «Following»-варианты не путаются с «Follow». Держим ОБА укр. семейства (Підписатися/Стежити).
+  messageButton: [
+    'Message', 'Send message', 'Send Message',
+    'Написать', 'Сообщение', 'Отправить сообщение',
+    'Повідомлення', 'Надіслати повідомлення', 'Написати',
+    'Mensaje', 'Enviar mensaje', 'Pesan', 'Kirim Pesan', 'Mesaj', 'Mesaj gönder',
+    'Wiadomość', 'Wyślij wiadomość', 'Mensagem', 'Enviar mensagem', 'Nachricht', 'Nachricht senden', 'Envoyer un message', 'Messaggio',
+  ],
+  followButton: [
+    'Follow', 'Follow Back',
+    'Подписаться', 'Подписаться в ответ',
+    'Підписатися', 'Підписатися у відповідь', 'Стежити', 'Стежити у відповідь',
+    'Seguir', 'Seguir también', 'Seguir de vuelta', 'Seguir de volta',
+    'Ikuti', 'Ikuti balik', 'Ikuti Balik',
+    'Takip et', 'Takip Et', 'Geri takip et', 'Obserwuj', 'Obserwuj wzajemnie', 'Zaobserwuj',
+    'Folgen', 'Zurückfolgen', 'Suivre', 'Suivre en retour', 'Segui',
+  ],
+  followingState: [
+    'Following', 'Requested',
+    'Вы подписаны', 'Запрос отправлен', 'Заявка отправлена', 'Подписки',
+    'Ви підписані', 'Запит надіслано', 'Запит на підписку надіслано', 'Стежите', 'Запитано',
+    'Siguiendo', 'Solicitado', 'Solicitud enviada',
+    'Mengikuti', 'Diminta', 'Permintaan dikirim',
+    'Takip ediliyor', 'Takip ediyorsun', 'İstek gönderildi', 'İstek Gönderildi',
+    'Obserwujesz', 'Prośba wysłana', 'Wysłano prośbę',
+    'Seguindo', 'A seguir', 'Solicitação enviada', 'Abonniert', 'Angefragt', 'Abonné', 'Demandé',
+  ],
   dmTextbox: ['div[role="textbox"][contenteditable="true"]', 'textarea[placeholder]'],
   likeButton: ['svg[aria-label="Like"]', 'svg[aria-label="Нравится"]'],
   commentBox: ['textarea[aria-label*="omment" i]', 'textarea[aria-label*="омментар" i]', 'div[role="textbox"][contenteditable="true"]'],
