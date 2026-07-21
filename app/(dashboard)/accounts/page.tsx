@@ -257,7 +257,7 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
   // подписчиков аккаунта и прогоняет пробу follow/like/story/dm по каждому → показывает точную
   // причину на действие (нет постов / личка закрыта / композер открывается / уже подписан).
   const [diagRun, setDiagRun] = useState(false)
-  const [diagData, setDiagData] = useState<{ ok?: boolean; followers?: string[]; opened?: boolean; followerCount?: number | null; source?: string; results?: { username: string; follow?: string; like?: string; story?: string; dm?: string }[]; error?: string } | null>(null)
+  const [diagData, setDiagData] = useState<{ ok?: boolean; followers?: string[]; opened?: boolean; followerCount?: number | null; source?: string; sessionDead?: boolean; results?: { username: string; follow?: string; like?: string; story?: string; dm?: string }[]; error?: string } | null>(null)
   const runDiagnoseActions = async () => {
     if (!ra?.id) return
     setDiagRun(true); setDiagData(null)
@@ -265,7 +265,7 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
       const r = await fetch(`/api/accounts/${ra.id}/diagnose-actions`, { method: 'POST' })
       const data = await r.json()
       setDiagData(data)
-      if (data?.ok && typeof data.followerCount === 'number') onChanged?.()   // счётчик подписчиков поправлен на реальный
+      if (data?.ok && (typeof data.followerCount === 'number' || data.sessionDead)) onChanged?.()   // счётчик поправлен ИЛИ сессия помечена «Требует входа» → обновить карточку
     } catch (e: any) { setDiagData({ ok: false, error: String(e?.message ?? e) }) }
     finally { setDiagRun(false) }
   }
@@ -461,6 +461,26 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
               {typeof diagData.followerCount === 'number' && (
                 <div className="text-[11.5px] text-subt mb-2">Реальных подписчиков на профиле: <b className="text-ink">{diagData.followerCount}</b> (счётчик поправлен). Источник ников: {diagData.source === 'db' ? 'журнал (на кого триггерился)' : 'список «Читачі»'}.</div>
               )}
+              {/* Действия срываются ПОСРЕДИ проверки (кука сессии пропала ЛИБО прокси «моргает» — не */}
+              {/* доходит до IG) → объясняем реальную причину и что делать. Иначе пользователь думает */}
+              {/* «сессия же активна!» и уходит в цикл повторных входов, а те тоже умирают — потому что */}
+              {/* корень (ротирующий прокси) не тронут. Ресёрч + диагноз проекта (CLAUDE.md). */}
+              {(() => {
+                const R = diagData.results ?? []
+                const proxyBlip = R.some((r) => [r.follow, r.like, r.story, r.dm].some((v) => /прокси|моргн|network/i.test(v ?? '')))
+                if (!diagData.sessionDead && !proxyBlip) return null
+                return (
+                  <div className="rounded-xl bg-warn/10 border border-warn/25 px-3 py-2.5 mb-2.5 text-[11.5px] leading-relaxed">
+                    <div className="font-semibold text-warn mb-1">{diagData.sessionDead ? '⚠️ Сессия оборвалась посреди проверки' : '⚠️ Действия срываются — прокси нестабилен'}</div>
+                    <div className="text-ink/80 space-y-1.5">
+                      <p>Сессия аккаунта <b>жива</b> (иначе «перечитать ник» не сработал бы). Действия срываются на ходу: {diagData.sessionDead ? 'кука сессии пропадает' : 'прокси не доходит до Instagram («моргает»)'}. Это <b>не баг браузера</b> — менять Chromium бесполезно, на любом движке будет то же — и <b>не</b> значит, что сессия мёртвая.</p>
+                      <p>Почти всегда причина одна — <b>ротирующий прокси</b>: IP меняется на каждом соединении, Instagram видит один вход с десятков IP из разных стран → рвёт соединение и сбрасывает сессию как «угон».</p>
+                      <p className="font-medium text-ink">Как починить (по порядку):</p>
+                      <p>1) Поставь <b>sticky-прокси</b> (1 аккаунт = 1 постоянный IP, лучше резидентный/мобильный в стране аккаунта).<br />2) Затем <b>войди заново по паролю</b> (кнопка «Войти заново») — вход в том же браузере+прокси надёжнее импорта мобильных куки: сессия рождается в той же среде, где будет работать.</p>
+                    </div>
+                  </div>
+                )
+              })()}
               {diagData.error ? (
                 <div className="text-[12px] text-bad">Ошибка: {diagData.error}</div>
               ) : (!diagData.results || diagData.results.length === 0) ? (
