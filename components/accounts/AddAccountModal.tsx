@@ -116,6 +116,7 @@ export function AddAccountModal({
     contact?: { email?: string; phone?: string }
     method?: string   // 2fa: 'sms' | 'app'
     phone?: string     // 2fa: маскированный номер
+    hasKey?: boolean   // 2fa: РЕАЛЬНО ли передан 2FA-ключ (иначе «бот решает сам» — ложь, нужен ручной ввод)
   } | null>(null)
   const [code, setCode] = useState('')
   const [resending, setResending] = useState(false)
@@ -243,6 +244,9 @@ export function AddAccountModal({
       if (res.status === 202 && (data.needsChallenge || data.needs2fa)) {
         setChallenge({
           kind: data.needs2fa ? '2fa' : 'challenge',
+          // «Бот сам решает 2FA» ТОЛЬКО если ключ реально введён. needs2fa = «IG потребовал код»
+          // (у аккаунта включена 2FA), а НЕ «ключ есть». Без ключа боту нечем считать код → ручной ввод.
+          hasKey: data.needs2fa ? Boolean(totp.trim()) : false,
           username: data.username,
           proxyId: data.proxyId ?? null,
           role: data.role ?? 'RESPONDER',
@@ -332,12 +336,14 @@ export function AddAccountModal({
   // 2FA-ключ (сохранён на шаге /login) и сам считает/вводит код, человеку вводить нечего.
   // code здесь — заглушка (воркер его игнорирует, пока manual не запрошен явно).
   useEffect(() => {
-    if (step === 'challenge' && challenge?.kind === '2fa' && auto2fa === 'idle') {
+    // Авто-решение — ТОЛЬКО когда ключ реально есть. Без ключа (hasKey=false) не запускаем авто
+    // (боту нечем считать код) → сразу ручной экран ввода кода из аутентификатора.
+    if (step === 'challenge' && challenge?.kind === '2fa' && challenge?.hasKey && auto2fa === 'idle') {
       setAuto2fa('running')
       submitCode(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, challenge?.kind, auto2fa])
+  }, [step, challenge?.kind, challenge?.hasKey, auto2fa])
 
   // Живой обратный отсчёт до смены TOTP-окна (30с) — пока идёт авто-попытка.
   useEffect(() => {
@@ -445,7 +451,7 @@ export function AddAccountModal({
             <div className="font-medium">Авторизация в Instagram…</div>
             <div className="text-[13px] text-subt">Это может занять 15–30 секунд</div>
           </div>
-        ) : step === 'challenge' && challenge?.kind === '2fa' && auto2fa !== 'failed' ? (
+        ) : step === 'challenge' && challenge?.kind === '2fa' && challenge?.hasKey && auto2fa !== 'failed' ? (
           // 2FA с известным ключом: бот решает САМ (считает TOTP-код из ключа и вписывает его) —
           // ничего вводить не нужно. Только живой таймер и статус попытки.
           <div className="space-y-4">
@@ -473,11 +479,15 @@ export function AddAccountModal({
                 <ShieldCheck className="w-6 h-6 text-brand" />
               </div>
               <div className="font-semibold text-[17px]">
-                {challenge?.kind === '2fa' ? 'Автоматический ввод не сработал' : 'Подтверждение входа'}
+                {challenge?.kind === '2fa'
+                  ? (challenge?.hasKey ? 'Автоматический ввод не сработал' : 'Введите код 2FA')
+                  : 'Подтверждение входа'}
               </div>
               <div className="text-[13px] text-subt leading-relaxed">
                 {challenge?.kind === '2fa'
-                  ? <>Бот не смог сам отправить форму 2FA. Введите код {chDest} для <b>@{challenge?.username}</b> вручную (он подставится РОВНО как вы его ввели, авто-расчёт в этот раз не используется).</>
+                  ? (challenge?.hasKey
+                      ? <>Бот не смог сам отправить форму 2FA. Введите код {chDest} для <b>@{challenge?.username}</b> вручную (он подставится РОВНО как вы его ввели, авто-расчёт в этот раз не используется).</>
+                      : <>У <b>@{challenge?.username}</b> включена 2FA, а ключ вы не вводили — боту нечем посчитать код. Введите 6-значный код из вашего приложения-аутентификатора (Google Authenticator и т.п.). Нет доступа? Войдите через «Куки» или добавьте 2FA-ключ в форме.</>)
                   : <>Instagram отправил код подтверждения {chDest} аккаунта <b>@{challenge?.username}</b>. Введите его ниже.</>}
               </div>
             </div>
