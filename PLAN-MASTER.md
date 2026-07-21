@@ -71,7 +71,7 @@
 | UI вкладок | `app/(dashboard)/{triggers,accounts,stats,proxy,settings,drafts}/page.tsx` |
 | Общие UI | `components/common/*`, `components/accounts/*`, `components/stats/*` |
 | Схема БД | `prisma/schema.prisma` + `prisma/migrations/*` |
-| Связанные планы | `PLAN-LOGIN.md`(капча), `PLAN-PRODUCTION.md`, `PLAN-IDEAL.md`, `PLAN-BEHAVIOR.md`, `AUDIT.md` |
+| Связанные планы | `ARCH-AUDIT.md`(🔴 фундамент/масштаб — читать первым), `PLAN-LOGIN.md`(капча), `PLAN-PRODUCTION.md`, `PLAN-IDEAL.md`, `PLAN-BEHAVIOR.md`, `AUDIT.md` |
 
 ### 0.4 Как отмечать прогресс (шаблон)
 ```
