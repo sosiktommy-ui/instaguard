@@ -427,11 +427,21 @@ async function waitForm(page, timeout) {
 }
 
 async function findLoginForm(page) {
-  // 1) Терпеливо ждём саму форму (до 25с; вернётся мгновенно, если она уже есть).
-  await waitForm(page, 25000)
-  let userInput = await firstVisible(page, SEL.loginUsername, 4000)
-  let passInput = userInput ? await firstVisible(page, SEL.loginPassword, 4000) : null
-  if (userInput && passInput) return { userInput, passInput }
+  // 1) Терпеливо, в ЦИКЛЕ: закрываем cookie-баннер (GDPR, любой язык — он задерживает/перекрывает
+  //    отрисовку формы) → ждём форму → пробуем поля. Живой провал 2026-07-20: ошибка «поля не найдены»,
+  //    но domSummary В ТОТ ЖЕ МОМЕНТ показал форму (name=email/pass, visible:true, forms:1) → форма
+  //    отрисовалась ПОЗЖЕ бюджета / после блипа прокси, а прежний однократный waitForm(25с)+firstVisible
+  //    её не дождался. Единый терпеливый поллинг (до ~6 проходов) это устраняет; при успехе выходим
+  //    мгновенно, медленный случай не штрафуется сверх необходимого.
+  let userInput = null, passInput = null
+  for (let i = 0; i < 6; i++) {
+    await dismissCookieBanner(page).catch(() => {})
+    if (await waitForm(page, 5000)) {
+      userInput = await firstVisible(page, SEL.loginUsername, 2000)
+      passInput = userInput ? await firstVisible(page, SEL.loginPassword, 2000) : null
+      if (userInput && passInput) return { userInput, passInput }
+    }
+  }
 
   // 2) Возможно, это logged-out ЛЕНДИНГ (не /login). Открываем форму по ССЫЛКЕ «Log in»,
   //    а НЕ через clickByText (тот матчил и кнопку submit пустой формы — вредный фолбэк).
