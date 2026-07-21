@@ -101,10 +101,39 @@ export const SEL = {
   // ТОЛЬКО тексты — используется через clickByText (текстовый матчер). CSS-кнопку
   // submit отправляет submitCodeForm() отдельно (firstVisible=CSS). Раньше сюда была
   // ошибочно вписана 'button[type="submit"]' — clickByText её как текст не матчит.
-  codeSubmit: ['Confirm', 'Submit', 'Подтвердить', 'Далее', 'Next', 'Continue', 'Продолжить'],
+  // МУЛЬТИЯЗЫЧНО (клик по кнопке подтверждения кода). Прокси выходит из СЛУЧАЙНОЙ страны → UI
+  // challenge может быть на ЛЮБОМ языке. Живой провал 2026-07-20: WhatsApp-challenge с кнопкой
+  // «Kontynuuj» (польск.) — её НЕ было в списке → код вписан, кнопка не нажата → вход завис.
+  // Матч ТОЧНЫЙ (clickByText exact / scan want.has), лишние варианты безвредны.
+  codeSubmit: [
+    'Confirm', 'Submit', 'Continue', 'Next', 'Verify',
+    'Подтвердить', 'Далее', 'Продолжить', 'Отправить', 'Проверить',
+    'Kontynuuj', 'Dalej', 'Potwierdź',                 // pl
+    'Продовжити', 'Далі', 'Підтвердити',               // uk
+    'Continuar', 'Siguiente', 'Confirmar',             // es
+    'Avançar',                                         // pt (Continuar/Confirmar уже выше)
+    'Weiter', 'Bestätigen',                            // de
+    'Continuer', 'Suivant', 'Confirmer',               // fr
+    'Devam', 'Devam et', 'İleri', 'Onayla',            // tr
+    'Lanjutkan', 'Berikutnya', 'Konfirmasi',           // id
+    'Continua', 'Avanti', 'Conferma',                  // it
+  ],
   // CSS-кнопки подтверждения кода (для firstVisible).
   codeSubmitCss: ['button[type="submit"]:not([disabled])', 'input[type="submit"]:not([disabled])', 'div[role="button"]:has-text("Continue")', 'div[role="button"]:has-text("Confirm")', 'div[role="button"][tabindex]'],
-  resendLink: ['Resend', 'Resend Code', 'Send again', 'Отправить снова', 'Отправить ещё раз'],
+  // МУЛЬТИЯЗЫЧНО «запросить/получить новый код». Живой провал 2026-07-20: польск. «Uzyskaj nowy kod»
+  // не был в списке → бот не мог запросить новый код после истечения прошлого.
+  resendLink: [
+    'Resend', 'Resend Code', 'Resend code', 'Send again', 'Get a new code', 'Get new code', 'Request a new code',
+    'Отправить снова', 'Отправить ещё раз', 'Получить новый код', 'Запросить новый код',
+    'Uzyskaj nowy kod', 'Wyślij ponownie', 'Wyślij nowy kod',              // pl (со скрина)
+    'Отримати новий код', 'Надіслати ще раз', 'Надіслати новий код',       // uk
+    'Obtener un código nuevo', 'Reenviar código', 'Solicitar un código nuevo', // es
+    'Obter novo código', 'Reenviar código',                                // pt
+    'Neuen Code anfordern', 'Code erneut senden',                          // de
+    'Obtenir un nouveau code', 'Renvoyer le code',                         // fr
+    'Yeni kod al', 'Kodu tekrar gönder',                                   // tr
+    'Dapatkan kode baru', 'Kirim ulang kode',                              // id
+  ],
 
   // Профиль / действия
   // 🔴 МУЛЬТИЯЗЫЧНО (живой баг 2026-07-20): у пользователя IG-интерфейс УКРАИНСКИЙ («Читачі»/«Стежить»/

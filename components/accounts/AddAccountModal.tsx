@@ -121,6 +121,8 @@ export function AddAccountModal({
   const [code, setCode] = useState('')
   const [resending, setResending] = useState(false)
   const [resendNote, setResendNote] = useState('')
+  const [codeDeadline, setCodeDeadline] = useState<number | null>(null)  // ~когда истекает код challenge (таймер)
+  const [, setCodeTick] = useState(0)                                    // ре-рендер раз в секунду → таймер идёт вживую
   // Авто-решение 2FA (воркер сам считает TOTP из ключа и вписывает код — человек ничего не
   // вводит). 'running' — идёт попытка на воркере; 'failed' — авто не справилось (напр. кнопка
   // подтверждения не найдена), тогда показываем ручной фолбэк с полем кода.
@@ -261,6 +263,10 @@ export function AddAccountModal({
         setCode('')
         setError('')
         setResendNote('')
+        // Код challenge (почта/SMS/WhatsApp) обычно живёт ~10 мин — заводим таймер обратного отсчёта,
+        // чтобы было видно, сколько ещё действителен, и когда пора запросить новый. Для 2FA не нужен
+        // (там своё 30с-окно TOTP считает воркер).
+        setCodeDeadline(data.needs2fa ? null : Date.now() + 10 * 60 * 1000)
         setAuto2fa('idle')
         setShot(data.screenshot ?? '')   // скрин РЕАЛЬНОГО экрана подтверждения Instagram (видно, куда ушёл код)
         clearLoginFail(username)   // §1.5 креды приняты, IG лишь запросил код — сбрасываем счётчик неудач
@@ -352,6 +358,13 @@ export function AddAccountModal({
     return () => clearInterval(id)
   }, [step, challenge?.kind, auto2fa])
 
+  // Таймер жизни кода challenge — тикает раз в секунду, пока открыт экран ввода кода (почта/SMS/WhatsApp).
+  useEffect(() => {
+    if (!(step === 'challenge' && challenge?.kind === 'challenge' && codeDeadline)) return
+    const id = setInterval(() => setCodeTick((n) => n + 1), 1000)
+    return () => clearInterval(id)
+  }, [step, challenge?.kind, codeDeadline])
+
   // Повторно отправить код challenge (или на другой канал: 'email' | 'sms').
   const resendCode = async (method: 'email' | 'sms') => {
     if (!challenge) return
@@ -365,6 +378,7 @@ export function AddAccountModal({
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Не удалось отправить код повторно'); return }
       setChallenge({ ...challenge, sentTo: data.sentTo })
+      setCodeDeadline(Date.now() + 10 * 60 * 1000)   // новый код → перезапускаем таймер
       setResendNote(data.sentTo === 'sms' ? '✓ Код отправлен повторно по SMS' : '✓ Код отправлен повторно на почту')
     } catch {
       setError('Ошибка сети — проверьте подключение')
@@ -491,6 +505,18 @@ export function AddAccountModal({
                   : <>Instagram отправил код подтверждения {chDest} аккаунта <b>@{challenge?.username}</b>. Введите его ниже.</>}
               </div>
             </div>
+            {/* Таймер жизни кода challenge: видно, сколько ещё действителен и когда пора за новым */}
+            {challenge?.kind === 'challenge' && codeDeadline && (() => {
+              const left = Math.max(0, Math.round((codeDeadline - Date.now()) / 1000))
+              const mm = Math.floor(left / 60), ss = left % 60
+              return (
+                <div className={cn('text-[12px] text-center tabular-nums', left === 0 ? 'text-bad font-medium' : left <= 60 ? 'text-warn' : 'text-subt')}>
+                  {left > 0
+                    ? <>Код действителен ещё ~<b>{mm}:{String(ss).padStart(2, '0')}</b></>
+                    : <>Код мог истечь — запросите новый ниже</>}
+                </div>
+              )
+            })()}
             <input
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
