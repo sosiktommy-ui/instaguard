@@ -279,8 +279,27 @@ export async function domSummary(page) {
   } catch { return null }
 }
 
+// Cookie-баннер (GDPR) накрывает форму входа и ПЕРЕХВАТЫВАЕТ клики (живой баг 2026-07-20: клик по
+// полю логина висел 45с). Прокси выходит из СЛУЧАЙНОЙ страны → диалог на любом языке, поэтому список
+// мультиязычный. Сначала «только необходимые/отклонить» (приватнее), затем «разрешить все» — любая
+// кнопка убирает оверлей. Зовём НЕСКОЛЬКО раз (диалог иногда дорисовывается после навигации).
+const COOKIE_BTNS = [
+  // decline / only-essential (приоритет — приватность)
+  'Decline optional cookies', 'Only allow essential cookies', 'Decline', 'Reject all', 'Reject',
+  'Отклонить необязательные файлы cookie', 'Отклонить', 'Только необходимые',
+  'Відхилити необов’язкові файли cookie', 'Відхилити', 'Дозволити лише основні',
+  'Rechazar', 'Solo cookies esenciales', 'Tolak', 'Reddet', 'Odrzuć', 'Recusar', 'Ablehnen', 'Refuser',
+  // accept (фолбэк — тоже убирает оверлей)
+  'Allow all cookies', 'Accept All', 'Accept all', 'Accept', 'Allow all',
+  'Разрешить все файлы cookie', 'Принять все', 'Дозволити всі файли cookie', 'Прийняти все',
+  'Permitir todas', 'Izinkan semua', 'Tümüne izin ver', 'Zezwól na wszystkie', 'Aceitar tudo', 'Alle erlauben', 'Tout autoriser',
+]
 async function dismissCookieBanner(page) {
-  await clickByText(page, ['Allow all cookies', 'Accept All', 'Accept', 'Разрешить все файлы cookie', 'Принять все'], { timeout: 3500 })
+  for (let i = 0; i < 2; i++) {
+    const clicked = await clickByText(page, COOKIE_BTNS, { timeout: 3000 }).catch(() => false)
+    if (!clicked) break
+    await jitter(500, 1000)
+  }
 }
 
 // Кнопка подтверждения кода — ПО ВСЕМ ФРЕЙМАМ (не только главный). Реальный живой кейс:
@@ -684,31 +703,36 @@ export async function attemptLogin(context, { username, password, totpSecret, pr
     const pageTxt = dom?.text ? ` · ТЕКСТ ЭКРАНА: «${dom.text}»` : ''
     await fail(page, `unknown: страница входа открылась, но поля логина/пароля не найдены (промежуточный экран или бот-защита).${pageTxt}${domTxt}`)
   }
+  // Cookie-баннер мог дорисоваться уже ПОСЛЕ навигации (форма найдена, но диалог поверх неё и
+  // перехватывает клики) — убираем его ещё раз перед вводом, чтобы клик по полю не висел 45с.
+  await dismissCookieBanner(page)
   // ЛОГИН: очистить поле (автозаполнение/остаток) → ввести человечно → СВЕРИТЬ и при расхождении
   // перезаполнить начисто. ЖИВОЙ БАГ 2026-07-19: логин «5mgda18JohnsonRichard» доходил до IG как
   // «sonrichard» (отвалилось начало строки при посимвольном вводе) → IG показывал «неверный логин»
   // (ложный bad_password) на ПОЛНОСТЬЮ верном аккаунте. fill() ставит значение целиком (не посимвольно),
   // поэтому исказиться не может — это гарантирует ТОЧНЫЙ логин в поле.
-  await userInput.fill('').catch(() => {})
+  // fill() тоже ждёт actionability (под оверлеем висел бы 45с) → ВЕЗДЕ короткий timeout; ввод
+  // при этом гарантирует humanType (focus-фолбэк работает сквозь оверлей).
+  await userInput.fill('', { timeout: 6000 }).catch(() => {})
   await humanType(userInput, username)
   try {
     const tu = await userInput.inputValue().catch(() => null)
     if (tu !== null && tu.replace(/^@/, '').trim().toLowerCase() !== String(username).toLowerCase()) {
       console.error(`[login] логин искажён при вводе: в поле "${tu}", ожидалось "${username}" — перезаполняю через fill`)
-      await userInput.fill('').catch(() => {})
-      await userInput.fill(username).catch(() => {})
+      await userInput.fill('', { timeout: 6000 }).catch(() => {})
+      await userInput.fill(username, { timeout: 6000 }).catch(() => {})
     }
   } catch { /* сверка не удалась — не критично */ }
   await jitter(400, 900)
   // ПАРОЛЬ: та же схема — очистить → ввести → сверить/перезаполнить (см. коммент выше). Пароль критичен.
-  await passInput.fill('').catch(() => {})
+  await passInput.fill('', { timeout: 6000 }).catch(() => {})
   await humanType(passInput, password)
   try {
     const typed = await passInput.inputValue().catch(() => null)
     if (typed !== null && typed !== password) {
       console.error('[login] пароль искажён при вводе — перезаполняю через fill')
-      await passInput.fill('').catch(() => {})
-      await passInput.fill(password).catch(() => {})
+      await passInput.fill('', { timeout: 6000 }).catch(() => {})
+      await passInput.fill(password, { timeout: 6000 }).catch(() => {})
     }
   } catch { /* сверка не удалась — не критично, ниже обычный разбор исхода */ }
   await jitter(500, 1100)

@@ -39,7 +39,12 @@ function charDelay(ch) {
 // Печать по буквам: переменный ритм + редкие опечатки с исправлением + паузы после слов
 // и «раздумья». Используется ВЕЗДЕ (логин, пароль, код, директы, комменты) — см. plan.md §1.4.
 export async function humanType(locator, text) {
-  await locator.click({ delay: 40 + rnd(80) })
+  // Фокус перед вводом. КЛИК с КОРОТКИМ таймаутом (иначе наследует context.setDefaultTimeout=45с и
+  // при перехвате оверлеем — напр. cookie-баннер в случайной стране прокси — висит 45с/90 ретраев,
+  // ЖИВОЙ баг 2026-07-20). Перехвачен/не кликнулся → фокусируемся ПРОГРАММНО (`focus()` не требует
+  // pointer events → работает сквозь любой оверлей), ввод всё равно пойдёт в это поле.
+  try { await locator.click({ delay: 40 + rnd(80), timeout: 6000 }) }
+  catch { await locator.focus().catch(() => {}) }
   await jitter(120, 380)                                // «прочитал» поле перед вводом
   const s = String(text)
   for (let i = 0; i < s.length; i++) {
