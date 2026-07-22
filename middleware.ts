@@ -13,7 +13,9 @@ const INTERNAL_SECRET = process.env.INTERNAL_SECRET ?? 'instaguard-internal-cron
 // встраивается в /stats через iframe. Данных пользователя НЕ содержит: реальные
 // числа приходят в него от родительской (уже авторизованной) страницы по postMessage.
 // Публичен намеренно, чтобы iframe гарантированно рендерился (без завязки на куку).
-const PUBLIC_PATHS = new Set<string>(['/login', '/register', '/api/auth/login', '/api/auth/register', '/stats3d/index.html'])
+// `/api/webhooks/stripe` — Stripe шлёт события БЕЗ куки; аутентификация там по ПОДПИСИ вебхука
+// (STRIPE_WEBHOOK_SECRET), а не по сессии, поэтому путь публичный.
+const PUBLIC_PATHS = new Set<string>(['/login', '/register', '/api/auth/login', '/api/auth/register', '/stats3d/index.html', '/api/webhooks/stripe'])
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl

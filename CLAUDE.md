@@ -149,6 +149,19 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 тех, кто заведён ДО биллинга. Плюс reusable `grantPlan(userId, {plan, quantity, status})` в `entitlements.ts`
 (ручной comp/админ-грант без Stripe). Порядок правильный: Ф0 (не сломать существующих) → … → Ф4 (гейты).
 
+**Доп. (Фаза 3 — код Stripe, ИНЕРТЕН без ключей):** установлен SDK `stripe@22`. `lib/stripe.ts`
+(`stripeConfigured()`/`getStripe()`/`priceIdFor`/`planFromPriceId`/`appUrl`, env-контракт price↔plan в
+комментарии). Роуты: `POST /api/billing/checkout` (Checkout Session, `client_reference_id=userId`,
+quantity=слоты, триал из тарифа), `POST /api/billing/portal` (Customer Portal), `POST /api/webhooks/stripe`
+(RAW-body проверка подписи + идемпотентность `StripeEvent` + обработка checkout.session.completed /
+customer.subscription.created|updated|deleted / invoice.paid|payment_failed → upsert `Subscription` +
+кэш `User.plan`). `middleware.ts`: `/api/webhooks/stripe` → PUBLIC (аутентификация по подписи, не по куке).
+Без `STRIPE_SECRET_KEY` всё отвечает 503 «оплата ещё не подключена» — ничего не ломается. Проверено:
+`tsc` чист, `next build` чист (роуты собираются). ⚠️ **Чтобы активировать:** владельцу завести в Stripe
+products/prices + env `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`/`STRIPE_PRICE_*`/`APP_URL`, повесить
+вебхук на `/api/webhooks/stripe`. **Дальше:** Ф4 — гейты (`requireEntitlement` в poll/accounts/triggers);
+Ф5 — сайт (лендинг/pricing/billing UI на `getEntitlements`).
+
 ### 2026-07-22 (12) (🔴 ДОВЕДЕНИЕ фикса (11): цикл идёт ДОЛЬШЕ 12 мин → heartbeat вместо тайм-капа + быстрая диагностика (fix «upstream error»))
 
 ⚠️ **Редеплой воркера** (build → `2026-07-22-browser-122-heartbeat-fast-diag`) + Next.js (`accounts/page.tsx`).
