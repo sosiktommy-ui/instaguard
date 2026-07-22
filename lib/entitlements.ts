@@ -82,3 +82,21 @@ export function canAddAccount(ent: Entitlements, currentCount: number): boolean 
 export function canUseTriggerType(ent: Entitlements, triggerType: string): boolean {
   return ent.features.allTriggers || triggerType === 'NEW_FOLLOWER'
 }
+
+// ── Ручная выдача тарифа (comp) без Stripe ────────────────────────────────────
+// Фаза 0 (grandfathering) + будущие comp/админ-гранты: выдать пользователю активную подписку
+// вручную (stripe*-поля пустые = это ручной грант, не биллинг). По умолчанию — agency-безлимит.
+export async function grantPlan(
+  userId: string,
+  opts: { plan?: PlanId; quantity?: number; status?: SubStatus } = {},
+): Promise<void> {
+  const plan = opts.plan ?? 'agency'
+  const quantity = opts.quantity ?? 16
+  const status = (opts.status ?? 'active') as string
+  await prisma.subscription.upsert({
+    where: { userId },
+    create: { userId, plan, status, quantity },
+    update: { plan, status, quantity },
+  })
+  await prisma.user.update({ where: { id: userId }, data: { plan } }).catch(() => {})
+}

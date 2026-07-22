@@ -143,6 +143,12 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 ключи+products/prices); Ф4 — гейты в `poll`/`accounts/auth`/`triggers` + выдача прокси; Ф5 — сайт/pricing/billing;
 Ф9 — мультиворкер-шардинг (масштаб 50+).
 
+**Доп. (Фаза 0 — grandfathering, Вариант А):** миграция `20260722010000_grandfather_existing` (данные,
+идемпотентно) выдаёт КАЖДОМУ существующему пользователю без подписки active-подписку-comp `agency` с
+запасом quantity (≥ числа аккаунтов) — чтобы при включении гейтов (Фаза 4) НИЧЕГО не заблокировалось у
+тех, кто заведён ДО биллинга. Плюс reusable `grantPlan(userId, {plan, quantity, status})` в `entitlements.ts`
+(ручной comp/админ-грант без Stripe). Порядок правильный: Ф0 (не сломать существующих) → … → Ф4 (гейты).
+
 ### 2026-07-22 (12) (🔴 ДОВЕДЕНИЕ фикса (11): цикл идёт ДОЛЬШЕ 12 мин → heartbeat вместо тайм-капа + быстрая диагностика (fix «upstream error»))
 
 ⚠️ **Редеплой воркера** (build → `2026-07-22-browser-122-heartbeat-fast-diag`) + Next.js (`accounts/page.tsx`).
