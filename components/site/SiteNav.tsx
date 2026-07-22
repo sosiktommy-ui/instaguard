@@ -16,6 +16,18 @@ const NAV_LINKS = [
 export function SiteNav({ solid = false }: { solid?: boolean }) {
   const [open, setOpen] = useState(false)
 
+  // Вошёл ли пользователь — от этого зависят кнопки справа: гость → «Войти/Начать»,
+  // вошедший → «Кабинет» + «Перейти к функционалу» (в приложение). Лёгкая проверка /api/auth/me.
+  const [authed, setAuthed] = useState<boolean | null>(null)
+  useEffect(() => {
+    let alive = true
+    fetch('/api/auth/me', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : { authed: false }))
+      .then((d) => { if (alive) setAuthed(Boolean(d?.authed)) })
+      .catch(() => { if (alive) setAuthed(false) })
+    return () => { alive = false }
+  }, [])
+
   // блокируем прокрутку body под открытым меню
   useEffect(() => {
     document.body.style.overflow = open ? 'hidden' : ''
@@ -70,8 +82,17 @@ export function SiteNav({ solid = false }: { solid?: boolean }) {
         </nav>
 
         <div className="rg-nav-right">
-          <Link href="/login" className="rg-btn rg-btn-light">Войти</Link>
-          <Link href="/register" className="rg-btn rg-btn-primary">Начать</Link>
+          {authed ? (
+            <>
+              <Link href="/account" className="rg-btn rg-btn-light">Кабинет</Link>
+              <Link href="/triggers" className="rg-btn rg-btn-primary">Перейти к функционалу</Link>
+            </>
+          ) : (
+            <>
+              <Link href="/login" className="rg-btn rg-btn-light">Войти</Link>
+              <Link href="/register" className="rg-btn rg-btn-primary">Начать</Link>
+            </>
+          )}
         </div>
 
         <button className="rg-burger" onClick={() => setOpen(true)} aria-label="Открыть меню">
@@ -95,8 +116,17 @@ export function SiteNav({ solid = false }: { solid?: boolean }) {
               ))}
             </nav>
             <div className="rg-sheet-cta">
-              <Link href="/register" className="rg-btn rg-btn-primary rg-btn-lg" onClick={() => setOpen(false)}>Начать</Link>
-              <Link href="/login" className="rg-btn rg-btn-light rg-btn-lg" onClick={() => setOpen(false)}>Войти</Link>
+              {authed ? (
+                <>
+                  <Link href="/triggers" className="rg-btn rg-btn-primary rg-btn-lg" onClick={() => setOpen(false)}>Перейти к функционалу</Link>
+                  <Link href="/account" className="rg-btn rg-btn-light rg-btn-lg" onClick={() => setOpen(false)}>Кабинет</Link>
+                </>
+              ) : (
+                <>
+                  <Link href="/register" className="rg-btn rg-btn-primary rg-btn-lg" onClick={() => setOpen(false)}>Начать</Link>
+                  <Link href="/login" className="rg-btn rg-btn-light rg-btn-lg" onClick={() => setOpen(false)}>Войти</Link>
+                </>
+              )}
             </div>
           </aside>
         </>

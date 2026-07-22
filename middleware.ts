@@ -15,7 +15,7 @@ const INTERNAL_SECRET = process.env.INTERNAL_SECRET ?? 'instaguard-internal-cron
 // Публичен намеренно, чтобы iframe гарантированно рендерился (без завязки на куку).
 // `/api/webhooks/stripe` — Stripe шлёт события БЕЗ куки; аутентификация там по ПОДПИСИ вебхука
 // (STRIPE_WEBHOOK_SECRET), а не по сессии, поэтому путь публичный.
-const PUBLIC_PATHS = new Set<string>(['/login', '/register', '/api/auth/login', '/api/auth/register', '/stats3d/index.html', '/api/webhooks/stripe'])
+const PUBLIC_PATHS = new Set<string>(['/login', '/register', '/api/auth/login', '/api/auth/register', '/api/auth/me', '/stats3d/index.html', '/api/webhooks/stripe'])
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
@@ -25,6 +25,10 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next()
   }
 
+  // Главная страница = ПУБЛИЧНЫЙ САЙТ (лендинг). При заходе на «/» — и гость, и вошедший видят сайт;
+  // в приложение (/triggers …) переходят кнопкой «Перейти к функционалу» на сайте. (plansite.md S7)
+  if (pathname === '/') return NextResponse.redirect(new URL('/lp', req.url))
+
   const token = req.cookies.get('auth-token')?.value
   let valid = false
   if (token) {
@@ -32,8 +36,8 @@ export async function middleware(req: NextRequest) {
   }
 
   if (valid) {
-    // Уже вошёл — не пускаем обратно на страницы входа/регистрации
-    if (pathname === '/login' || pathname === '/register') return NextResponse.redirect(new URL('/', req.url))
+    // Уже вошёл — не пускаем обратно на страницы входа/регистрации (на сайт, не в приложение)
+    if (pathname === '/login' || pathname === '/register') return NextResponse.redirect(new URL('/lp', req.url))
     return NextResponse.next()
   }
 
