@@ -27,3 +27,11 @@ next-env.d.ts
 tsconfig.tsbuildinfo
 
 public/Foto/IMG_3634.PNG
+
+# локальные артефакты / мусор — не для деплоя
+.mcp.json
+structure.txt
+public/test.html
+public/3D stats/
+public/Foto/PixVerse_Image_Effect_prompt_Edit instruction.jpg
+ReactiveGram архитектура/

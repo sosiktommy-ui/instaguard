@@ -38,7 +38,8 @@ export async function middleware(req: NextRequest) {
   }
 
   // Не вошёл
-  if (PUBLIC_PATHS.has(pathname)) return NextResponse.next()
+  // `/lp*` — публичный сайт (лендинг/демо/тарифы) — доступен гостям (paywall на функционал — отдельно, этап S7).
+  if (PUBLIC_PATHS.has(pathname) || pathname.startsWith('/lp')) return NextResponse.next()
   if (pathname.startsWith('/api/')) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
@@ -49,6 +50,6 @@ export async function middleware(req: NextRequest) {
 // Пропускаем статику, картинки и служебные пути Next
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|manifest.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|manifest.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|mp4|webm|mov|m4v|woff|woff2)$).*)',
   ],
 }

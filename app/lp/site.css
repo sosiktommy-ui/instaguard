@@ -1,0 +1,96 @@
+/* ReactiveGram — публичный сайт (лендинг). СВЕТЛАЯ premium-тема по референсу VaultShield:
+   off-white фон, фоновое 3D-видео, крупный жирный заголовок с иконками внутри текста, фиолетовый акцент.
+   Всё заскоуплено под .rg-site, чтобы не пересекаться с дашбордом (globals.css).
+   Шрифт: Inter для всего (гротеск как Helvetica Now, но с кириллицей — сайт русский). */
+
+.rg-site {
+  --rg-text: #192837;          /* тёмно-синий текст (как в референсе) */
+  --rg-muted: rgba(25, 40, 55, 0.72);
+  --rg-accent: #7342e2;        /* фиолетовый акцент */
+  --rg-accent-2: #8a5cf0;
+  --rg-bg: #f2f2ee;            /* off-white фон */
+  --rg-login-bg: #f2f2ee;
+  --rg-sheet: #cfc8c5;
+  --rg-line: rgba(25, 40, 55, 0.12);
+  --rg-font: 'Inter', system-ui, -apple-system, sans-serif;
+
+  position: relative;
+  min-height: 100dvh;
+  background: var(--rg-bg);
+  color: var(--rg-text);
+  font-family: var(--rg-font);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+.rg-container { width: 100%; max-width: 1280px; margin: 0 auto; padding: 0 20px; }
+@media (min-width: 640px) { .rg-container { padding: 0 32px; } }
+
+/* ---------- кнопки ---------- */
+.rg-btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; font-family: var(--rg-font); font-weight: 600; cursor: pointer; border: none; text-decoration: none; white-space: nowrap; transition: transform 0.18s cubic-bezier(0.22,1,0.36,1), filter 0.18s, background 0.2s; }
+.rg-btn:active { transform: scale(0.96); }
+.rg-btn-primary { color: #fff; background: var(--rg-accent); border-radius: 50px; padding: 12px 22px; font-size: 15px; box-shadow: 0 4px 24px rgba(115,66,226,0.28); }
+.rg-btn-primary:hover { transform: scale(1.04); filter: brightness(1.1); }
+.rg-btn-light { color: var(--rg-text); background: #fff; border: 1px solid var(--rg-line); border-radius: 50px; padding: 12px 20px; font-size: 15px; }
+.rg-btn-light:hover { background: #fbfbf9; }
+.rg-btn-lg { padding: 17px 26px; font-size: 16px; min-width: 200px; }
+
+/* ---------- навигация (поверх видео, прозрачная) ---------- */
+.rg-nav { position: absolute; top: 0; left: 0; right: 0; z-index: 30; }
+.rg-nav-inner { display: flex; align-items: center; justify-content: space-between; padding: 18px 0; }
+.rg-logo { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 20px; letter-spacing: -0.02em; color: var(--rg-text); text-decoration: none; }
+.rg-logo-mark { width: 32px; height: 32px; flex: none; }
+.rg-nav-links { display: none; gap: 32px; }
+@media (min-width: 900px) { .rg-nav-links { display: flex; } }
+.rg-nav-link { color: var(--rg-text); font-size: 14px; font-weight: 500; text-decoration: none; opacity: 0.75; transition: opacity 0.2s; }
+.rg-nav-link:hover { opacity: 1; }
+.rg-nav-right { display: none; align-items: center; gap: 10px; }
+@media (min-width: 900px) { .rg-nav-right { display: flex; } }
+.rg-burger { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--rg-line); background: rgba(255,255,255,0.6); color: var(--rg-text); cursor: pointer; }
+@media (min-width: 900px) { .rg-burger { display: none; } }
+
+/* ---------- hero (полноэкранное фоновое видео, светлая тема) ---------- */
+.rg-hero { position: relative; min-height: 100dvh; display: flex; align-items: center; overflow: hidden; }
+.rg-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }
+.rg-video-fallback { position: absolute; inset: 0; z-index: 0; background:
+  radial-gradient(60% 60% at 80% 30%, rgba(115,66,226,0.22), transparent 60%),
+  radial-gradient(50% 50% at 92% 75%, rgba(120,150,255,0.18), transparent 60%),
+  linear-gradient(120deg, #f4f3ef 0%, #ecebe6 55%, #e7e6ff 100%); }
+/* осветляем левую часть, чтобы текст читался поверх видео */
+.rg-video-tint { position: absolute; inset: 0; z-index: 1; background:
+  linear-gradient(90deg, rgba(242,242,238,0.94) 0%, rgba(242,242,238,0.7) 38%, rgba(242,242,238,0.15) 66%, rgba(242,242,238,0) 100%); }
+.rg-hero-body { position: relative; z-index: 2; width: 100%; padding-top: clamp(80px, 10vw, 120px); padding-bottom: 60px; }
+.rg-hero-content { max-width: 600px; }
+
+.rg-badge { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 50px; background: rgba(255,255,255,0.7); border: 1px solid var(--rg-line); color: var(--rg-accent); font-size: 13px; font-weight: 600; margin-bottom: 22px; }
+.rg-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--rg-accent); animation: rg-pulse 2.2s ease-in-out infinite; }
+
+.rg-h1 { font-family: var(--rg-font); font-weight: 800; font-size: clamp(1.9rem, 5.2vw, 3.5rem); line-height: 1.05; letter-spacing: -0.02em; color: var(--rg-text); margin: 0 0 22px; }
+.rg-hi { display: inline-flex; vertical-align: middle; position: relative; top: -3px; margin: 0 4px; color: var(--rg-accent); }
+.rg-sub { font-size: clamp(0.95rem, 2.3vw, 1.15rem); line-height: 1.65; color: var(--rg-muted); max-width: 560px; margin: 0 0 32px; }
+.rg-cta-row { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 30px; }
+.rg-cta-primary { justify-content: space-between; gap: 28px; }
+.rg-bullets { display: flex; flex-wrap: wrap; gap: 10px 20px; list-style: none; padding: 0; margin: 0; }
+.rg-bullet { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; color: var(--rg-text); }
+.rg-bullet svg { color: var(--rg-accent); flex: none; }
+
+/* ---------- мобильное меню ---------- */
+.rg-sheet-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(25,40,55,0.35); backdrop-filter: blur(4px); animation: rg-fade 0.25s ease; }
+.rg-sheet { position: fixed; top: 0; right: 0; z-index: 61; height: 100dvh; width: min(88vw, 360px); background: var(--rg-sheet); box-shadow: -12px 0 48px rgba(25,40,55,0.18); padding: 20px; display: flex; flex-direction: column; animation: rg-slide 0.45s cubic-bezier(0.22,1,0.36,1); }
+.rg-sheet-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 16px; border-bottom: 1px solid var(--rg-line); }
+.rg-sheet-links { display: flex; flex-direction: column; gap: 2px; margin: 16px 0; }
+.rg-sheet-link { padding: 13px 12px; border-radius: 12px; color: var(--rg-text); text-decoration: none; font-size: 16px; font-weight: 500; }
+.rg-sheet-link:hover { background: rgba(255,255,255,0.5); }
+.rg-sheet-cta { display: flex; flex-direction: column; gap: 10px; margin-top: auto; }
+
+/* ---------- анимации (fadeUp как в промпте) ---------- */
+.rg-fadeup { opacity: 0; transform: translateY(28px); animation: rg-fadeup-k 0.6s cubic-bezier(0.22,1,0.36,1) forwards; }
+.rg-d1 { animation-delay: 0s; } .rg-d2 { animation-delay: 0.15s; } .rg-d3 { animation-delay: 0.3s; } .rg-d4 { animation-delay: 0.45s; }
+@keyframes rg-fadeup-k { to { opacity: 1; transform: none; } }
+@keyframes rg-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+@keyframes rg-slide { from { transform: translateX(100%); } to { transform: translateX(0); } }
+@keyframes rg-fade { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .rg-fadeup, .rg-dot { animation: none !important; opacity: 1 !important; transform: none !important; }
+}
