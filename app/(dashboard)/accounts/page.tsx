@@ -263,7 +263,16 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
     setDiagRun(true); setDiagData(null)
     try {
       const r = await fetch(`/api/accounts/${ra.id}/diagnose-actions`, { method: 'POST' })
-      const data = await r.json()
+      // Тело читаем как ТЕКСТ и парсим безопасно: при долгом запросе шлюз Railway отдаёт plain-text
+      // «upstream error» → r.json() кидал «Unexpected token 'u'…». Теперь — понятное сообщение.
+      const text = await r.text()
+      let data: any
+      try { data = JSON.parse(text) }
+      catch {
+        data = { ok: false, error: /upstream|timeout|gateway|502|503|504/i.test(text)
+          ? 'Воркер долго отвечал или был недоступен (upstream error). Диагностика теперь ограничена по времени — попробуйте ещё раз через минуту.'
+          : `Некорректный ответ сервера: ${(text || 'пусто').slice(0, 120)}` }
+      }
       setDiagData(data)
       if (data?.ok && (typeof data.followerCount === 'number' || data.sessionDead)) onChanged?.()   // счётчик поправлен ИЛИ сессия помечена «Требует входа» → обновить карточку
     } catch (e: any) { setDiagData({ ok: false, error: String(e?.message ?? e) }) }

@@ -257,18 +257,20 @@ const _ctxCache = new Map() // key → { context, lastUsed, warmedUp }
 // действия цикла = «человек всё сделал и ушёл».
 const CTX_IDLE_MS = 3 * 60 * 1000
 const CTX_MAX = 3                    // держим мало открытых контекстов (RAM Chromium) — остальное закрывается
-const CTX_BUSY_MAX_MS = 12 * 60 * 1000   // предохранитель: «занят» >12 мин = зависший fn → всё равно закрыть
+const CTX_HANG_MS = 5 * 60 * 1000    // busy-контекст без ЕДИНОГО heartbeat 5 мин = завис → закрыть (предохранитель)
 // 🔴 КОРЕНЬ «сессия рвётся ПОСРЕДИ цикла» (аудит 2026-07-20, подтверждён живьём): свипер закрывал контекст
-// по простою 3 мин, но `lastUsed` обновлялся ТОЛЬКО в КОНЦЕ всего цикла (withCycleContext), а НЕ между
-// действиями. Длинный цикл (одна неудачная навигация openProfile ретраит ~2.7 мин) переваливал за 3 мин →
-// свипер закрывал АКТИВНО работающий контекст → все следующие действия падали `login_required` на закрытом
-// контексте (хотя сессия ЖИВА — оттого reread-nick всегда и срабатывал). Прокси ни при чём. Фикс: пока идёт
-// цикл, контекст помечен busy — свипер/переполнение его НЕ трогают; простой отсчитывается от КОНЦА цикла.
+// по простою 3 мин, но `lastUsed` обновлялся ТОЛЬКО в КОНЦЕ всего цикла, а НЕ между действиями → длинный цикл
+// переваливал за порог → свипер убивал АКТИВНЫЙ контекст → каскад login_required на живой сессии.
+// ⚠️ ВАЖНО (фидбек 2026-07-21): реальный цикл (прогрев + паузы + много целей) идёт ДОЛЬШЕ 12 мин — поэтому
+// закрывать busy по абсолютному возрасту НЕЛЬЗЯ (убьёт живой длинный цикл). Решение — HEARTBEAT: каждое
+// действие/навигация зовёт `heartbeat(context)` → обновляет lastUsed. busy-контекст закрываем ТОЛЬКО если
+// heartbeat молчит CTX_HANG_MS (реально завис) — живой цикл ЛЮБОЙ длины остаётся жив, пока «дышит».
 setInterval(() => {
   const now = Date.now()
   for (const [k, v] of _ctxCache) {
-    if (v.busy) { if (now - v.busy > CTX_BUSY_MAX_MS) { _ctxCache.delete(k); closeContextSafe(v.context) } continue }
-    if (now - v.lastUsed > CTX_IDLE_MS) { _ctxCache.delete(k); closeContextSafe(v.context) }
+    const idle = now - v.lastUsed
+    if (v.busy) { if (idle > CTX_HANG_MS) { _ctxCache.delete(k); closeContextSafe(v.context) } continue }
+    if (idle > CTX_IDLE_MS) { _ctxCache.delete(k); closeContextSafe(v.context) }
   }
 }, 30 * 1000).unref?.()
 
@@ -307,11 +309,18 @@ export async function getOrCreateContext(opts) {
     if (ok) { const v = _ctxCache.get(ok); _ctxCache.delete(ok); await closeContextSafe(v.context) }
   }
   const context = await newAccountContext(opts)
+  context._ctxKey = key   // чтобы heartbeat(context) мог найти запись кэша по объекту контекста
   _ctxCache.set(key, { context, lastUsed: Date.now(), warmedUp: false, busy: 0 })
   return { context, reused: false, key }
 }
 
 export function touchContext(key) { const v = _ctxCache.get(key); if (v) v.lastUsed = Date.now() }
+// HEARTBEAT: «контекст ещё активно работает» — обновляет lastUsed по ОБЪЕКТУ контекста (у него есть _ctxKey).
+// Зовётся на каждом действии (requireSession) и каждой навигации (gotoResilient) → длинный цикл ЛЮБОЙ длины
+// не закрывается свипером, пока «дышит»; закрывается только реально зависший (нет heartbeat CTX_HANG_MS).
+export function heartbeat(context) {
+  try { const k = context && context._ctxKey; if (k) { const v = _ctxCache.get(k); if (v) v.lastUsed = Date.now() } } catch {}
+}
 // Пометить контекст занятым (идёт цикл) — свипер по простою и переполнение НЕ закрывают занятый контекст
 // (аудит 2026-07-20: закрытие АКТИВНОГО контекста = каскад login_required). busy = метка времени начала
 // (для предохранителя от зависшего fn). Снимается в finally withCycleContext — простой пойдёт от конца цикла.
@@ -341,6 +350,7 @@ export async function safeStorageState(context) {
 export async function gotoResilient(page, url, { timeout = 60000, retries = 3, backoffMs = [2000, 5000, 10000] } = {}) {
   let lastErr
   for (let i = 0; i <= retries; i++) {
+    try { heartbeat(page.context()) } catch {}   // «жив» — навигация в процессе (не даём свиперу закрыть busy-контекст)
     try {
       // 'commit' (первый байт ответа) толерантнее к медленным/моргающим резидентным прокси,
       // чем 'domcontentloaded'. Форму/сессию дальше по коду ждём ЯВНО (waitForSelector /

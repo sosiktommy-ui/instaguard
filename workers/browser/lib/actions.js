@@ -1,7 +1,7 @@
 // Действия аккаунта через браузер. См. plan.md §4.6. Каждое возвращает обновлённый
 // storageState (сессия «дозревает»). Работают по username (навигация /{username}/).
 import { SEL } from './selectors.js'
-import { firstVisible, clickByText, findByText, pageHasText, hasSessionCookie, gotoResilient, safeStorageState } from './browser.js'
+import { firstVisible, clickByText, findByText, pageHasText, hasSessionCookie, gotoResilient, safeStorageState, heartbeat } from './browser.js'
 import { humanType, jitter, idleMouse, preActionBrowse, humanClick } from './human.js'
 import { dismissInterstitials, captureDiag } from './login.js'     // §13.11 — закрыть всплывашки, перекрывающие иконку
 
@@ -52,24 +52,27 @@ async function tryOpenViaSearch(page, uname) {
   return profileMatches(page, uname)
 }
 
-async function openProfile(context, username) {
+async function openProfile(context, username, { fast = false } = {}) {
+  // fast=true — режим ПРОБЫ (dry-run/диагностика): без прогрева/поиска/долгих ретраев, одна короткая
+  // навигация. Иначе диагностика по нескольким целям с ретраями ~2.7 мин на цель переваливает за
+  // таймаут шлюза Railway → «upstream error». Для РЕАЛЬНЫХ действий (fast=false) поведение прежнее.
   const uname = String(username).replace(/^@/, '').trim().toLowerCase()
   const page = await context.newPage()
-  await preActionBrowse(page) // §1.2: полистать ленту перед заходом к цели — действие не «вхолодную»
+  if (!fast) await preActionBrowse(page) // §1.2: полистать ленту перед заходом к цели — действие не «вхолодную»
   // §4.1 живой переход: варьированно пробуем ПОИСК, иначе — прямой URL (резерв). Поиск не удался/
-  // открыл не того → тихо на URL (ничего не ломаем).
+  // открыл не того → тихо на URL (ничего не ломаем). В fast-режиме поиск пропускаем (лишнее время).
   let via = 'url'
-  if (Math.random() < SEARCH_PROB) {
+  if (!fast && Math.random() < SEARCH_PROB) {
     try { if (await tryOpenViaSearch(page, uname)) via = 'search' } catch { /* → URL */ }
   }
   if (via !== 'search') {
-    // Директ идёт в ОТДЕЛЬНОМ (холодном) dm-send контексте: первая навигация к профилю через
-    // резидентный прокси часто «моргает» (ERR_TUNNEL/timeout), а retries:1 (2 попытки, 2с) не давал
-    // прокси восстановиться → «прокси моргнул» → директ терялся (не ретраится, снапшот уже пометил
-    // подписчика известным). Больше попыток + длиннее пауза (сессия/прокси живые — блип транзиентный).
-    await gotoResilient(page, `https://www.instagram.com/${uname}/`, { timeout: 35000, retries: 3, backoffMs: [2500, 6000, 12000] })
-    await jitter(1200, 2500)
-    await idleMouse(page)
+    // Реальное действие: больше попыток + длиннее пауза (резидентный прокси часто «моргает» на первой
+    // навигации; сессия/прокси живые, блип транзиентный — не терять директ). Проба (fast): одна попытка,
+    // короткий таймаут — блип просто отметим «network», не ждём 2.7 мин.
+    await gotoResilient(page, `https://www.instagram.com/${uname}/`,
+      fast ? { timeout: 20000, retries: 0, backoffMs: [] } : { timeout: 35000, retries: 3, backoffMs: [2500, 6000, 12000] })
+    await jitter(fast ? 400 : 1200, fast ? 900 : 2500)
+    if (!fast) await idleMouse(page)
   }
   // §4.1 СВЕРКА: открыт НЕ тот профиль? Если пришли поиском — резерв прямой URL (и перепроверка);
   // если и URL дал не тот (удалён/переименован/недоступен) → НЕ действуем (retryable, повторим).
@@ -109,6 +112,7 @@ const MAX_SESSION_HEALS = 8
 // MAX_SESSION_HEALS: если кука падает снова и снова — сессия/прокси реально нестабильны → login_required
 // (аккаунт метится CHALLENGE «Войти заново»), без бесконечного цикла.
 async function requireSession(context) {
+  heartbeat(context)   // «контекст жив» на каждом действии — свипер не закроет активный длинный цикл
   if (await hasSessionCookie(context)) return
   const seed = context._igSeedCookies
   const used = context._igHeals || 0
@@ -229,7 +233,7 @@ async function tryAttachPhoto(context, page, dataUrl) {
 // ── Директ ────────────────────────────────────────────────────────────────────
 export async function sendDM(context, { toUsername, text, image, dryRun }) {
   await requireSession(context)
-  const page = await openProfile(context, toUsername)
+  const page = await openProfile(context, toUsername, { fast: dryRun })
 
   // §10.3 dry-run: доходим до композера директа, но НИЧЕГО не печатаем и не отправляем.
   // Открытие окна чата само по себе НЕ создаёт тред у получателя (тред возникает только при
@@ -311,7 +315,7 @@ async function hasFollowStateButton(page, timeout = 4000) {
 // ── Подписка ────────────────────────────────────────────────────────────────
 export async function followUser(context, { targetUsername, dryRun }) {
   await requireSession(context)
-  const page = await openProfile(context, targetUsername)
+  const page = await openProfile(context, targetUsername, { fast: dryRun })
 
   // Уже подписаны/заявка отправлена — по КНОПКЕ состояния (не по тексту статистики, см. выше).
   if (await hasFollowStateButton(page, 2500)) {
@@ -344,7 +348,7 @@ export async function followUser(context, { targetUsername, dryRun }) {
 // ── Лайк последних постов ─────────────────────────────────────────────────────
 export async function likeUser(context, { targetUsername, count = 1, dryRun }) {
   await requireSession(context)
-  const page = await openProfile(context, targetUsername)
+  const page = await openProfile(context, targetUsername, { fast: dryRun })
 
   // Ссылки на посты в сетке профиля.
   const postLinks = await page.locator('a[href*="/p/"]').evaluateAll(
@@ -452,7 +456,7 @@ export async function replyComment(context, { postUrl, text, dryRun }) {
 // профиля и комментирует его. 0 постов у цели = невозможно (не ошибка).
 export async function commentLatestPost(context, { targetUsername, text, dryRun }) {
   await requireSession(context)
-  const page = await openProfile(context, targetUsername)
+  const page = await openProfile(context, targetUsername, { fast: dryRun })
   const postLinks = await page.locator('a[href*="/p/"]').evaluateAll(
     (els) => Array.from(new Set(els.map((e) => e.getAttribute('href')).filter(Boolean))).slice(0, 3)
   ).catch(() => [])
@@ -744,23 +748,28 @@ export async function diagnoseActions(context, { ownUsername, usernames, limit =
   const results = []
   const DEADRE = /login_required|сессия недейств/i
   let sessionDead = false
+  // Бюджет времени: диагностика — синхронный HTTP-запрос, а Railway-шлюз рвёт слишком долгий запрос
+  // как «upstream error». Ограничиваем ~110с (fast-навигации openProfile + пробы нескольких целей в это
+  // укладываются); при превышении отдаём ЧАСТИЧНЫЙ результат с пометкой budgetHit, а не ловим таймаут шлюза.
+  const startTs = Date.now(); const BUDGET_MS = 110000; let budgetHit = false
   for (const username of followers) {
+    if (Date.now() - startTs > BUDGET_MS) { budgetHit = true; break }
     const r = { username }
     try { const f = await followUser(context, { targetUsername: username, dryRun: true }); r.follow = f.already ? 'уже подписан ✓' : (f.ok ? 'кнопка «Подписаться» есть ✓' : `кнопка не найдена ✗${f.reached?.buttons?.length ? ` | кнопки профиля: [${f.reached.buttons.join(', ')}]` : ''}`) }
     catch (e) { r.follow = `сбой: ${dshort(e)}`; if (DEADRE.test(r.follow)) sessionDead = true }
-    if (!sessionDead) {
+    if (!sessionDead && Date.now() - startTs < BUDGET_MS) {
       await jitter(1500, 3000)
       try {
         const l = await likeUser(context, { targetUsername: username, dryRun: true })
         r.like = l.impossible ? 'нет постов — лайк невозможен' : (l.reached && l.reached.likeButton ? `постов ${l.reached.posts}, лайк доступен ✓` : (l.reached && l.reached.posts ? `постов ${l.reached.posts}, кнопка лайка не найдена ✗` : 'нет постов'))
       } catch (e) { r.like = `сбой: ${dshort(e)}`; if (DEADRE.test(r.like)) sessionDead = true }
     }
-    if (!sessionDead) {
+    if (!sessionDead && Date.now() - startTs < BUDGET_MS) {
       await jitter(1500, 3000)
       try { const s = await viewStories(context, { targetUsername: username, dryRun: true }); r.story = s.impossible ? 'нет активных сторис' : (s.reached && s.reached.storyViewer ? 'есть активные сторис ✓' : 'нет') }
       catch (e) { r.story = `сбой: ${dshort(e)}`; if (DEADRE.test(r.story)) sessionDead = true }
     }
-    if (!sessionDead) {
+    if (!sessionDead && Date.now() - startTs < BUDGET_MS) {
       await jitter(1500, 3000)
       try {
         const dm = await sendDM(context, { toUsername: username, text: '', dryRun: true })
@@ -776,7 +785,7 @@ export async function diagnoseActions(context, { ownUsername, usernames, limit =
   // ВАЖНО: не отдаём storageState, если сессия мертва — иначе вызывающий сохранит РАЗЛОГИНЕННЫЙ стейт
   // поверх хорошего browserState (отравление сессии). При живой сессии — отдаём дозревший стейт.
   const alive = await hasSessionCookie(context).catch(() => false)
-  return { followers, opened, followerCount, results, sessionDead, storageState: alive ? await safeStorageState(context) : undefined }
+  return { followers, opened, followerCount, results, sessionDead, budgetHit, storageState: alive ? await safeStorageState(context) : undefined }
 }
 
 // ── Стори-события из директа (ответы на мои сторис + упоминания) ─────────────────
