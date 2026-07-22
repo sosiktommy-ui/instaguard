@@ -8,10 +8,10 @@ export function SiteLogoMark({ className }: { className?: string }) {
           <stop offset="1" stopColor="#6a7df9" />
         </linearGradient>
       </defs>
-      {/* скруглённый квадрат-«пузырь диалога» */}
-      <rect x="3" y="3" width="34" height="34" rx="11" stroke="url(#rgLogo)" strokeWidth="2.4" />
-      {/* молния-отклик */}
-      <path d="M22.5 10L14 21.5h5.5L17.5 30 26 18.5h-5.5L22.5 10Z" fill="url(#rgLogo)" />
+      {/* фирменный знак «R» в фиолетовом скруглённом квадрате (единый бренд-марк с приложением) */}
+      <rect x="3" y="3" width="34" height="34" rx="11" fill="url(#rgLogo)" />
+      <text x="20" y="21" textAnchor="middle" dominantBaseline="central"
+        fontFamily="Inter, system-ui, -apple-system, sans-serif" fontSize="22" fontWeight="800" fill="#fff">R</text>
     </svg>
   )
 }

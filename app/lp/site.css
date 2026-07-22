@@ -36,7 +36,10 @@
 .rg-btn-lg { padding: 17px 26px; font-size: 16px; min-width: 200px; }
 
 /* ---------- навигация (поверх видео, прозрачная) ---------- */
-.rg-nav { position: absolute; top: 0; left: 0; right: 0; z-index: 30; }
+/* Залипающая шапка: остаётся видимой при скролле (иначе не видно, как переключаются вкладки scroll-spy). */
+.rg-nav { position: sticky; top: 0; left: 0; right: 0; z-index: 30; transition: background .2s ease, box-shadow .2s ease, backdrop-filter .2s ease; }
+.rg-nav-solid { background: rgba(255,255,255,.9); backdrop-filter: saturate(180%) blur(12px); -webkit-backdrop-filter: saturate(180%) blur(12px); box-shadow: 0 1px 0 rgba(20,16,48,.06), 0 6px 24px rgba(20,16,48,.05); }
+.rg-nav-link.active { opacity: 1; color: var(--rg-primary, #663af1); font-weight: 600; }
 .rg-nav-inner { display: flex; align-items: center; justify-content: space-between; padding: 18px 0; }
 .rg-logo { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 20px; letter-spacing: -0.02em; color: var(--rg-text); text-decoration: none; }
 .rg-logo-mark { width: 32px; height: 32px; flex: none; }

@@ -136,6 +136,13 @@ export default function TopNav() {
           })()}
           <ActivityBell />
 
+          {/* Имя пользователя рядом с аватаром — видно, под каким аккаунтом вошёл (без открытия меню) */}
+          {me && (me.name || me.email) && (
+            <span className="hidden md:block text-[13px] font-medium text-ink/80 max-w-[160px] truncate" title={me.email ?? undefined}>
+              {me.name || me.email}
+            </span>
+          )}
+
           {/* Аватар-меню: личный кабинет + тарифы */}
           <div className="relative">
             <button

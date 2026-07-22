@@ -78,7 +78,6 @@ export const PLANS: Plan[] = [
     maxAccounts: 3,
     proxyIncluded: true,
     trialDays: 7,
-    recommended: true,
     cta: 'Начать 7 дней бесплатно',
     features: [
       inc('1–3 Instagram-аккаунта'),
@@ -102,6 +101,7 @@ export const PLANS: Plan[] = [
     maxAccounts: 15,
     proxyIncluded: true,
     trialDays: 14,
+    recommended: true,
     cta: 'Начать 14 дней бесплатно',
     features: [
       inc('Всё из Pro'),

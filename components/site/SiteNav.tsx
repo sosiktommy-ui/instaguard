@@ -34,6 +34,15 @@ export function SiteNav({ solid = false }: { solid?: boolean }) {
     return () => { document.body.style.overflow = '' }
   }, [open])
 
+  // Залипающая шапка: при скролле делаем фон непрозрачным (читаемость поверх контента).
+  const [scrolled, setScrolled] = useState(false)
+  useEffect(() => {
+    const onS = () => setScrolled(window.scrollY > 16)
+    onS()
+    window.addEventListener('scroll', onS, { passive: true })
+    return () => window.removeEventListener('scroll', onS)
+  }, [])
+
   // scroll-spy: подсвечиваем раздел, в котором пользователь сейчас находится.
   // Считаем по позиции скролла (надёжнее IntersectionObserver в неактивной вкладке).
   const [active, setActive] = useState('')
@@ -61,7 +70,7 @@ export function SiteNav({ solid = false }: { solid?: boolean }) {
   }, [])
 
   return (
-    <header className={`rg-nav${solid ? ' rg-nav-solid' : ''}`}>
+    <header className={`rg-nav${solid || scrolled ? ' rg-nav-solid' : ''}`}>
       <div className="rg-container rg-nav-inner">
         <Link href="/lp" className="rg-logo" aria-label="ReactiveGram — на главную">
           <SiteLogoMark className="rg-logo-mark" />
