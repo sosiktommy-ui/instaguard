@@ -161,10 +161,10 @@ export default function TopNav() {
                     </span>
                   </div>
                   <div className="h-px bg-black/[0.06] my-1" />
-                  <Link href="/account" role="menuitem" className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-[14px] text-ink/85 hover:bg-black/[0.05] transition-colors">
+                  <Link href="/lp/account" role="menuitem" className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-[14px] text-ink/85 hover:bg-black/[0.05] transition-colors">
                     <UserIcon className="w-4 h-4 text-subt" /> Личный кабинет
                   </Link>
-                  <Link href="/pricing" role="menuitem" className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-[14px] text-ink/85 hover:bg-black/[0.05] transition-colors">
+                  <Link href="/lp/pricing" role="menuitem" className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-[14px] text-ink/85 hover:bg-black/[0.05] transition-colors">
                     <CreditCard className="w-4 h-4 text-subt" /> Тарифы
                   </Link>
                 </div>
@@ -208,8 +208,8 @@ export default function TopNav() {
               <div className="pt-2 mt-2 border-t border-black/[0.06]">
                 <div className="px-4 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-subt/70">Кабинет</div>
                 {[
-                  { href: '/account', label: 'Личный кабинет', icon: UserIcon },
-                  { href: '/pricing', label: 'Тарифы', icon: CreditCard },
+                  { href: '/lp/account', label: 'Личный кабинет', icon: UserIcon },
+                  { href: '/lp/pricing', label: 'Тарифы', icon: CreditCard },
                 ].map((t) => {
                   const active = pathname === t.href
                   return (

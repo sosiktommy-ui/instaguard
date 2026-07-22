@@ -84,7 +84,7 @@ export function SiteNav({ solid = false }: { solid?: boolean }) {
         <div className="rg-nav-right">
           {authed ? (
             <>
-              <Link href="/account" className="rg-btn rg-btn-light">Кабинет</Link>
+              <Link href="/lp/account" className="rg-btn rg-btn-light">Кабинет</Link>
               <Link href="/triggers" className="rg-btn rg-btn-primary">Перейти к функционалу</Link>
             </>
           ) : (
@@ -119,7 +119,7 @@ export function SiteNav({ solid = false }: { solid?: boolean }) {
               {authed ? (
                 <>
                   <Link href="/triggers" className="rg-btn rg-btn-primary rg-btn-lg" onClick={() => setOpen(false)}>Перейти к функционалу</Link>
-                  <Link href="/account" className="rg-btn rg-btn-light rg-btn-lg" onClick={() => setOpen(false)}>Кабинет</Link>
+                  <Link href="/lp/account" className="rg-btn rg-btn-light rg-btn-lg" onClick={() => setOpen(false)}>Кабинет</Link>
                 </>
               ) : (
                 <>
