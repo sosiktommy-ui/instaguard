@@ -120,6 +120,29 @@ railway.json                     — конфиг Railway (NIXPACKS, npm start)
 
 ## История изменений
 
+### 2026-07-22 (13) (💳 ПОДПИСКА Stripe — Фаза 1+2: БД-модели `Subscription`/`StripeEvent` + слой прав `lib/entitlements.ts`)
+
+⚠️ **Передеплой Next.js** (миграция `20260722000000_subscriptions` применится `prisma migrate deploy` в `start`;
+идемпотентна — `CREATE TABLE IF NOT EXISTS` + DO-блок для FK). Воркер не трогал. Начало реализации
+спроектированной подписки (Stripe ещё НЕ подключён — это фундамент под неё, аддитивно и инертно).
+
+- **БД (`prisma/schema.prisma` + миграция):** новые модели `Subscription` (userId уникален; `stripeCustomerId/
+  stripeSubscriptionId/stripePriceId`, `plan`, `status`, `cycle`, `quantity`=оплаченные слоты, `byop`,
+  `currentPeriodEnd`, `cancelAtPeriodEnd`, `trialEnd`) и `StripeEvent` (идемпотентность вебхуков по `event.id`).
+  `User.subscription` relation добавлен. `User.plan` оставлен как денормализованный кэш.
+- **Слой прав (`lib/entitlements.ts`, новый):** ИСТОЧНИК ПРАВДЫ по доступу = `Subscription` + каталог `lib/plans.ts`.
+  Чистая `entitlementsFromSubscription(sub, now)` (тестируется без БД) → `{plan, status, paid, maxAccounts,
+  proxyIncluded, currentPeriodEnd, daysLeft, features}`. `getEntitlements(userId)` читает БД (нет записи → Free).
+  Гейты `canAddAccount`/`canUseTriggerType`. Правила: `active/trialing/past_due`→платный (past_due — грейс);
+  `canceled/inactive`→Free; `maxAccounts`=quantity клампится в [minAccounts, maxAccounts] тарифа (Agency=∞);
+  Free — только триггер «Новая подписка», без прокси/авто-приёма/сторис/лайков.
+- ⚠️ **Пока НЕ подключено к роутам/движку** (Фаза 4) — чисто аддитивно, поведение не изменилось.
+
+Проверено: `prisma generate` ок, `tsc` чист (exit 0, `prisma.subscription` виден), **vitest 134/134** (в т.ч. новые
+`tests/entitlements.test.ts` — 15), `next build` чист. **Дальше:** Ф3 — Stripe (checkout+webhook+portal, нужны
+ключи+products/prices); Ф4 — гейты в `poll`/`accounts/auth`/`triggers` + выдача прокси; Ф5 — сайт/pricing/billing;
+Ф9 — мультиворкер-шардинг (масштаб 50+).
+
 ### 2026-07-22 (12) (🔴 ДОВЕДЕНИЕ фикса (11): цикл идёт ДОЛЬШЕ 12 мин → heartbeat вместо тайм-капа + быстрая диагностика (fix «upstream error»))
 
 ⚠️ **Редеплой воркера** (build → `2026-07-22-browser-122-heartbeat-fast-diag`) + Next.js (`accounts/page.tsx`).

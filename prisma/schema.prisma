@@ -22,6 +22,36 @@ model User {
   sections  Section[]
   proxies   Proxy[]
   settings  UserSettings?
+  subscription Subscription?
+}
+
+// Подписка пользователя (Stripe). ИСТОЧНИК ПРАВДЫ по правам доступа — наполняется вебхуками Stripe.
+// User.plan оставлен как денормализованный кэш (обновляет тот же вебхук). См. lib/entitlements.ts.
+model Subscription {
+  id                   String    @id @default(cuid())
+  userId               String    @unique
+  stripeCustomerId     String?   @unique
+  stripeSubscriptionId String?   @unique
+  stripePriceId        String?
+  plan                 String    @default("free")     // free | pro | business | agency (из price→plan карты)
+  status               String    @default("inactive")  // active | trialing | past_due | canceled | inactive
+  cycle                String?                          // monthly | yearly
+  quantity             Int       @default(1)            // оплаченные слоты аккаунтов = maxAccounts
+  byop                 Boolean   @default(false)        // свой прокси (дешевле, прокси не выдаём)
+  currentPeriodEnd     DateTime?                        // «осталось дней» = это − сейчас; двигается вебхуком invoice.paid
+  cancelAtPeriodEnd    Boolean   @default(false)
+  trialEnd             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+// Идемпотентность вебхуков Stripe: event.id уже обработан → пропускаем (защита от дублей/повторной доставки).
+model StripeEvent {
+  id          String   @id       // Stripe event.id (evt_...)
+  type        String
+  processedAt DateTime @default(now())
 }
 
 // Лок для защиты от параллельного запуска фоновых задач (напр. поллинга).
