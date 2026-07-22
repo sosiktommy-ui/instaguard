@@ -1,7 +1,7 @@
 // Браузерный воркер InstaGuard — вход и действия Instagram через реальный Chromium.
 // См. plan.md §4. Контракт ответов согласован с lib/browser/client.ts в Next.js.
 import express from 'express'
-import { getBrowser, newAccountContext, closeContextSafe, getOrCreateContext, touchContext, evictContext, isCtxWarmed, markCtxWarmed } from './lib/browser.js'
+import { getBrowser, newAccountContext, closeContextSafe, getOrCreateContext, touchContext, evictContext, isCtxWarmed, markCtxWarmed, setContextBusy } from './lib/browser.js'
 import { attemptLogin, resumeCode, resumeWithTotp, resendCode, loginByState, testSession, warmupSession, rereadUsername, extractUsername, fillImageCaptcha, domSummary, captureDiag } from './lib/login.js'
 import { safeStorageState } from './lib/browser.js'
 import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment, commentLatestPost, readStoryEvents, acceptFollowRequests, diagnoseActions } from './lib/actions.js'
@@ -15,7 +15,7 @@ import { fingerprintSelfTest } from './lib/selftest.js'
 import { captchaConfigured } from './lib/captcha.js'
 import { warmupFeed } from './lib/human.js'
 
-const BUILD = '2026-07-20-browser-120-challenge-multilang-buttons'
+const BUILD = '2026-07-20-browser-121-ctx-busy-no-evict'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -396,6 +396,10 @@ const CTX_DEAD_RX = /closed|crash|Target page|context or browser|Session closed|
 async function withCycleContext(body, fn, { autoWarm = true } = {}) {
   const { username, storageState, proxy, locale, timezoneId } = body || {}
   const { context, key } = await getOrCreateContext({ username: username || 'owner', proxy, storageState, locale, timezoneId })
+  // На ВРЕМЯ цикла контекст «занят» → свипер по простою (3 мин) и переполнение (CTX_MAX) его НЕ закроют,
+  // даже если цикл идёт дольше 3 мин (длинная навигация/ретраи). Без этого свипер убивал АКТИВНЫЙ контекст
+  // → login_required каскадом на живой сессии (аудит 2026-07-20). Снимаем в finally — простой пойдёт с конца.
+  setContextBusy(key, true)
   try {
     // Прогрев ленты — один раз на цикл (первое реальное касание контекста). autoWarm=false у тех,
     // кто сам делает полноценный визит (session/warmup), чтобы не греть дважды.
@@ -410,6 +414,8 @@ async function withCycleContext(body, fn, { autoWarm = true } = {}) {
   } catch (e) {
     if (CTX_DEAD_RX.test(String(e?.message ?? ''))) await evictContext(key)   // мёртвая сессия/краш → свежий контекст в след. раз
     throw e
+  } finally {
+    setContextBusy(key, false)   // цикл завершён → снимаем «занят»; простой (idle) отсчитывается ОТСЮДА
   }
 }
 

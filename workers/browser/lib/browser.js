@@ -257,9 +257,17 @@ const _ctxCache = new Map() // key → { context, lastUsed, warmedUp }
 // действия цикла = «человек всё сделал и ушёл».
 const CTX_IDLE_MS = 3 * 60 * 1000
 const CTX_MAX = 3                    // держим мало открытых контекстов (RAM Chromium) — остальное закрывается
+const CTX_BUSY_MAX_MS = 12 * 60 * 1000   // предохранитель: «занят» >12 мин = зависший fn → всё равно закрыть
+// 🔴 КОРЕНЬ «сессия рвётся ПОСРЕДИ цикла» (аудит 2026-07-20, подтверждён живьём): свипер закрывал контекст
+// по простою 3 мин, но `lastUsed` обновлялся ТОЛЬКО в КОНЦЕ всего цикла (withCycleContext), а НЕ между
+// действиями. Длинный цикл (одна неудачная навигация openProfile ретраит ~2.7 мин) переваливал за 3 мин →
+// свипер закрывал АКТИВНО работающий контекст → все следующие действия падали `login_required` на закрытом
+// контексте (хотя сессия ЖИВА — оттого reread-nick всегда и срабатывал). Прокси ни при чём. Фикс: пока идёт
+// цикл, контекст помечен busy — свипер/переполнение его НЕ трогают; простой отсчитывается от КОНЦА цикла.
 setInterval(() => {
   const now = Date.now()
   for (const [k, v] of _ctxCache) {
+    if (v.busy) { if (now - v.busy > CTX_BUSY_MAX_MS) { _ctxCache.delete(k); closeContextSafe(v.context) } continue }
     if (now - v.lastUsed > CTX_IDLE_MS) { _ctxCache.delete(k); closeContextSafe(v.context) }
   }
 }, 30 * 1000).unref?.()
@@ -291,17 +299,23 @@ export async function getOrCreateContext(opts) {
       return { context: hit.context, reused: true, key }
     } catch { _ctxCache.delete(key); await closeContextSafe(hit.context) }   // мёртвый — выселяем
   }
-  if (_ctxCache.size >= CTX_MAX) {                     // переполнение — закрыть самый старый
+  if (_ctxCache.size >= CTX_MAX) {                     // переполнение — закрыть самый старый НЕзанятый
     let ok = null, ot = Infinity
-    for (const [k, v] of _ctxCache) if (v.lastUsed < ot) { ot = v.lastUsed; ok = k }
+    for (const [k, v] of _ctxCache) if (!v.busy && v.lastUsed < ot) { ot = v.lastUsed; ok = k }
+    // если ВСЕ заняты — не выселяем занятый (иначе убьём активный цикл → login_required), временно
+    // превышаем лимит; лишний контекст закроется свипером по простою, как только цикл завершится.
     if (ok) { const v = _ctxCache.get(ok); _ctxCache.delete(ok); await closeContextSafe(v.context) }
   }
   const context = await newAccountContext(opts)
-  _ctxCache.set(key, { context, lastUsed: Date.now(), warmedUp: false })
+  _ctxCache.set(key, { context, lastUsed: Date.now(), warmedUp: false, busy: 0 })
   return { context, reused: false, key }
 }
 
 export function touchContext(key) { const v = _ctxCache.get(key); if (v) v.lastUsed = Date.now() }
+// Пометить контекст занятым (идёт цикл) — свипер по простою и переполнение НЕ закрывают занятый контекст
+// (аудит 2026-07-20: закрытие АКТИВНОГО контекста = каскад login_required). busy = метка времени начала
+// (для предохранителя от зависшего fn). Снимается в finally withCycleContext — простой пойдёт от конца цикла.
+export function setContextBusy(key, on) { const v = _ctxCache.get(key); if (v) v.busy = on ? Date.now() : 0 }
 export async function evictContext(key) { const v = _ctxCache.get(key); if (v) { _ctxCache.delete(key); await closeContextSafe(v.context) } }
 
 // Прогрев ленты делается РОВНО ОДИН раз на весь цикл (первое реальное касание контекста), кто бы
