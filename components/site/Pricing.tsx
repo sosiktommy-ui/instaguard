@@ -23,12 +23,14 @@ export function Pricing() {
             <button className={cycle === 'monthly' ? 'on' : ''} onClick={() => setCycle('monthly')}>Помесячно</button>
             <button className={cycle === 'yearly' ? 'on' : ''} onClick={() => setCycle('yearly')}>За год <span className="save">−20%</span></button>
           </div>
-          {/* Дешевле со своим прокси (BYOP) — мы не выдаём прокси, цена ниже на €10/аккаунт */}
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 10, marginTop: 14, cursor: 'pointer', fontSize: 14.5, color: 'var(--rg-text)', userSelect: 'none' }}>
-            <input type="checkbox" checked={byop} onChange={(e) => setByop(e.target.checked)}
-              style={{ width: 18, height: 18, accentColor: '#663af1', cursor: 'pointer' }} />
-            <span>Со своим прокси (BYOP) — дешевле на <b>{formatPrice(BYOP_DISCOUNT)}</b>/аккаунт</span>
-          </label>
+          {/* Дешевле со своим прокси (BYOP): отдельная центрированная строка-пилюля под переключателем периода */}
+          <div style={{ marginTop: 14, display: 'flex', justifyContent: 'center' }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 14, color: 'var(--rg-text)', userSelect: 'none', background: '#fff', border: '1px solid var(--rg-line)', borderRadius: 50, padding: '9px 18px' }}>
+              <input type="checkbox" checked={byop} onChange={(e) => setByop(e.target.checked)}
+                style={{ width: 17, height: 17, accentColor: '#663af1', cursor: 'pointer', flexShrink: 0 }} />
+              <span>Со своим прокси (BYOP) — дешевле на <b>{formatPrice(BYOP_DISCOUNT)}</b>/аккаунт</span>
+            </label>
+          </div>
         </div>
 
         <div className="rg-price-grid">

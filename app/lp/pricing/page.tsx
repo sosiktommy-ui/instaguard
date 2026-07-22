@@ -13,7 +13,7 @@ export default function PricingPage() {
     <>
       <SiteNav solid />
       <main>
-        <div className="rg-container" style={{ paddingTop: 'clamp(28px, 5vw, 44px)' }}>
+        <div className="rg-container" style={{ paddingTop: 'clamp(104px, 12vw, 128px)' }}>
           <div className="rg-stepsbar">
             <span className="rg-step-pill on"><span className="num">1</span> Тариф</span>
             <span className="rg-step-sep" />

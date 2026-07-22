@@ -36,8 +36,10 @@
 .rg-btn-lg { padding: 17px 26px; font-size: 16px; min-width: 200px; }
 
 /* ---------- навигация (поверх видео, прозрачная) ---------- */
-/* Залипающая шапка: остаётся видимой при скролле (иначе не видно, как переключаются вкладки scroll-spy). */
-.rg-nav { position: sticky; top: 0; left: 0; right: 0; z-index: 30; transition: background .2s ease, box-shadow .2s ease, backdrop-filter .2s ease; }
+/* Залипающая шапка: ФИКСИРОВАННАЯ (не sticky) — у .rg-site стоит overflow-x:hidden, а он ломает
+   position:sticky у потомков (шапка уезжала при скролле). fixed не зависит от overflow предка
+   (transform-предков нет), поэтому остаётся видимой всегда. Контент страниц отступает сверху. */
+.rg-nav { position: fixed; top: 0; left: 0; right: 0; z-index: 40; transition: background .2s ease, box-shadow .2s ease, backdrop-filter .2s ease; }
 .rg-nav-solid { background: rgba(255,255,255,.9); backdrop-filter: saturate(180%) blur(12px); -webkit-backdrop-filter: saturate(180%) blur(12px); box-shadow: 0 1px 0 rgba(20,16,48,.06), 0 6px 24px rgba(20,16,48,.05); }
 .rg-nav-link.active { opacity: 1; color: var(--rg-primary, #663af1); font-weight: 600; }
 .rg-nav-inner { display: flex; align-items: center; justify-content: space-between; padding: 18px 0; }
@@ -97,3 +99,17 @@
 @media (prefers-reduced-motion: reduce) {
   .rg-fadeup, .rg-dot { animation: none !important; opacity: 1 !important; transform: none !important; }
 }
+
+/* ---------- личный кабинет: сетка карточек ----------
+   Раньше: auto-fit minmax(300px,1fr) + gridColumn:'span 2' — число треков зависело от ширины
+   контейнера, и при ~900-1180px auto-fit давал 3 трека: «Тариф» (span 2) + «Профиль» занимали
+   ряд 1, а «Использование» переносилось на ряд 2 в одиночку с двумя пустыми треками справа.
+   Теперь — явные grid-template-areas: ровно 1 колонка на мобиле, ровно 2 на десктопе, без
+   зависимости от того, сколько треков «влезло». */
+.rg-cab-grid { display: grid; grid-template-columns: 1fr; grid-template-areas: "tariff" "profile" "usage"; gap: 18px; }
+@media (min-width: 760px) {
+  .rg-cab-grid { grid-template-columns: 2fr 1fr; grid-template-areas: "tariff tariff" "profile usage"; }
+}
+.rg-cab-tariff { grid-area: tariff; }
+.rg-cab-profile { grid-area: profile; }
+.rg-cab-usage { grid-area: usage; }

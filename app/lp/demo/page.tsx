@@ -14,7 +14,7 @@ export default function DemoPage() {
     <>
       <SiteNav solid />
       <main>
-        <section className="rg-section" style={{ paddingTop: 0 }}>
+        <section className="rg-section" style={{ paddingTop: 'clamp(104px, 12vw, 128px)' }}>
           <div className="rg-container">
             <div className="rg-page-head">
               <span className="rg-demo-badge"><PlayCircle size={15} /> Демо-режим</span>

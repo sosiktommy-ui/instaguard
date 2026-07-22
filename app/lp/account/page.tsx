@@ -60,9 +60,9 @@ export default async function CabinetPage() {
         <h1 style={{ fontSize: 34, fontWeight: 800, letterSpacing: '-.02em', color: '#14102f', margin: '0 0 4px' }}>Личный кабинет</h1>
         <p style={{ color: '#6b7280', margin: '0 0 28px', fontSize: 15 }}>Тариф, использование и профиль. В функционал — кнопкой ниже.</p>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 18 }}>
+        <div className="rg-cab-grid">
           {/* Тариф + осталось дней */}
-          <section style={{ ...card, gridColumn: 'span 2', minWidth: 0 }}>
+          <section className="rg-cab-tariff" style={{ ...card, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <span style={{ width: 46, height: 46, borderRadius: 14, background: 'linear-gradient(135deg,#7c5cfc,#6a7df9)', display: 'grid', placeItems: 'center', boxShadow: '0 6px 16px rgba(102,58,241,.35)' }}>
@@ -78,7 +78,9 @@ export default async function CabinetPage() {
             <div style={{ marginTop: 18, display: 'flex', gap: 28, flexWrap: 'wrap' }}>
               <div>
                 <div style={label}>Осталось дней</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: '#14102f', fontVariantNumeric: 'tabular-nums' }}>{ent.daysLeft != null ? ent.daysLeft : '—'}</div>
+                <div style={{ fontSize: 30, fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: ent.daysLeft != null && ent.daysLeft <= 3 ? '#dc2626' : ent.daysLeft != null && ent.daysLeft <= 7 ? '#d97706' : '#14102f' }}>
+                  {ent.daysLeft != null ? ent.daysLeft : '—'}
+                </div>
               </div>
               <div>
                 <div style={label}>Прокси</div>
@@ -92,7 +94,7 @@ export default async function CabinetPage() {
           </section>
 
           {/* Профиль */}
-          <section style={card}>
+          <section className="rg-cab-profile" style={card}>
             <div style={label}>Профиль</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 14 }}>
               <span style={{ width: 56, height: 56, borderRadius: '50%', background: 'linear-gradient(135deg,#7c5cfc,#b06bff)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 24, fontWeight: 800 }}>{initial}</span>
@@ -105,7 +107,7 @@ export default async function CabinetPage() {
           </section>
 
           {/* Использование */}
-          <section style={card}>
+          <section className="rg-cab-usage" style={card}>
             <div style={label}>Instagram-аккаунтов</div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 10 }}>
               <span style={{ fontSize: 30, fontWeight: 800, color: '#14102f', fontVariantNumeric: 'tabular-nums' }}>{accounts}</span>
