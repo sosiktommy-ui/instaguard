@@ -98,7 +98,8 @@
 .rg-mt { margin-top: 34px; }
 
 /* --- навигация «solid» для под-страниц без hero (демо) --- */
-.rg-nav-solid { position: sticky; top: 0; background: rgba(242,242,238,0.9); backdrop-filter: blur(12px); border-bottom: 1px solid var(--rg-line); }
+/* только визуал — НЕ трогаем position (база .rg-nav = fixed в site.css; иначе sticky ломается overflow-предком) */
+.rg-nav-solid { border-bottom: 1px solid var(--rg-line); }
 
 /* --- заголовок под-страницы --- */
 .rg-page-head { padding: clamp(60px, 8vw, 96px) 0 0; text-align: center; }
