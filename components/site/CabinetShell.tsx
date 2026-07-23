@@ -14,6 +14,7 @@ export interface CabinetData {
   statusColor: string
   statusBg: string
   daysLeft: number | null
+  paid: boolean
   proxyIncluded: boolean
   accounts: number
   maxAccounts: number
@@ -96,8 +97,8 @@ export function CabinetShell(d: CabinetData) {
               <div className="rg-cab-metrics">
                 <div>
                   <div className="rg-cab-lbl">Осталось дней</div>
-                  <div className="rg-cab-num" style={{ color: daysColor }}>{d.daysLeft != null ? d.daysLeft : '∞'}</div>
-                  {d.daysLeft == null && <div style={{ fontSize: 12, color: '#8b8fa3' }}>без ограничения</div>}
+                  <div className="rg-cab-num" style={{ color: daysColor }}>{d.daysLeft != null ? d.daysLeft : d.paid ? '∞' : '—'}</div>
+                  {d.daysLeft == null && <div style={{ fontSize: 12, color: '#8b8fa3' }}>{d.paid ? 'без срока' : 'бесплатный тариф'}</div>}
                 </div>
                 <div>
                   <div className="rg-cab-lbl">Прокси</div>
@@ -129,8 +130,8 @@ export function CabinetShell(d: CabinetData) {
             <div className="rg-cab-metrics">
               <div>
                 <div className="rg-cab-lbl">Осталось дней</div>
-                <div className="rg-cab-num" style={{ color: daysColor }}>{d.daysLeft != null ? d.daysLeft : '∞'}</div>
-                {d.daysLeft == null && <div style={{ fontSize: 12, color: '#8b8fa3' }}>без ограничения</div>}
+                <div className="rg-cab-num" style={{ color: daysColor }}>{d.daysLeft != null ? d.daysLeft : d.paid ? '∞' : '—'}</div>
+                {d.daysLeft == null && <div style={{ fontSize: 12, color: '#8b8fa3' }}>{d.paid ? 'без срока' : 'бесплатный тариф'}</div>}
               </div>
               <div>
                 <div className="rg-cab-lbl">Прокси</div>

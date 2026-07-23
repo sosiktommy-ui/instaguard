@@ -56,6 +56,7 @@ export default async function CabinetPage() {
           statusColor={st.color}
           statusBg={st.bg}
           daysLeft={ent.daysLeft}
+          paid={ent.paid}
           proxyIncluded={ent.proxyIncluded}
           accounts={accounts}
           maxAccounts={ent.maxAccounts}
