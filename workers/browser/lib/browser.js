@@ -258,6 +258,22 @@ const _ctxCache = new Map() // key → { context, lastUsed, warmedUp }
 const CTX_IDLE_MS = 3 * 60 * 1000
 const CTX_MAX = 3                    // держим мало открытых контекстов (RAM Chromium) — остальное закрывается
 const CTX_HANG_MS = 5 * 60 * 1000    // busy-контекст без ЕДИНОГО heartbeat 5 мин = завис → закрыть (предохранитель)
+// §0.1 PLAN.md — сетевой keep-alive: heartbeat() выше отмечает, что контекст «жив» (защита от свипера),
+// но САМ ПО СЕБЕ не шлёт ни байта в сеть — если между действиями цикла (пейсинг директов 45–120с,
+// человеческие паузы между целями) проходит больше ~2.5 мин БЕЗ реальной навигации, туннель прокси
+// (NAT/модем резидентного пула) может «уснуть», и следующая боевая навигация словит холодный коннект
+// (та же природа, что чинит warmConnection на старте — см. Приложение A PLAN.md). Лечим тем же приёмом
+// периодически: лёгкий фоновый заход на favicon (не полноценный визит — не портит поведенческий след).
+const KEEPALIVE_AFTER_MS = 2.5 * 60 * 1000
+async function keepAliveTunnel(context, key) {
+  let p = null
+  try {
+    p = await context.newPage()
+    await p.goto('https://www.instagram.com/favicon.ico', { waitUntil: 'commit', timeout: 8000 })
+    touchContext(key)   // успешный пинг — реальная сетевая активность, продлеваем lastUsed по-настоящему
+  } catch { /* best-effort: не получилось — следующая боевая навигация переживёт холодный коннект через retry */ }
+  finally { if (p) await p.close().catch(() => {}) }
+}
 // 🔴 КОРЕНЬ «сессия рвётся ПОСРЕДИ цикла» (аудит 2026-07-20, подтверждён живьём): свипер закрывал контекст
 // по простою 3 мин, но `lastUsed` обновлялся ТОЛЬКО в КОНЦЕ всего цикла, а НЕ между действиями → длинный цикл
 // переваливал за порог → свипер убивал АКТИВНЫЙ контекст → каскад login_required на живой сессии.
@@ -269,7 +285,14 @@ setInterval(() => {
   const now = Date.now()
   for (const [k, v] of _ctxCache) {
     const idle = now - v.lastUsed
-    if (v.busy) { if (idle > CTX_HANG_MS) { _ctxCache.delete(k); closeContextSafe(v.context) } continue }
+    if (v.busy) {
+      if (idle > CTX_HANG_MS) { _ctxCache.delete(k); closeContextSafe(v.context); continue }
+      if (idle > KEEPALIVE_AFTER_MS && !v.keepAlivePending) {
+        v.keepAlivePending = true
+        keepAliveTunnel(v.context, k).finally(() => { v.keepAlivePending = false })
+      }
+      continue
+    }
     if (idle > CTX_IDLE_MS) { _ctxCache.delete(k); closeContextSafe(v.context) }
   }
 }, 30 * 1000).unref?.()
@@ -340,6 +363,21 @@ export async function safeStorageState(context) {
   try { return await context.storageState() } catch { return undefined }
 }
 
+// §0.1 PLAN.md: ретраить ТОЛЬКО транспортные/транзиентные сбои прокси-коннекта — не тратить
+// ретраи (и не давать ложную надежду) на исходы, которые повтор не починит: контекст/страница
+// закрыты гонкой (свипер/пользователь), фрейм оторван при навигации, невалидный URL и т.п.
+// `net::ERR_*` — namespace САМОГО Chromium для сетевых/транспортных сбоев (обрыв туннеля,
+// сброс соединения, DNS, таймаут коннекта и т.д.) — целиком транзиентно по определению, не
+// нужно перечислять каждый код руками. Плюс явный таймаут Playwright (`page.goto` не дождался
+// ответа) и 5xx от прокси-эджа. Всё ОСТАЛЬНОЕ (закрытый контекст, оторванный фрейм, wrong_profile
+// и т.п.) — НЕ матчится → падаем сразу, без бесполезных ретраев.
+const TRANSIENT_NAV_ERR = /net::ERR_|Timeout \d+ms exceeded|\b5\d{2}\b/i
+
+export function isTransientNavError(e) {
+  const msg = String(e?.message ?? e ?? '')
+  return TRANSIENT_NAV_ERR.test(msg)
+}
+
 /**
  * Навигация с ретраями на СЕТЕВЫЕ сбои (ротирующие/резидентные прокси часто моргают
  * и восстанавливаются — техника из Python-воркера, `_login_with_retry`,
@@ -352,15 +390,18 @@ export async function gotoResilient(page, url, { timeout = 60000, retries = 3, b
   for (let i = 0; i <= retries; i++) {
     try { heartbeat(page.context()) } catch {}   // «жив» — навигация в процессе (не даём свиперу закрыть busy-контекст)
     try {
-      // 'commit' (первый байт ответа) толерантнее к медленным/моргающим резидентным прокси,
-      // чем 'domcontentloaded'. Форму/сессию дальше по коду ждём ЯВНО (waitForSelector /
-      // hasSessionCookie), поэтому ранний commit безопасен и не «недогружает» страницу.
-      // Ошибки уровня прокси (ERR_HTTP_RESPONSE_CODE_FAILURE / ERR_TUNNEL_CONNECTION_FAILED /
-      // таймаут) — часто транзиентны у резидентных прокси; повторяем с нарастающей паузой.
-      await page.goto(url, { waitUntil: 'commit', timeout })
+      // 'commit' (первый байт ответа) на ПЕРВОЙ попытке — толерантнее к медленным/моргающим
+      // резидентным прокси, чем 'domcontentloaded'. На повторных попытках тоннель уже прогрет
+      // этим же процессом попыток → берём 'domcontentloaded', чтобы не унести на ретрае
+      // недогруженную страницу (пустой DOM), с которой дальнейший код (селекторы/куки) не
+      // справится — 'commit' там был нужен только чтобы пережить самый первый холодный коннект.
+      await page.goto(url, { waitUntil: i === 0 ? 'commit' : 'domcontentloaded', timeout })
       return
     } catch (e) {
       lastErr = e
+      // §0.1: не транспортная ошибка (контекст закрыт, фрейм оторван, невалидный URL...) — повтор
+      // её не починит, только тратит время впустую и удлиняет честный отказ. Сдаёмся сразу.
+      if (!isTransientNavError(e)) throw e
       if (i < retries) await new Promise((r) => setTimeout(r, backoffMs[i] ?? 8000))
     }
   }

@@ -108,19 +108,33 @@ async function schemeWorks(browser, scheme, p) {
  * дальше по цепочке всё равно придёт честная ошибка входа/действия).
  * @param {() => Promise<import('playwright-core').Browser>} getBrowser
  */
+// §0.1 PLAN.md: при прочих равных предпочесть HTTP CONNECT — ресёрч показывает, что HTTP-эджи
+// провайдеров (обычно nginx/HAProxy) стабильнее на ПЕРВОМ коннекте, чем SOCKS5 (которому чаще
+// достаётся «ленивый» модем/CGNAT пула — та же природа блипов, что чинит warmConnection).
+const HTTP_HEAD_START_MS = 1200
+
 async function probeSchemesOnce(browser, p) {
   // С логином/паролем socks5/socks4 пробовать БЕССМЫСЛЕННО: Chromium их с авторизацией не умеет
   // («Browser does not support socks5 proxy authentication») — проба всегда упадёт. Пробуем только
   // http (единственная схема, поддерживающая авторизацию в этом движке). Без кредов — весь набор.
   const schemes = (p.username || p.password) ? ['http'] : ['http', 'socks5', 'socks4']
-  // Схемы пробуем ПАРАЛЛЕЛЬНО — первая рабочая выигрывает. Мёртвый прокси выявляется
-  // за ~8с (один таймаут), а не за ~24с последовательного перебора.
-  const probes = schemes.map((scheme) =>
-    schemeWorks(browser, scheme, p).then((ok) => {
+  // Схемы пробуем ПАРАЛЛЕЛЬНО — первая рабочая выигрывает, мёртвый прокси выявляется за ~8с,
+  // а не за ~24с последовательного перебора. НО чистая гонка (Promise.any) отдаёт схему тому,
+  // кто первым ОТВЕТИЛ, а не приоритетную http — если socks5 того же хоста отвечает на пару
+  // сотен мс быстрее, выигрывает он, хотя http надёжнее на холодном коннекте. Даём http
+  // короткую фору: socks5/socks4 стартуют с задержкой, так что при равной/близкой скорости
+  // побеждает http; если http реально не отвечает — socks-пробы всё равно идут почти сразу
+  // следом (задержка мала относительно ~8с таймаута пробы).
+  const probes = schemes.map((scheme) => {
+    const delay = scheme === 'http' ? 0 : HTTP_HEAD_START_MS
+    const run = delay
+      ? new Promise((r) => setTimeout(r, delay)).then(() => schemeWorks(browser, scheme, p))
+      : schemeWorks(browser, scheme, p)
+    return run.then((ok) => {
       if (ok) return scheme
       throw new Error('scheme-fail')
-    }),
-  )
+    })
+  })
   try { return await Promise.any(probes) } catch { return null }
 }
 
