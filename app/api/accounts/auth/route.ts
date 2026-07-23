@@ -5,6 +5,26 @@ import { getCurrentUser } from '@/lib/auth'
 import { pickPoolProxy, isInstagramBlacklist, isAccountNotFound, markProxyBlocked } from '@/lib/proxyPool'
 import { persistInstagramAccount } from '@/lib/accountPersist'
 import { localeForCountry, localeFromProxyString } from '@/lib/browser/geo'
+import { rateLimit } from '@/lib/rateLimit'
+
+// §0.2 PLAN.md — БЕРЕЧЬ АККАУНТЫ: кулдаун повторных попыток входа по ПАРОЛЮ, СЕРВЕРНЫЙ (по userId+
+// username аккаунта Instagram, а не по клиенту/устройству — обойти его нельзя ни сменой браузера,
+// ни очисткой кук). Live-тесты подтвердили: Instagram лочит аккаунт после нескольких попыток входа
+// подряд ("между попытками — часы", правило §0 п.7); UI-предупреждение уже есть, но ничто не мешало
+// дёрнуть API повторно за секунды. Лимит НЕ распространяется на куки-вход (это не «угадывание пароля»
+// — другой риск-профиль) и не на challenge/2FA-довод уже начатого входа (отдельные роуты).
+function loginCooldownCheck(userId: string, igUsername: string) {
+  const rl = rateLimit(`ig-login-pwd:${userId}:${igUsername}`, 3, 30 * 60_000)
+  if (rl.ok) return null
+  const minutes = Math.ceil(rl.retryAfter / 60)
+  return NextResponse.json(
+    {
+      error: `Слишком много попыток входа в @${igUsername} подряд — Instagram блокирует за это аккаунт. ` +
+        `Подождите ~${minutes} мин. перед следующей попыткой (бережём аккаунт).`,
+    },
+    { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } },
+  )
+}
 
 // Достать логин/пароль/2FA/почту из мобильной Android-сессии («логин:пароль[:2fa]|UA|…||почта:пароль»).
 // Нужно для ФОЛБЭКА куки→пароль: если вставленная сессия отклонена Instagram, пробуем войти
@@ -115,6 +135,8 @@ export async function POST(req: NextRequest) {
         // сессии есть логин:пароль. Гео-проблему это не лечит (тот же прокси), но покрывает
         // случай «сессия устарела, а пароль живой».
         if (creds?.login && creds?.password) {
+          const blocked = loginCooldownCheck(user.id, creds.login.toLowerCase())
+          if (blocked) return blocked
           try {
             const result = await browserLogin(creds.login, creds.password, proxyUrl || undefined, creds.totp, geo?.locale, geo?.timezoneId)
             if (result.needsCheckpoint || result.needs2fa || !result.browserState) {
@@ -155,6 +177,8 @@ export async function POST(req: NextRequest) {
       if (!username || !password) return NextResponse.json({ error: 'Username и пароль обязательны' }, { status: 400 })
       clean = username.replace(/^@/, '').trim().toLowerCase()
       const totp = typeof totpSecret === 'string' && totpSecret.trim() ? totpSecret.trim() : undefined
+      const blocked = loginCooldownCheck(user.id, clean)
+      if (blocked) return blocked
       try {
         const result = await browserLogin(clean, password, proxyUrl || undefined, totp, geo?.locale, geo?.timezoneId)
         if (result.needsCheckpoint || result.needs2fa || !result.browserState) {
