@@ -52,11 +52,31 @@ async function tryOpenViaSearch(page, uname) {
   return profileMatches(page, uname)
 }
 
+// §0.1 ПРОГРЕВ СОЕДИНЕНИЯ (не ленты). Резидентный прокси часто роняет ПЕРВЫЙ коннект к новому хосту
+// (модем/CGNAT «спит», DNS холодный, маршрут пула ещё не сошёлся) — второй коннект уже идёт по «тёплому»
+// пути. Делаем ОДИН лёгкий заход на instagram.com (commit) на контекст, чтобы тоннель поднялся ДО реальных
+// навигаций/диагностики. Иначе первая навигация (особенно fast-диагностика) падала «прокси моргнул за 1
+// попыток», хотя прокси/сессия живые. Флаг на объекте контекста → ровно один раз на контекст, best-effort.
+async function warmConnection(context) {
+  if (!context || context._connWarmed) return
+  context._connWarmed = true
+  let p = null
+  try {
+    p = await context.newPage()
+    for (let i = 0; i < 2; i++) {
+      try { await p.goto('https://www.instagram.com/', { waitUntil: 'commit', timeout: 12000 }); break }
+      catch { if (i === 0) await new Promise((r) => setTimeout(r, 2000)) }
+    }
+  } catch { /* прогрев best-effort — не роняем действие */ }
+  finally { if (p) await p.close().catch(() => {}) }
+}
+
 async function openProfile(context, username, { fast = false } = {}) {
   // fast=true — режим ПРОБЫ (dry-run/диагностика): без прогрева/поиска/долгих ретраев, одна короткая
   // навигация. Иначе диагностика по нескольким целям с ретраями ~2.7 мин на цель переваливает за
   // таймаут шлюза Railway → «upstream error». Для РЕАЛЬНЫХ действий (fast=false) поведение прежнее.
   const uname = String(username).replace(/^@/, '').trim().toLowerCase()
+  await warmConnection(context) // §0.1: один раз поднять тоннель прокси, чтобы холодный первый коннект не ронял навигацию
   const page = await context.newPage()
   if (!fast) await preActionBrowse(page) // §1.2: полистать ленту перед заходом к цели — действие не «вхолодную»
   // §4.1 живой переход: варьированно пробуем ПОИСК, иначе — прямой URL (резерв). Поиск не удался/
@@ -66,11 +86,12 @@ async function openProfile(context, username, { fast = false } = {}) {
     try { if (await tryOpenViaSearch(page, uname)) via = 'search' } catch { /* → URL */ }
   }
   if (via !== 'search') {
-    // Реальное действие: больше попыток + длиннее пауза (резидентный прокси часто «моргает» на первой
-    // навигации; сессия/прокси живые, блип транзиентный — не терять директ). Проба (fast): одна попытка,
-    // короткий таймаут — блип просто отметим «network», не ждём 2.7 мин.
+    // Реальное действие: больше попыток + длиннее пауза (резидентный прокси часто «моргает»; блип
+    // транзиентный — не терять директ). Проба (fast): тоннель уже прогрет warmConnection, поэтому хватает
+    // 1 короткого повтора — блип не даёт ложное «прокси моргнул за 1 попыток», а диагностика остаётся
+    // быстрой (в бюджете шлюза). (§0.1)
     await gotoResilient(page, `https://www.instagram.com/${uname}/`,
-      fast ? { timeout: 20000, retries: 0, backoffMs: [] } : { timeout: 35000, retries: 3, backoffMs: [2500, 6000, 12000] })
+      fast ? { timeout: 20000, retries: 1, backoffMs: [2500] } : { timeout: 35000, retries: 3, backoffMs: [2500, 6000, 12000] })
     await jitter(fast ? 400 : 1200, fast ? 900 : 2500)
     if (!fast) await idleMouse(page)
   }
