@@ -758,6 +758,113 @@ export async function getOwnFollowers(context, { ownUsername, limit = 10, needLi
 
 // Прогнать пробу всех действий по каждому подписчику. `usernames` (из БД/логов — на кого бот реально
 // триггерился) — приоритетный источник; DOM-модалка «Читачі» лишь резерв. Возвращает вердикт на действие.
+// ── ПОШАГОВАЯ ДИАГНОСТИКА (§0.1 — найти ТОЧНУЮ стадию сбоя, не гадать «прокси моргает») ──
+// По ресёрчу: с датацентр-прокси IG почти никогда не рвёт TCP — страница ГРУЗИТСЯ, но уводит на
+// /accounts/login или /challenge, а профиль/кнопки не появляются. Пайплайн классифицирует стадию:
+// egress-IP(датацентр?) → прогрев instagram.com → состояние домашней(login/challenge/лента) → sessionid
+// → навигация на профиль → кнопки. Каждая стадия с таймингом; в конце — вердикт с вероятной причиной.
+async function _timed(fn) {
+  const t = Date.now()
+  try { const r = await fn(); return { ms: Date.now() - t, ...r } }
+  catch (e) { return { ms: Date.now() - t, ok: false, error: String(e?.message ?? e).slice(0, 200) } }
+}
+function _urlType(url) {
+  const u = String(url || '')
+  if (/\/accounts\/login/.test(u)) return 'login'
+  if (/\/challenge/.test(u)) return 'challenge'
+  if (/\/accounts\/suspended/.test(u)) return 'suspended'
+  if (/\/(accounts\/onetap|__coig_login)/.test(u)) return 'onetap'
+  return 'other'
+}
+
+export async function diagPipeline(context, { ownUsername, target } = {}) {
+  const stages = []
+  const shots = {}
+
+  // 1. Куда выходим (egress IP через прокси) + датацентр?
+  stages.push({ stage: 'egress', ...(await _timed(async () => {
+    const r = await context.request.get('http://ip-api.com/json/?fields=status,country,isp,as,hosting,proxy,mobile,query', { timeout: 12000 })
+    const j = await r.json()
+    return { ok: j?.status === 'success', ip: j?.query ?? null, country: j?.country ?? null, isp: j?.isp ?? null, as: j?.as ?? null, datacenter: j?.hosting ?? null, mobile: j?.mobile ?? null }
+  })) })
+
+  // 2. Есть ли sessionid в контексте (локальная проверка, без запроса к IG)
+  stages.push({ stage: 'session_cookie', ...(await _timed(async () => ({ ok: await hasSessionCookie(context) }))) })
+
+  const page = await context.newPage()
+
+  // 3. Прогрев/доступность: открывается ли instagram.com вообще
+  stages.push({ stage: 'warmup_home', ...(await _timed(async () => {
+    const resp = await page.goto('https://www.instagram.com/', { waitUntil: 'commit', timeout: 15000 })
+    await page.waitForTimeout(2500)
+    return { ok: true, status: resp?.status() ?? null, finalUrl: page.url(), urlType: _urlType(page.url()) }
+  })) })
+
+  // 4. Что на домашней: логин-форма / челлендж / залогинен
+  stages.push({ stage: 'home_state', ...(await _timed(async () => {
+    const info = await page.evaluate(() => {
+      const t = (document.body?.innerText || '')
+      return {
+        title: document.title,
+        hasLoginForm: !!document.querySelector('input[name="username"],input[name="email"],input[name="pass"]'),
+        hasNav: !!document.querySelector('nav a[href="/"], svg[aria-label]'),
+        loginRequired: /login_required/i.test(t),
+        challenge: /(подтверд|verify|suspicious|подозрит|checkpoint|challenge)/i.test(t),
+        head: t.replace(/\s+/g, ' ').slice(0, 160),
+      }
+    })
+    return { ok: true, ...info }
+  })) })
+  try { shots.home = (await captureDiag(page))?.screenshot ?? null } catch {}
+
+  // 5+6. Навигация на профиль + классификация страницы и кнопок
+  const uname = String(target || ownUsername || '').replace(/^@/, '').trim().toLowerCase()
+  if (uname) {
+    stages.push({ stage: 'nav_profile', target: uname, ...(await _timed(async () => {
+      const resp = await page.goto(`https://www.instagram.com/${uname}/`, { waitUntil: 'domcontentloaded', timeout: 30000 })
+      await page.waitForTimeout(2500)
+      return { ok: true, status: resp?.status() ?? null, finalUrl: page.url(), urlType: _urlType(page.url()) }
+    })) })
+    stages.push({ stage: 'profile_state', ...(await _timed(async () => {
+      const info = await page.evaluate((u) => {
+        const t = (document.body?.innerText || '')
+        const labels = [...document.querySelectorAll('button, [role="button"], header a')]
+          .map((b) => (b.innerText || b.getAttribute('aria-label') || '').trim())
+          .filter((x) => x && x.length < 26)
+        const onProfile = new RegExp(`(^|/)${u.replace(/[.]/g, '\\.')}(/|$)`).test(location.pathname.toLowerCase())
+        return {
+          onProfileUrl: onProfile,
+          hasLoginForm: !!document.querySelector('input[name="username"],input[name="pass"]'),
+          loginRequired: /login_required|войдите|log in to see/i.test(t),
+          buttonCount: labels.length,
+          buttons: [...new Set(labels)].slice(0, 28),
+        }
+      }, uname)
+      return { ok: true, ...info }
+    })) })
+    try { shots.profile = (await captureDiag(page))?.screenshot ?? null } catch {}
+  }
+
+  await page.close().catch(() => {})
+
+  // ── ВЕРДИКТ (вероятная причина по стадиям) ──
+  const S = (n) => stages.find((s) => s.stage === n) || {}
+  const eg = S('egress'), sc = S('session_cookie'), wh = S('warmup_home'), hm = S('home_state'), np = S('nav_profile'), ps = S('profile_state')
+  let verdict
+  if (wh.ok === false) verdict = '🔴 ПРОКСИ/СЕТЬ: instagram.com не открылся (TCP/timeout/сброс) — прокси мёртв или недоступен. Это НЕ «моргание», а нерабочий прокси.'
+  else if (eg.datacenter === true) verdict = '🔴 ДАТАЦЕНТР-IP: выход через хостинг-IP (' + (eg.isp || eg.as || '') + '). Instagram такие IP уводит на login/challenge и рвёт сессию. Нужен РЕЗИДЕНТНЫЙ/МОБИЛЬНЫЙ прокси в гео аккаунта. Это не баг кода.'
+  else if (hm.hasLoginForm || wh.urlType === 'login' || np.urlType === 'login') verdict = '🔴 РЕДИРЕКТ НА ВХОД: страница грузится, но IG уводит на /accounts/login (login_required) — сессия/IP отвергнуты. Код думал «профиль», а там форма входа → «кнопка не найдена». Нужен перелогин + доверенный IP.'
+  else if (wh.urlType === 'challenge' || np.urlType === 'challenge' || hm.challenge) verdict = '🟠 CHALLENGE/CHECKPOINT: IG требует подтверждение устройства/входа — аккаунт под проверкой (пройти challenge/2FA).'
+  else if (wh.urlType === 'onetap' || np.urlType === 'onetap') verdict = '🟠 ЭКРАН ВЫБОРА АККАУНТА (one-tap): сессия «полу-жива» — нужно восстановить вход одним кликом/перелогином.'
+  else if (sc.ok === false) verdict = '🔴 НЕТ СЕССИИ: в контексте нет sessionid — аккаунт не залогинен в этом окне (перелогинь «Войти заново»).'
+  else if (ps.ok && ps.onProfileUrl && (ps.buttonCount || 0) > 0) verdict = '🟢 ПРОФИЛЬ ОТКРЫТ, кнопки есть — транспорт/сессия/навигация ОК. Если конкретное действие всё равно не идёт — дело в СЕЛЕКТОРЕ конкретной кнопки/локали (сверь список buttons[] ниже) или в лимите/подтверждении, НЕ в прокси.'
+  else if (ps.ok && !ps.onProfileUrl) verdict = '🔴 УШЛИ НЕ НА ПРОФИЛЬ: после навигации оказались не на странице профиля (' + (np.urlType || '') + ') — сессия/IP отвергнуты.'
+  else if (ps.ok && ps.onProfileUrl) verdict = '🟠 ПРОФИЛЬ ОТКРЫТ, но КНОПОК НЕТ: страница профиля есть, но кнопки не отрисовались/не найдены — рендер SPA не дождался ИЛИ приватный/пустой профиль. Смотри buttons[] и скрин.'
+  else verdict = '🟠 Неоднозначно — смотри стадии и скрины.'
+
+  return { verdict, stages, shots }
+}
+
 export async function diagnoseActions(context, { ownUsername, usernames, limit = 3 } = {}) {
   await requireSession(context)
   const fromDb = Array.isArray(usernames) ? usernames.map((u) => String(u).replace(/^@/, '').trim().toLowerCase()).filter(Boolean) : []

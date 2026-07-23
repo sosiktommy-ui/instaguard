@@ -270,6 +270,17 @@ export function browserDiagnoseActions(ctx: Ctx, limit = 3, usernames?: string[]
   return browserFetch<DiagnoseActionsResult>('/diagnose-actions', { ...ctx, limit, usernames }, VISIT_TIMEOUT_MS)
 }
 
+// §0.1 Пошаговая диагностика: где ТОЧНО падает (egress-IP/датацентр → прогрев → домашняя → сессия →
+// навигация на профиль → кнопки) + вердикт с вероятной причиной. Скрины home/profile (base64).
+export interface DiagResult {
+  verdict: string
+  stages: { stage: string; ms?: number; ok?: boolean; error?: string; [k: string]: unknown }[]
+  shots?: { home?: string | null; profile?: string | null }
+}
+export function browserDiag(ctx: Ctx, target?: string) {
+  return browserFetch<DiagResult>('/diag', { ...ctx, target }, VISIT_TIMEOUT_MS)
+}
+
 // ── Парсинг черновыми (Фаза 3, plan.md §4.4/§5). Формы = lib/scraper/hiker.ts, чтобы
 // poll/route.ts мог переключаться между API/черновыми без переписывания потребителей.
 // ⚠️ ЭКСПЕРИМЕНТАЛЬНО — DOM-парсинг воркера не проверялся на живом Instagram, см.

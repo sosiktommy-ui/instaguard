@@ -4,7 +4,7 @@ import express from 'express'
 import { getBrowser, newAccountContext, closeContextSafe, getOrCreateContext, touchContext, evictContext, isCtxWarmed, markCtxWarmed, setContextBusy } from './lib/browser.js'
 import { attemptLogin, resumeCode, resumeWithTotp, resendCode, loginByState, testSession, warmupSession, rereadUsername, extractUsername, fillImageCaptcha, domSummary, captureDiag } from './lib/login.js'
 import { safeStorageState } from './lib/browser.js'
-import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment, commentLatestPost, readStoryEvents, acceptFollowRequests, diagnoseActions } from './lib/actions.js'
+import { sendDM, followUser, likeUser, viewStories, commentPost, replyComment, commentLatestPost, readStoryEvents, acceptFollowRequests, diagnoseActions, diagPipeline } from './lib/actions.js'
 import { parseFollowers, parseFollowing, parseComments, parseLikers } from './lib/parse.js'
 import { runVisit } from './lib/session.js'
 import { readSelfEvents } from './lib/selfevents.js'
@@ -15,7 +15,7 @@ import { fingerprintSelfTest } from './lib/selftest.js'
 import { captchaConfigured } from './lib/captcha.js'
 import { warmupFeed } from './lib/human.js'
 
-const BUILD = '2026-07-23-browser-123-conn-warmup'
+const BUILD = '2026-07-23-browser-124-diag-pipeline'
 const SECRET = process.env.BROWSER_WORKER_SECRET || ''
 const PORT = Number(process.env.PORT) || 8090
 const MAX = Number(process.env.BROWSER_CONCURRENCY) || 2
@@ -452,6 +452,8 @@ app.post('/self-events', cycleRoute((ctx, b) => readSelfEvents(ctx, { amount: b.
 app.post('/follow-requests/accept', cycleRoute((ctx, b) => acceptFollowRequests(ctx, { limit: b.limit })))
 // Диагностика действий: проба follow/like/story/dm по реальным подписчикам аккаунта (dryRun, без спама).
 app.post('/diagnose-actions', cycleRoute((ctx, b) => diagnoseActions(ctx, { ownUsername: b.username, usernames: b.usernames, limit: b.limit })))
+// §0.1 пошаговая диагностика: найти ТОЧНУЮ стадию сбоя (egress/прогрев/сессия/навигация/кнопки) + вердикт
+app.post('/diag', actionRoute((ctx, b) => diagPipeline(ctx, { ownUsername: b.username, target: b.target })))
 
 // ── Парсинг черновыми (Фаза 3, plan.md §4.4/§5) — DOM, без сохранения browserState (чтение) ──
 app.post('/parse/followers', actionRoute((ctx, b) => parseFollowers(ctx, { targetUsername: b.targetUsername, limit: b.limit })))

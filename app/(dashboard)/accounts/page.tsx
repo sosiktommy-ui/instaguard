@@ -279,6 +279,24 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
     finally { setDiagRun(false) }
   }
 
+  // 🩺 Пошаговая диагностика (§0.1): где ТОЧНО падает — egress-IP/датацентр → прогрев → сессия →
+  // навигация → кнопки, + вердикт с вероятной причиной. Read-only (в БД не пишет). Копируется и присылается.
+  const [pipeRun, setPipeRun] = useState(false)
+  const [pipeData, setPipeData] = useState<{ ok?: boolean; verdict?: string; stages?: Record<string, unknown>[]; shots?: { home?: string | null; profile?: string | null }; error?: string } | null>(null)
+  const runDiagPipeline = async () => {
+    if (!ra?.id) return
+    setPipeRun(true); setPipeData(null)
+    try {
+      const r = await fetch(`/api/accounts/${ra.id}/diag`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+      const text = await r.text()
+      let data: { ok?: boolean; verdict?: string; stages?: Record<string, unknown>[]; shots?: { home?: string | null; profile?: string | null }; error?: string }
+      try { data = JSON.parse(text) }
+      catch { data = { ok: false, error: /upstream|timeout|gateway|50\d/i.test(text) ? 'Воркер долго отвечал (upstream error) — попробуйте ещё раз через минуту.' : `Некорректный ответ: ${(text || 'пусто').slice(0, 120)}` } }
+      setPipeData(data)
+    } catch (e: unknown) { setPipeData({ ok: false, error: e instanceof Error ? e.message : String(e) }) }
+    finally { setPipeRun(false) }
+  }
+
   // §13.11 — авто-приём заявок в подписчики (для закрытых/приватных аккаунтов).
   const [autoAccept, setAutoAccept] = useState(Boolean(ra?.autoAcceptFollowers))
   const [savingAuto, setSavingAuto] = useState(false)
@@ -353,6 +371,7 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
             <button onClick={rereadUsername} disabled={rereading || !ra?.id} title="ВРЕМЕННО: перечитать ник уже вошедшей сессии без повторного входа (чинит username=unknown)" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">🔤</button>
             <button onClick={runInspectFollowRequests} disabled={inspecting || !ra?.id} title="Диагностика авто-приёма заявок в подписчики: реально примет ожидающие + покажет панель/скрин/ошибки" className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">📥</button>
             <button onClick={runDiagnoseActions} disabled={diagRun || !ra?.id} title="🔬 Диагностика действий: по реальным подписчикам аккаунта проверяет, сработает ли директ/лайк/подписка/сторис и ПОЧЕМУ (нет постов / личка закрыта / уже подписан). Без спама (проба, не шлёт)." className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">{diagRun ? '⏳' : '🔬'}</button>
+            <button onClick={runDiagPipeline} disabled={pipeRun || !ra?.id} title="🩺 Пошаговая диагностика: где ТОЧНО падает — прокси/egress-IP (датацентр?), прогрев, сессия, навигация на профиль, кнопки. С вердиктом причины. Скопируй результат и пришли мне." className="p-1.5 text-subt hover:text-brand transition-colors disabled:opacity-40">{pipeRun ? '⏳' : '🩺'}</button>
             {onOpenLog && (
               <button onClick={onOpenLog} title="Открыть лог" className="p-1.5 text-subt hover:text-brand transition-colors"><ScrollText size={18} /></button>
             )}
@@ -515,6 +534,37 @@ function AccountDetailModal({ acc, ra, campaigns, sections = [], secCtx, onChang
                 </div>
               ) : (
                 <div className="text-[12px] text-subt">Подписчиков для проверки не найдено ({(diagData.followers ?? []).length}).</div>
+              )}
+            </div>
+          )}
+          {/* 🩺 Пошаговая диагностика — где ТОЧНО падает + вердикт причины (§0.1) */}
+          {pipeRun && (
+            <div className="rounded-2xl bg-canvas px-4 py-3 text-[12px] text-subt flex items-center gap-2">
+              <span className="animate-pulse">🩺</span> Прогоняю по шагам: egress-IP → прогрев → сессия → навигация → кнопки… (до минуты)
+            </div>
+          )}
+          {!pipeRun && pipeData && (
+            <div className="rounded-2xl bg-canvas px-4 py-3">
+              <div className="text-[12px] font-semibold text-subt mb-2 flex items-center justify-between">
+                <span>🩺 Пошаговая диагностика — скопируй и пришли мне</span>
+                <button onClick={() => setPipeData(null)} className="text-subt hover:text-ink">✕</button>
+              </div>
+              {pipeData.error ? (
+                <div className="text-[12px] text-bad">Ошибка: {pipeData.error}</div>
+              ) : (
+                <>
+                  {pipeData.verdict && (
+                    <div className="rounded-xl bg-brand/10 border border-brand/25 px-3 py-2.5 mb-2.5 text-[12px] leading-relaxed text-ink">{pipeData.verdict}</div>
+                  )}
+                  <textarea readOnly value={JSON.stringify({ verdict: pipeData.verdict, stages: pipeData.stages }, null, 2)} onFocus={(e) => e.currentTarget.select()}
+                    className="w-full h-48 text-[11px] font-mono rounded-xl border border-line bg-white p-2 resize-y" />
+                  {(pipeData.shots?.home || pipeData.shots?.profile) && (
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+                      {pipeData.shots?.home && <a href={pipeData.shots.home} target="_blank" rel="noreferrer"><img src={pipeData.shots.home} alt="home" className="rounded-lg border border-line w-full" /></a>}
+                      {pipeData.shots?.profile && <a href={pipeData.shots.profile} target="_blank" rel="noreferrer"><img src={pipeData.shots.profile} alt="profile" className="rounded-lg border border-line w-full" /></a>}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
